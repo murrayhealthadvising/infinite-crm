@@ -88,12 +88,12 @@ function AuthGate() {
 function RecoveryRedirect() {
   const navigate = useNavigate()
   const location = useLocation()
-  React.useEffect(() => {
+  useEffect(() => {
     const hash = window.location.hash
     if (hash && (hash.includes('type=recovery') || hash.includes('type=magiclink'))) {
       navigate('/settings', { replace: true })
     }
-  }, [location])
+  }, [location.hash])
   return null
 }
 
