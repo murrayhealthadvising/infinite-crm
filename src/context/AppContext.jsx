@@ -30,18 +30,27 @@ export function AppProvider({ children }) {
   useEffect(() => {
     if (!session?.user) { setProfile(null); return }
     const loadProfile = async () => {
+      const ADMIN_EMAIL = 'murrayhealthadvising@gmail.com'
       try {
         const { data, error } = await supabase.from('profiles').select('*').eq('user_id', session.user.id).single()
-        if (data) setProfile(data)
-        else {
-          // Profile doesn't exist yet - create a fallback
-          const fallback = { user_id: session.user.id, email: session.user.email, full_name: session.user.user_metadata?.full_name || session.user.email.split('@')[0], role: 'agent' }
+        if (data) {
+          // Auto-fix admin role if email matches but role isn't set
+          if (session.user.email === ADMIN_EMAIL && data.role !== 'admin') {
+            await supabase.from('profiles').update({ role: 'admin' }).eq('user_id', session.user.id)
+            setProfile({ ...data, role: 'admin' })
+          } else {
+            setProfile(data)
+          }
+        } else {
+          // Profile doesn't exist yet - create it
+          const isAdmin = session.user.email === ADMIN_EMAIL
+          const fallback = { user_id: session.user.id, email: session.user.email, full_name: session.user.user_metadata?.full_name || session.user.email.split('@')[0], role: isAdmin ? 'admin' : 'agent' }
           setProfile(fallback)
-          // Try to insert it
           await supabase.from('profiles').upsert([fallback], { onConflict: 'user_id' })
         }
       } catch(e) {
-        setProfile({ user_id: session.user.id, email: session.user.email, full_name: session.user.email.split('@')[0], role: 'agent' })
+        const isAdmin = session.user.email === ADMIN_EMAIL
+        setProfile({ user_id: session.user.id, email: session.user.email, full_name: session.user.email.split('@')[0], role: isAdmin ? 'admin' : 'agent' })
       }
     }
     loadProfile()
