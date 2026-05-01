@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AppProvider, useApp } from './context/AppContext'
 import { Component } from 'react'
 import Layout from './components/Layout'
@@ -61,7 +61,6 @@ function AuthGate() {
   return (
     <ErrorBoundary>
       <BrowserRouter>
-        <RecoveryRedirect />
         <Routes>
           <Route path="/" element={<Layout />}>
             <Route index element={<Navigate to="/dashboard" replace />} />
@@ -85,17 +84,7 @@ function AuthGate() {
   )
 }
 
-function RecoveryRedirect() {
-  const navigate = useNavigate()
-  const location = useLocation()
-  useEffect(() => {
-    const hash = window.location.hash
-    if (hash && (hash.includes('type=recovery') || hash.includes('type=magiclink'))) {
-      navigate('/settings', { replace: true })
-    }
-  }, [location.hash])
-  return null
-}
+
 
 export default function App() {
   return (
