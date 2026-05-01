@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <defs>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00E5C3"/>
+      <stop offset="100%" stop-color="#3B82F6"/>
+    </linearGradient>
+  </defs>
+  <rect width="32" height="32" rx="8" fill="url(#g)"/>
+  <!-- Infinity symbol -->
+  <path d="M6 16 C6 12 9 10 12 10 C15 10 16 13 16 16 C16 19 17 22 20 22 C23 22 26 20 26 16 C26 12 23 10 20 10 C17 10 16 13 16 16 C16 19 15 22 12 22 C9 22 6 20 6 16 Z" 
+    fill="none" stroke="black" stroke-width="2.2" stroke-linecap="round"/>
+</svg>

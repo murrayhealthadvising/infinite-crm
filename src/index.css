@@ -1,0 +1,30 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* { box-sizing: border-box; }
+body {
+  background: #080B0F;
+  color: #E8EDF5;
+  font-family: 'DM Sans', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #1A2130; border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: #2A3547; }
+
+.tag-not-started { background: #1A2130; color: #8899AA; border: 1px solid #2A3547; }
+.tag-interested   { background: #0A2A1A; color: #10B981; border: 1px solid #10B98140; }
+.tag-apt          { background: #0A1A2A; color: #3B82F6; border: 1px solid #3B82F640; }
+.tag-ghosted      { background: #2A1A0A; color: #F97316; border: 1px solid #F9731640; }
+.tag-sold         { background: #0A2A1A; color: #00E5C3; border: 1px solid #00E5C340; }
+.tag-aged         { background: #1A1A2A; color: #8B5CF6; border: 1px solid #8B5CF640; }
+.tag-stop         { background: #2A0A0A; color: #EF4444; border: 1px solid #EF444440; }
+.tag-long-term    { background: #1A1A0A; color: #F59E0B; border: 1px solid #F59E0B40; }
+
+.drag-over { border-color: #00E5C3 !important; background: #00E5C308 !important; }
+
+/* Hide scrollbar on pill rows */
+.overflow-x-scroll::-webkit-scrollbar,
+.overflow-x-auto::-webkit-scrollbar { display: none !important; width: 0 !important; height: 0 !important; }
