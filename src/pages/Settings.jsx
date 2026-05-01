@@ -1,147 +1,125 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useApp } from '../context/AppContext'
-import { Plus, Trash2, Check, X } from 'lucide-react'
-
-const PRESET_COLORS = ['#00E5C3','#3B82F6','#10B981','#F59E0B','#EF4444','#8B5CF6','#F97316','#EC4899','#14B8A6','#64748B','#8899AA','#A3E635']
-
-function TagRow({ tag, onUpdate, onDelete, isDefault }) {
-  const [editing, setEditing] = useState(false)
-  const [label, setLabel] = useState(tag.label)
-  const [color, setColor] = useState(tag.color)
-
-  const save = () => {
-    // auto-generate bg as darkened version of color
-    const bg = color + '18'
-    onUpdate(tag.id, { label, color, bg })
-    setEditing(false)
-  }
-
-  return (
-    <div className="flex items-center justify-between py-3 border-b border-[#1A2130] last:border-0">
-      {editing ? (
-        <div className="flex items-center gap-3 flex-1">
-          <input value={label} onChange={e => setLabel(e.target.value)}
-            className="bg-[#080B0F] border border-[#1A2130] rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-[#00E5C340] w-36" />
-          <div className="flex gap-1.5 flex-wrap">
-            {PRESET_COLORS.map(c => (
-              <button key={c} onClick={() => setColor(c)}
-                className="w-5 h-5 rounded-full transition-transform hover:scale-110 flex items-center justify-center"
-                style={{ background: c }}>
-                {color === c && <Check size={10} className="text-black" />}
-              </button>
-            ))}
-          </div>
-          <input type="color" value={color} onChange={e => setColor(e.target.value)}
-            className="w-7 h-7 rounded cursor-pointer border-0 bg-transparent" title="Custom color" />
-        </div>
-      ) : (
-        <div className="flex items-center gap-3">
-          <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: tag.color }} />
-          <span className="text-sm text-white">{tag.label}</span>
-          <span className="text-xs px-2 py-0.5 rounded-full font-mono" style={{ background: tag.bg, color: tag.color, border: `1px solid ${tag.color}40` }}>
-            preview
-          </span>
-        </div>
-      )}
-      <div className="flex items-center gap-2 ml-4">
-        {editing ? (
-          <>
-            <button onClick={save} className="p-1.5 rounded-lg text-[#00E5C3] hover:bg-[#00E5C315] transition-colors"><Check size={14} /></button>
-            <button onClick={() => setEditing(false)} className="p-1.5 rounded-lg text-[#5A6A7A] hover:text-white transition-colors"><X size={14} /></button>
-          </>
-        ) : (
-          <>
-            <button onClick={() => setEditing(true)} className="text-xs px-2 py-1 rounded border border-[#1A2130] text-[#5A6A7A] hover:text-white hover:border-[#2A3547] transition-colors">Edit</button>
-            {!isDefault && (
-              <button onClick={() => onDelete(tag.id)} className="p-1.5 rounded-lg text-[#3A4A5A] hover:text-[#EF4444] transition-colors"><Trash2 size={14} /></button>
-            )}
-          </>
-        )}
-      </div>
-    </div>
-  )
-}
+import { supabase } from '../lib/supabase'
+import { Key, User, CheckCircle, XCircle, Eye, EyeOff } from 'lucide-react'
 
 export default function Settings() {
-  const { user, tags, addTag, updateTag, deleteTag } = useApp()
-  const [newLabel, setNewLabel] = useState('')
-  const [newColor, setNewColor] = useState('#00E5C3')
-  const [adding, setAdding] = useState(false)
+  const { user, profile } = useApp()
+  const navigate = useNavigate()
 
-  const handleAdd = () => {
-    if (!newLabel.trim()) return
-    addTag({ label: newLabel.trim(), color: newColor, bg: newColor + '18' })
-    setNewLabel('')
-    setNewColor('#00E5C3')
-    setAdding(false)
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState(null)
+
+  // Handle password reset redirect from magic link/recovery email
+  useEffect(() => {
+    const hash = window.location.hash
+    if (hash && hash.includes('type=recovery')) {
+      setMsg({ type: 'info', text: 'Enter your new password below.' })
+    }
+  }, [])
+
+  const handlePasswordChange = async (e) => {
+    e.preventDefault()
+    if (!newPassword) return
+    if (newPassword !== confirmPassword) {
+      setMsg({ type: 'error', text: 'Passwords do not match.' })
+      return
+    }
+    if (newPassword.length < 6) {
+      setMsg({ type: 'error', text: 'Password must be at least 6 characters.' })
+      return
+    }
+    setSaving(true)
+    setMsg(null)
+    const { error } = await supabase.auth.updateUser({ password: newPassword })
+    if (error) {
+      setMsg({ type: 'error', text: error.message })
+    } else {
+      setMsg({ type: 'success', text: 'Password updated! You can now log in with your new password.' })
+      setNewPassword('')
+      setConfirmPassword('')
+    }
+    setSaving(false)
   }
 
-  return (
-    <div className="p-6 max-w-2xl animate-fade-in space-y-6">
-      <h1 className="text-xl font-display font-bold text-white">Settings</h1>
+  const initials = (user?.email || '?')[0].toUpperCase()
+  const emailDisplay = user?.email || ''
+  const nameDisplay = profile?.full_name || emailDisplay.split('@')[0] || 'Agent'
 
-      {/* Profile */}
-      <div className="rounded-xl border border-[#1A2130] p-5" style={{ background: '#0E1318' }}>
+  return (
+    <div className="p-6 max-w-2xl mx-auto">
+      <h1 className="text-2xl font-bold text-white mb-6">Settings</h1>
+
+      {/* Profile card */}
+      <div className="rounded-xl border border-[#1A2130] p-5 mb-4" style={{ background: '#0D1117' }}>
         <h2 className="text-xs font-mono uppercase tracking-wider text-[#5A6A7A] mb-4">Profile</h2>
         <div className="flex items-center gap-4">
-          <div className="w-12 h-12 rounded-full flex items-center justify-center text-black font-bold text-lg"
-            style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
-            {user?.name.split(' ').map(n => n[0]).join('')}
+          <div className="w-12 h-12 rounded-full flex items-center justify-center text-lg font-bold text-black flex-shrink-0"
+            style={{ background: 'linear-gradient(135deg, #00E5C3, #3BB2F6)' }}>
+            {initials}
           </div>
           <div>
-            <p className="text-white font-semibold">{user?.name}</p>
-            <p className="text-[#5A6A7A] text-sm">{user?.email}</p>
-            <p className="text-[#5A6A7A] text-sm">{user?.agency} · Admin</p>
+            <p className="text-white font-semibold">{nameDisplay}</p>
+            <p className="text-[#5A6A7A] text-sm">{emailDisplay}</p>
+            <p className="text-[#5A6A7A] text-sm capitalize">{profile?.role || 'Agent'}</p>
           </div>
         </div>
       </div>
 
-      {/* Tags / Stages */}
-      <div className="rounded-xl border border-[#1A2130] p-5" style={{ background: '#0E1318' }}>
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h2 className="text-xs font-mono uppercase tracking-wider text-[#5A6A7A]">Lead Stages & Tags</h2>
-            <p className="text-xs text-[#3A4A5A] mt-0.5">Customize colors and labels. These tag leads throughout the CRM.</p>
-          </div>
-          <button onClick={() => setAdding(!adding)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-black"
-            style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
-            <Plus size={13} /> Add Tag
-          </button>
-        </div>
+      {/* Change password */}
+      <div className="rounded-xl border border-[#1A2130] p-5" style={{ background: '#0D1117' }}>
+        <h2 className="text-xs font-mono uppercase tracking-wider text-[#5A6A7A] mb-4 flex items-center gap-2">
+          <Key size={12} /> Change Password
+        </h2>
 
-        {/* Add new tag row */}
-        {adding && (
-          <div className="flex items-center gap-3 p-3 rounded-lg border border-[#00E5C320] mb-3" style={{ background: '#00E5C308' }}>
-            <input value={newLabel} onChange={e => setNewLabel(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && handleAdd()}
-              placeholder="Tag name..."
-              className="bg-[#080B0F] border border-[#1A2130] rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-[#00E5C340] w-40" />
-            <div className="flex gap-1.5 flex-wrap">
-              {PRESET_COLORS.map(c => (
-                <button key={c} onClick={() => setNewColor(c)}
-                  className="w-5 h-5 rounded-full transition-transform hover:scale-110 flex items-center justify-center"
-                  style={{ background: c }}>
-                  {newColor === c && <Check size={10} className="text-black" />}
-                </button>
-              ))}
-            </div>
-            <input type="color" value={newColor} onChange={e => setNewColor(e.target.value)}
-              className="w-7 h-7 rounded cursor-pointer border-0 bg-transparent" />
-            <button onClick={handleAdd}
-              className="px-3 py-1.5 rounded-lg text-xs font-medium text-black"
-              style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
-              Save
-            </button>
-            <button onClick={() => setAdding(false)} className="text-[#5A6A7A] hover:text-white"><X size={14} /></button>
+        {msg && (
+          <div className={`mb-4 px-4 py-3 rounded-lg flex items-center gap-2 text-sm ${
+            msg.type === 'success' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+            : msg.type === 'error' ? 'bg-red-500/10 text-red-400 border border-red-500/20'
+            : 'bg-[#00D4FF]/10 text-[#00D4FF] border border-[#00D4FF]/20'
+          }`}>
+            {msg.type === 'success' ? <CheckCircle size={16} /> : <XCircle size={16} />}
+            {msg.text}
           </div>
         )}
 
-        <div>
-          {tags.map((tag, i) => (
-            <TagRow key={tag.id} tag={tag} onUpdate={updateTag} onDelete={deleteTag} isDefault={i < 8} />
-          ))}
-        </div>
+        <form onSubmit={handlePasswordChange} className="space-y-3">
+          <div className="relative">
+            <label className="text-xs text-[#8899AA] block mb-1">New Password</label>
+            <input
+              type={showPassword ? 'text' : 'password'}
+              value={newPassword}
+              onChange={e => setNewPassword(e.target.value)}
+              placeholder="At least 6 characters"
+              className="w-full px-3 py-2 pr-10 rounded-lg text-sm text-white bg-[#0A0E14] border border-[#1A2130] focus:border-[#00D4FF]/50 focus:outline-none"
+            />
+            <button type="button" onClick={() => setShowPassword(!showPassword)}
+              className="absolute right-3 top-7 text-[#8899AA] hover:text-white">
+              {showPassword ? <EyeOff size={14} /> : <Eye size={14} />}
+            </button>
+          </div>
+          <div>
+            <label className="text-xs text-[#8899AA] block mb-1">Confirm Password</label>
+            <input
+              type={showPassword ? 'text' : 'password'}
+              value={confirmPassword}
+              onChange={e => setConfirmPassword(e.target.value)}
+              placeholder="Repeat new password"
+              className="w-full px-3 py-2 rounded-lg text-sm text-white bg-[#0A0E14] border border-[#1A2130] focus:border-[#00D4FF]/50 focus:outline-none"
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={saving || !newPassword}
+            className="w-full py-2 rounded-lg text-sm font-medium text-black transition-all"
+            style={{ background: saving || !newPassword ? '#446677' : 'linear-gradient(135deg, #00D4FF, #0099CC)' }}>
+            {saving ? 'Saving...' : 'Update Password'}
+          </button>
+        </form>
       </div>
     </div>
   )
