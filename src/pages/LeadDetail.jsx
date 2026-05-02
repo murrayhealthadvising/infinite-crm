@@ -70,10 +70,18 @@ function EditableField({ label, value, icon: Icon, onSave, type = 'text', option
   )
 }
 
+function leadFullName(lead) {
+  if (lead?.name) return lead.name
+  return [lead?.first_name, lead?.last_name].filter(Boolean).join(' ').trim() || 'this lead'
+}
+function leadStageLabel(lead) {
+  return lead?.status || lead?.stage || 'new'
+}
+
 function AIAssistant({ lead }) {
   const [prompt, setPrompt] = useState('')
   const [messages, setMessages] = useState([
-    { role: 'assistant', content: `I'm looking at ${lead.first_name} ${lead.last_name} — ${lead.stage} lead from ${lead.state}. ${lead.notes ? `Notes: "${lead.notes}". ` : ''}How can I help you follow up?` }
+    { role: 'assistant', content: `I'm looking at ${leadFullName(lead)} — ${leadStageLabel(lead)} lead from ${lead?.state || 'unknown'}. ${lead?.notes ? `Notes: "${lead.notes}". ` : ''}How can I help you follow up?` }
   ])
   const [loading, setLoading] = useState(false)
 
@@ -141,15 +149,21 @@ export default function LeadDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
   const { leads, tags, updateLead, updateLeadStage, addActivity, getLeadActivities } = useApp()
-  const lead = leads.find(l => l.id === id)
+  const safeLeads = Array.isArray(leads) ? leads : []
+  const lead = safeLeads.find(l => l.id === id)
   const [logType, setLogType] = useState('note')
   const [logNote, setLogNote] = useState('')
   const [editStage, setEditStage] = useState(false)
   const [leadActivities, setLeadActivities] = useState([])
 
   useEffect(() => {
-    if (id) {
-      getLeadActivities(id).then(acts => setLeadActivities(acts || []))
+    if (id && typeof getLeadActivities === 'function') {
+      try {
+        const result = getLeadActivities(id)
+        if (result && typeof result.then === 'function') {
+          result.then(acts => setLeadActivities(acts || [])).catch(() => setLeadActivities([]))
+        }
+      } catch { setLeadActivities([]) }
     }
   }, [id])
 
@@ -161,15 +175,21 @@ export default function LeadDetail() {
   )
 
   // activities loaded via useEffect above
-  const tag = tags.find(t => t.id === lead.stage) || tags[0]
+  const safeTags = Array.isArray(tags) && tags.length > 0 ? tags : [{ id: 'not-started', label: 'Not Started', color: '#8899AA', bg: '#1A2130' }]
+  const tag = safeTags.find(t => t.id === lead.stage) || safeTags[0]
+  const fName = lead.first_name || (lead.name ? lead.name.split(' ')[0] : '')
+  const lName = lead.last_name || (lead.name ? lead.name.split(' ').slice(1).join(' ') : '')
+  const initials = ((fName.trim()[0] || '?') + (lName.trim()[0] || '')).toUpperCase()
+  const fullName = leadFullName(lead)
 
   const field = (key) => (val) => {
-    updateLead(id, { [key]: val })
-    addActivity(id, 'note', `Updated ${key.replace(/_/g,' ')}: ${val}`)
+    if (typeof updateLead === 'function') updateLead(id, { [key]: val })
+    if (typeof addActivity === 'function') addActivity(id, 'note', `Updated ${key.replace(/_/g,' ')}: ${val}`)
   }
 
   const logActivity = async () => {
     if (!logNote.trim()) return
+    if (typeof addActivity !== 'function') { setLogNote(''); return }
     const entry = await addActivity(id, logType, logNote)
     setLeadActivities(prev => [entry, ...prev])
     setLogNote('')
@@ -187,14 +207,14 @@ export default function LeadDetail() {
             </button>
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0"
-                style={{ background: tag.color + '25', color: tag.color }}>
-                {lead.first_name[0]}{lead.last_name[0]}
+                style={{ background: (tag?.color || '#5A6A7A') + '25', color: tag?.color || '#5A6A7A' }}>
+                {initials}
               </div>
               <div>
-                <h1 className="text-lg font-display font-bold text-white">{lead.first_name} {lead.last_name}</h1>
+                <h1 className="text-lg font-display font-bold text-white">{fullName}</h1>
                 <div className="flex items-center gap-2 mt-0.5">
-                  <StatusTag stage={lead.stage} size="sm" />
-                  <span className="text-xs text-[#5A6A7A]">{lead.source} · {lead.state}</span>
+                  <StatusTag stage={lead.stage} status={lead.status} size="sm" />
+                  <span className="text-xs text-[#5A6A7A]">{[lead.source, lead.state].filter(Boolean).join(' · ') || '—'}</span>
                 </div>
               </div>
             </div>
@@ -207,8 +227,8 @@ export default function LeadDetail() {
             </button>
             {editStage && (
               <div className="absolute right-0 top-full mt-1 w-44 rounded-xl border border-[#1A2130] overflow-hidden z-20 shadow-xl" style={{ background: '#0E1318' }}>
-                {tags.map(t => (
-                  <button key={t.id} onClick={() => { updateLeadStage(id, t.id); setEditStage(false) }}
+                {safeTags.map(t => (
+                  <button key={t.id} onClick={() => { if (typeof updateLeadStage === 'function') updateLeadStage(id, t.id); setEditStage(false) }}
                     className="w-full flex items-center gap-2 px-3 py-2.5 text-sm hover:bg-[#1A2130] transition-colors"
                     style={{ color: t.color }}>
                     <div className="w-2 h-2 rounded-full" style={{ background: t.color }} />
@@ -246,8 +266,8 @@ export default function LeadDetail() {
           <div>
             <p className="text-xs font-mono uppercase tracking-wider text-[#5A6A7A] mb-3">Health Information</p>
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-              <EditableField label="Household Size" value={lead.household?.toString()} icon={Home} onSave={(v) => updateLead(id, { household: parseInt(v) || null })} type="number" />
-              <EditableField label="Annual Income" value={lead.income?.toString()} icon={DollarSign} onSave={(v) => updateLead(id, { income: parseInt(v) || null })} type="number" />
+              <EditableField label="Household Size" value={lead.household?.toString()} icon={Home} onSave={(v) => typeof updateLead === 'function' && updateLead(id, { household: parseInt(v) || null })} type="number" />
+              <EditableField label="Annual Income" value={lead.income?.toString()} icon={DollarSign} onSave={(v) => typeof updateLead === 'function' && updateLead(id, { income: parseInt(v) || null })} type="number" />
               <EditableField label="Gender" value={lead.gender} icon={User} onSave={field('gender')} />
               <EditableField label="Age Range" value={lead.age_range} icon={User} onSave={field('age_range')} />
               <EditableField label="Smoker" value={lead.smoker} icon={StickyNote} onSave={field('smoker')} />
@@ -261,7 +281,7 @@ export default function LeadDetail() {
           <div>
             <p className="text-xs font-mono uppercase tracking-wider text-[#5A6A7A] mb-3">Policy & Quote</p>
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-              <EditableField label="Premium /mo" value={lead.premium?.toString()} icon={DollarSign} onSave={(v) => updateLead(id, { premium: parseInt(v) || null })} type="number" />
+              <EditableField label="Premium /mo" value={lead.premium?.toString()} icon={DollarSign} onSave={(v) => typeof updateLead === 'function' && updateLead(id, { premium: parseInt(v) || null })} type="number" />
               <EditableField label="Carrier" value={lead.carrier} icon={StickyNote} onSave={field('carrier')} />
               <EditableField label="Plan Choice" value={lead.plan_choice} icon={StickyNote} onSave={field('plan_choice')} />
               <EditableField label="Monthly Budget" value={lead.monthly_budget} icon={DollarSign} onSave={field('monthly_budget')} />
@@ -273,7 +293,7 @@ export default function LeadDetail() {
                   <Calendar size={11} className="text-[#5A6A7A]" />
                   <span className="text-[10px] font-mono uppercase tracking-wider text-[#5A6A7A]">Added</span>
                 </div>
-                <p className="text-sm text-white">{format(new Date(lead.created_at), 'MMM d, yyyy')}</p>
+                <p className="text-sm text-white">{(() => { try { return lead.created_at ? format(new Date(lead.created_at), 'MMM d, yyyy') : '—' } catch { return '—' } })()}</p>
               </div>
             </div>
           </div>

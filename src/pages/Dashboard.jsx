@@ -4,6 +4,23 @@ import { TrendingUp, Users, CheckCircle, Calendar, Clock, ArrowUpRight, Zap } fr
 import { formatDistanceToNow } from 'date-fns'
 import { useNavigate } from 'react-router-dom'
 
+function safeRel(d) {
+  if (!d) return ''
+  const dt = new Date(d)
+  if (isNaN(dt.getTime())) return ''
+  try { return formatDistanceToNow(dt, { addSuffix: true }) } catch { return '' }
+}
+function leadName(lead) {
+  if (lead?.name) return lead.name
+  return [lead?.first_name, lead?.last_name].filter(Boolean).join(' ').trim() || '—'
+}
+function leadInitials(lead) {
+  const n = leadName(lead)
+  if (n === '—' || !n) return '?'
+  const parts = n.trim().split(/\s+/).slice(0, 2)
+  return parts.map(p => p[0]?.toUpperCase() || '').join('') || '?'
+}
+
 const StatCard = ({ label, value, sub, color, icon: Icon }) => (
   <div className="rounded-xl p-5 border border-[#1A2130] relative overflow-hidden group hover:border-[#2A3547] transition-colors" style={{ background: '#0E1318' }}>
     <div className="flex items-start justify-between">
@@ -26,11 +43,18 @@ export default function Dashboard() {
   const hour = new Date().getHours()
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
 
-  const recentLeads = [...leads].sort((a, b) => new Date(b.last_activity) - new Date(a.last_activity)).slice(0, 8)
+  const safeLeads = Array.isArray(leads) ? leads : []
+  const safeTags = Array.isArray(tags) ? tags : []
 
-  const stageBreakdown = tags.map(s => ({
+  const recentLeads = [...safeLeads].sort((a, b) => {
+    const ad = new Date(a.last_activity || a.created_at || 0).getTime() || 0
+    const bd = new Date(b.last_activity || b.created_at || 0).getTime() || 0
+    return bd - ad
+  }).slice(0, 8)
+
+  const stageBreakdown = safeTags.map(s => ({
     ...s,
-    count: leads.filter(l => l.stage === s.id).length
+    count: safeLeads.filter(l => l.stage === s.id || (l.status && (l.status.toLowerCase() === (s.label || '').toLowerCase()))).length
   })).filter(s => s.count > 0)
 
   return (
@@ -69,18 +93,18 @@ export default function Dashboard() {
                 <div className="flex items-center gap-3">
                   <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-black flex-shrink-0"
                     style={{ background: 'linear-gradient(135deg, #00E5C340, #3B82F640)', color: '#00E5C3' }}>
-                    {lead.first_name[0]}{lead.last_name[0]}
+                    {leadInitials(lead)}
                   </div>
                   <div>
                     <p className="text-sm text-white font-medium group-hover:text-[#00E5C3] transition-colors">
-                      {lead.first_name} {lead.last_name}
+                      {leadName(lead)}
                     </p>
-                    <p className="text-xs text-[#5A6A7A]">{lead.state} · {lead.source}</p>
+                    <p className="text-xs text-[#5A6A7A]">{[lead.state, lead.source].filter(Boolean).join(' · ') || '—'}</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
-                  <StatusTag stage={lead.stage} />
-                  <span className="text-xs text-[#3A4A5A]">{formatDistanceToNow(new Date(lead.last_activity), { addSuffix: true })}</span>
+                  <StatusTag stage={lead.stage} status={lead.status} />
+                  <span className="text-xs text-[#3A4A5A]">{safeRel(lead.last_activity || lead.created_at)}</span>
                 </div>
               </div>
             ))}
@@ -100,8 +124,8 @@ export default function Dashboard() {
                   <span className="text-sm text-[#8899AA]">{s.label}</span>
                 </div>
                 <div className="flex items-center gap-3">
-                  <div className="h-1.5 rounded-full" style={{ width: `${Math.max(20, (s.count / leads.length) * 120)}px`, background: s.color + '40' }}>
-                    <div className="h-full rounded-full" style={{ width: `${(s.count / leads.length) * 100}%`, background: s.color }} />
+                  <div className="h-1.5 rounded-full" style={{ width: `${Math.max(20, (s.count / Math.max(safeLeads.length, 1)) * 120)}px`, background: s.color + '40' }}>
+                    <div className="h-full rounded-full" style={{ width: `${(s.count / Math.max(safeLeads.length, 1)) * 100}%`, background: s.color }} />
                   </div>
                   <span className="text-sm font-mono text-white w-6 text-right">{s.count}</span>
                 </div>

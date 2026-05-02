@@ -5,9 +5,14 @@ import { useState } from 'react'
 import { formatDistanceToNow } from 'date-fns'
 import clsx from 'clsx'
 
+function safeRel(d) { if (!d) return ''; const dt = new Date(d); if (isNaN(dt.getTime())) return ''; try { return formatDistanceToNow(dt, { addSuffix: true }) } catch { return '' } }
+function leadName(lead) { if (lead?.name) return lead.name; return [lead?.first_name, lead?.last_name].filter(Boolean).join(' ').trim() || '—' }
+function leadInitials(lead) { const n = leadName(lead); if (n === '—' || !n) return '?'; const parts = n.trim().split(/\s+/).slice(0, 2); return parts.map(p => p[0]?.toUpperCase() || '').join('') || '?' }
+
 function PipelineCard({ lead, onDragStart, onClick }) {
   const { getTag } = useApp()
-  const stage = getTag(lead.stage)
+  const stage = (typeof getTag === 'function' ? getTag(lead.stage || lead.status) : null) || { color: '#5A6A7A' }
+  const sColor = stage?.color || '#5A6A7A'
   return (
     <div
       draggable
@@ -18,16 +23,16 @@ function PipelineCard({ lead, onDragStart, onClick }) {
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold"
-            style={{ background: stage.color + '25', color: stage.color }}>
-            {lead.first_name[0]}{lead.last_name[0]}
+            style={{ background: sColor + '25', color: sColor }}>
+            {leadInitials(lead)}
           </div>
-          <p className="text-sm font-medium text-white group-hover:text-[#00E5C3] transition-colors">{lead.first_name} {lead.last_name}</p>
+          <p className="text-sm font-medium text-white group-hover:text-[#00E5C3] transition-colors">{leadName(lead)}</p>
         </div>
       </div>
       <p className="text-xs text-[#5A6A7A] font-mono mb-1">{lead.phone}</p>
       <div className="flex items-center justify-between mt-2">
-        <span className="text-[10px] text-[#3A4A5A]">{lead.state} · {lead.source}</span>
-        <span className="text-[10px] text-[#3A4A5A]">{formatDistanceToNow(new Date(lead.last_activity), { addSuffix: true })}</span>
+        <span className="text-[10px] text-[#3A4A5A]">{[lead.state, lead.source].filter(Boolean).join(' · ') || '—'}</span>
+        <span className="text-[10px] text-[#3A4A5A]">{safeRel(lead.last_activity || lead.created_at)}</span>
       </div>
       {lead.premium && (
         <div className="mt-2 pt-2 border-t border-[#1A2130] flex items-center justify-between">
@@ -45,18 +50,21 @@ export default function Pipeline() {
   const [dragLeadId, setDragLeadId] = useState(null)
   const [dragOverStage, setDragOverStage] = useState(null)
 
+  const safeLeads = Array.isArray(leads) ? leads : []
+  const safeTags = Array.isArray(tags) ? tags : []
+
   const handleDrop = (stageId) => {
-    if (dragLeadId) { updateLeadStage(dragLeadId, stageId); setDragLeadId(null); setDragOverStage(null) }
+    if (dragLeadId && typeof updateLeadStage === 'function') { updateLeadStage(dragLeadId, stageId); setDragLeadId(null); setDragOverStage(null) }
   }
 
-  const totalValue = leads.filter(l => l.premium).reduce((sum, l) => sum + (l.premium * 12), 0)
+  const totalValue = safeLeads.filter(l => l.premium).reduce((sum, l) => sum + (Number(l.premium) || 0) * 12, 0)
 
   return (
     <div className="flex flex-col h-full animate-fade-in">
       <div className="flex items-center justify-between px-6 py-4 border-b border-[#1A2130]">
         <div>
           <h1 className="text-xl font-display font-bold text-white">Pipeline</h1>
-          <p className="text-xs text-[#5A6A7A] mt-0.5">{leads.length} leads · drag cards to move stages</p>
+          <p className="text-xs text-[#5A6A7A] mt-0.5">{safeLeads.length} leads · drag cards to move stages</p>
         </div>
         {totalValue > 0 && (
           <div className="text-right">
@@ -67,8 +75,8 @@ export default function Pipeline() {
       </div>
       <div className="flex-1 overflow-x-auto p-6">
         <div className="flex gap-4" style={{ minWidth: 'max-content', minHeight: 'calc(100vh - 160px)' }}>
-          {tags.map(stage => {
-            const stageLeads = leads.filter(l => l.stage === stage.id)
+          {safeTags.map(stage => {
+            const stageLeads = safeLeads.filter(l => l.stage === stage.id || (l.status && (l.status.toLowerCase() === (stage.label || '').toLowerCase())))
             const isDragOver = dragOverStage === stage.id
             return (
               <div key={stage.id}

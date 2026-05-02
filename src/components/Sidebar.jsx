@@ -2,7 +2,7 @@ import { NavLink, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, Shield, Users, GitBranch, Calendar, Clock,
   CheckSquare, Mail, Calculator, TrendingUp, Settings, ChevronLeft,
-  ChevronRight, Menu
+  ChevronRight, Menu, LogOut
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import clsx from 'clsx'
@@ -14,16 +14,16 @@ const NAV = [
   { to: '/appointments', icon: Calendar,         label: 'Appointments' },
   { to: '/follow-ups',   icon: Clock,            label: 'Follow-Ups' },
   { to: '/tasks',        icon: CheckSquare,      label: 'Tasks' },
-  { to: '/gmail',        icon: Mail,             label: 'Gmail Leads' },
+  { to: '/gmail-leads',  icon: Mail,             label: 'Gmail Leads' },
   null, // divider
   { to: '/calculator',   icon: Calculator,       label: 'Calculator' },
-  { to: '/roi',          icon: TrendingUp,       label: 'Lead ROI' },
+  { to: '/lead-roi',     icon: TrendingUp,       label: 'Lead ROI' },
   null,
   { to: '/settings',     icon: Settings,         label: 'Settings' },
 ]
 
 export default function Sidebar() {
-  const { sidebarOpen, setSidebarOpen, stats, user, profile } = useApp()
+  const { sidebarOpen, setSidebarOpen, stats, user, profile, signOut } = useApp()
 
   return (
     <>
@@ -68,11 +68,13 @@ export default function Sidebar() {
         {sidebarOpen ? (
           <div className="border-t border-[#1A2130] p-3 flex items-center gap-2">
             <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-black flex-shrink-0" style={{background:'linear-gradient(135deg,#00D4FF,#0099CC)'}}>{user?.email?.[0]?.toUpperCase() ?? 'U'}</div>
-            <div className="flex-1 min-w-0"><div className="text-xs text-white font-medium truncate">{user?.email?.split('@')[0] ?? 'Agent'}</div><div className="text-[10px] text-[#8899AA] capitalize">{profile?.role ?? 'Agent'}</div></div>
+            <div className="flex-1 min-w-0"><div className="text-xs text-white font-medium truncate">{user?.name || user?.email?.split('@')[0] || 'Agent'}</div><div className="text-[10px] text-[#8899AA] capitalize">{profile?.role ?? 'Agent'}</div></div>
+            <button onClick={() => typeof signOut === 'function' && signOut()} className="p-1.5 rounded text-[#8899AA] hover:text-white hover:bg-[#1A2130]" title="Sign out"><LogOut size={13} /></button>
           </div>
         ) : (
-          <div className="border-t border-[#1A2130] p-2 flex justify-center">
+          <div className="border-t border-[#1A2130] p-2 flex flex-col items-center gap-1">
             <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-black" style={{background:'linear-gradient(135deg,#00D4FF,#0099CC)'}}>{user?.email?.[0]?.toUpperCase() ?? 'U'}</div>
+            <button onClick={() => typeof signOut === 'function' && signOut()} className="p-1 rounded text-[#8899AA] hover:text-white" title="Sign out"><LogOut size={12} /></button>
           </div>
         )}
       </aside>

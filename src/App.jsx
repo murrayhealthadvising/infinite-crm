@@ -17,19 +17,34 @@ import LeadDetail from './pages/LeadDetail'
 import Admin from './pages/Admin'
 
 class ErrorBoundary extends Component {
-  constructor(props) { super(props); this.state = { error: null } }
+  constructor(props) { super(props); this.state = { error: null, info: null } }
   static getDerivedStateFromError(error) { return { error } }
+  componentDidCatch(error, info) {
+    this.setState({ info })
+    try { console.error('[ErrorBoundary]', error, info?.componentStack) } catch {}
+  }
+  reset = () => this.setState({ error: null, info: null })
+  reload = () => { try { window.location.reload() } catch {} }
   render() {
     if (this.state.error) {
       return (
         <div style={{ background: '#080B0F', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', padding: 40 }}>
-          <div>
+          <div style={{ maxWidth: 720 }}>
             <h2 style={{ color: '#EF4444', marginBottom: 16 }}>Something crashed</h2>
-            <pre style={{ color: '#8899AA', fontSize: 12, whiteSpace: 'pre-wrap', maxWidth: 600 }}>
-              {this.state.error?.message}
-              {'\n\n'}
-              {this.state.error?.stack?.slice(0, 500)}
-            </pre>
+            <p style={{ color: '#8899AA', fontSize: 13, marginBottom: 12 }}>
+              {this.state.error?.message || 'Unknown error'}
+            </p>
+            <details style={{ color: '#5A6A7A', fontSize: 11, marginBottom: 16 }} open>
+              <summary style={{ cursor: 'pointer', color: '#8899AA' }}>Stack & component trail</summary>
+              <pre style={{ color: '#8899AA', fontSize: 11, whiteSpace: 'pre-wrap', overflowX: 'auto', marginTop: 8 }}>
+                {this.state.error?.stack?.slice(0, 1200)}
+                {this.state.info?.componentStack ? `\n\n--- Component stack ---${this.state.info.componentStack.slice(0, 1200)}` : ''}
+              </pre>
+            </details>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={this.reset} style={{ padding: '8px 16px', borderRadius: 8, background: '#1A2130', color: 'white', border: '1px solid #2A3547', fontSize: 13, cursor: 'pointer' }}>Try again</button>
+              <button onClick={this.reload} style={{ padding: '8px 16px', borderRadius: 8, background: 'linear-gradient(135deg, #00E5C3, #3B82F6)', color: 'black', border: 'none', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>Reload page</button>
+            </div>
           </div>
         </div>
       )
