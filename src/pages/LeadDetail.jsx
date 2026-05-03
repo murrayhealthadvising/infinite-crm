@@ -213,10 +213,17 @@ export default function LeadDetail() {
     }
   }, [id])
 
+  // Smart back: if there's history (came from /pipeline, /leads, etc.) go back,
+  // otherwise fall through to /leads as a sensible default.
+  const goBack = () => {
+    if (window.history.length > 1) navigate(-1)
+    else navigate('/leads')
+  }
+
   if (!lead) return (
     <div className="flex flex-col items-center justify-center h-full text-[#5A6A7A]">
       <p>Lead not found</p>
-      <button onClick={() => navigate('/leads')} className="mt-3 text-sm text-[#00E5C3]">← Back to Leads</button>
+      <button onClick={goBack} className="mt-3 text-sm text-[#00E5C3]">← Back</button>
     </div>
   )
 
@@ -248,7 +255,7 @@ export default function LeadDetail() {
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-[#1A2130] flex-shrink-0">
           <div className="flex items-center gap-4">
-            <button onClick={() => navigate('/leads')} className="p-1.5 rounded-lg text-[#5A6A7A] hover:text-white hover:bg-[#1A2130] transition-colors">
+            <button onClick={goBack} className="p-1.5 rounded-lg text-[#5A6A7A] hover:text-white hover:bg-[#1A2130] transition-colors" title="Back">
               <ArrowLeft size={16} />
             </button>
             <div className="flex items-center gap-3">
@@ -317,20 +324,6 @@ export default function LeadDetail() {
             </div>
           </div>
 
-          {/* Health info from USHA */}
-          <div>
-            <p className="text-xs font-mono uppercase tracking-wider text-[#5A6A7A] mb-3">Health Information</p>
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-              <EditableField label="Household Size" value={lead.household?.toString()} icon={Home} onSave={(v) => typeof updateLead === 'function' && updateLead(id, { household: parseInt(v) || null })} type="number" />
-              <EditableField label="Annual Income" value={lead.income?.toString()} icon={DollarSign} onSave={(v) => typeof updateLead === 'function' && updateLead(id, { income: parseInt(v) || null })} type="number" />
-              <EditableField label="Gender" value={lead.gender} icon={User} onSave={field('gender')} />
-              <EditableField label="Age Range" value={lead.age_range} icon={User} onSave={field('age_range')} />
-              <EditableField label="Smoker" value={lead.smoker} icon={StickyNote} onSave={field('smoker')} />
-              <EditableField label="Spouse Age" value={lead.spouse_age} icon={User} onSave={field('spouse_age')} />
-              <EditableField label="# Children" value={lead.num_children} icon={Home} onSave={field('num_children')} />
-              <EditableField label="Best Contact Time" value={lead.best_contact_time} icon={Calendar} onSave={field('best_contact_time')} />
-            </div>
-          </div>
 
           {/* Sold info — only render if there's a plan_choice (set via Sold modal) */}
           {lead.plan_choice && lead.stage === 'sold' && (
