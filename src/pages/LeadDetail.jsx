@@ -258,9 +258,12 @@ export default function LeadDetail() {
               </div>
               <div>
                 <h1 className="text-lg font-display font-bold text-white">{fullName}</h1>
-                <div className="flex items-center gap-2 mt-0.5">
+                <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                   <StatusTag stage={lead.stage} status={lead.status} size="sm" />
                   <span className="text-xs text-[#5A6A7A]">{[lead.source, lead.state].filter(Boolean).join(' · ') || '—'}</span>
+                  {lead.created_at && (
+                    <span className="text-xs text-[#3A4A5A]">· added {(() => { try { return format(new Date(lead.created_at), 'MMM d, yyyy') } catch { return '' } })()}</span>
+                  )}
                 </div>
               </div>
             </div>
@@ -329,26 +332,21 @@ export default function LeadDetail() {
             </div>
           </div>
 
-          {/* Policy info */}
-          <div>
-            <p className="text-xs font-mono uppercase tracking-wider text-[#5A6A7A] mb-3">Policy & Quote</p>
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-              <EditableField label="Premium /mo" value={lead.premium?.toString()} icon={DollarSign} onSave={(v) => typeof updateLead === 'function' && updateLead(id, { premium: parseInt(v) || null })} type="number" />
-              <EditableField label="Carrier" value={lead.carrier} icon={StickyNote} onSave={field('carrier')} />
-              <EditableField label="Plan Choice" value={lead.plan_choice} icon={StickyNote} onSave={field('plan_choice')} />
-              <EditableField label="Monthly Budget" value={lead.monthly_budget} icon={DollarSign} onSave={field('monthly_budget')} />
-              <EditableField label="Effective Date" value={lead.effective_date} icon={Calendar} onSave={field('effective_date')} type="date" />
-              <EditableField label="Current Carrier" value={lead.current_carrier} icon={StickyNote} onSave={field('current_carrier')} />
-              <EditableField label="Campaign" value={lead.campaign} icon={StickyNote} onSave={field('campaign')} />
-              <div className="p-3 rounded-lg border border-[#1A2130]" style={{ background: '#080B0F' }}>
-                <div className="flex items-center gap-1.5 mb-1">
-                  <Calendar size={11} className="text-[#5A6A7A]" />
-                  <span className="text-[10px] font-mono uppercase tracking-wider text-[#5A6A7A]">Added</span>
-                </div>
-                <p className="text-sm text-white">{(() => { try { return lead.created_at ? format(new Date(lead.created_at), 'MMM d, yyyy') : '—' } catch { return '—' } })()}</p>
-              </div>
+          {/* Sold info — only render if there's a plan_choice (set via Sold modal) */}
+          {lead.plan_choice && lead.stage === 'sold' && (
+            <div className="p-4 rounded-xl border border-[#00E5C330]" style={{ background: '#00E5C308' }}>
+              <p className="text-[10px] font-mono uppercase tracking-wider text-[#00E5C3] mb-2">Sold — Product</p>
+              <p className="text-sm text-[#C0D0E0] whitespace-pre-wrap">{lead.plan_choice}</p>
+              <button
+                onClick={() => {
+                  const v = prompt('Update product details:', lead.plan_choice || '')
+                  if (v !== null && typeof updateLead === 'function') updateLead(id, { plan_choice: v })
+                }}
+                className="mt-2 text-[10px] text-[#00E5C3] hover:underline">
+                Edit
+              </button>
             </div>
-          </div>
+          )}
 
           {/* Comments from lead vendor */}
           {lead.comments && (
