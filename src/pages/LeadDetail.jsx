@@ -1,10 +1,56 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useApp } from '../context/AppContext'
 import StatusTag from '../components/StatusTag'
 import { Phone, Mail, MapPin, Calendar, ArrowLeft, MessageSquare, PhoneCall, AtSign, StickyNote, ChevronDown, Zap, Send, User, Home, DollarSign, Heart, Pencil, Check, X } from 'lucide-react'
 import { format, formatDistanceToNow } from 'date-fns'
 import clsx from 'clsx'
+
+// Big notes panel — auto-grow, auto-save on blur, saved tick
+function NotesEditor({ value, onSave }) {
+  const ref = useRef(null)
+  const [text, setText] = useState(value || '')
+  const [saving, setSaving] = useState(false)
+  const [savedTick, setSavedTick] = useState(false)
+  const initialRef = useRef(value || '')
+
+  useEffect(() => { setText(value || ''); initialRef.current = value || '' }, [value])
+  useEffect(() => {
+    if (ref.current) {
+      ref.current.style.height = 'auto'
+      ref.current.style.height = Math.max(120, ref.current.scrollHeight) + 'px'
+    }
+  }, [text])
+
+  const handleBlur = async () => {
+    if (text === initialRef.current) return
+    setSaving(true)
+    try { await onSave(text); initialRef.current = text; setSavedTick(true); setTimeout(() => setSavedTick(false), 1800) }
+    catch {}
+    setSaving(false)
+  }
+
+  return (
+    <div className="rounded-xl border border-[#F59E0B30] overflow-hidden" style={{ background: '#F59E0B08' }}>
+      <div className="flex items-center justify-between px-4 py-3 border-b border-[#F59E0B20]">
+        <div className="flex items-center gap-2">
+          <StickyNote size={14} className="text-[#F59E0B]" />
+          <span className="text-xs font-mono uppercase tracking-wider text-[#F59E0B]">Notes</span>
+        </div>
+        <div className="text-[10px] font-mono" style={{ color: savedTick ? '#00E5C3' : '#5A6A7A' }}>
+          {saving ? 'saving…' : savedTick ? <span className="inline-flex items-center gap-1"><Check size={10} /> saved</span> : 'auto-save on blur'}
+        </div>
+      </div>
+      <textarea ref={ref}
+        value={text}
+        onChange={e => setText(e.target.value)}
+        onBlur={handleBlur}
+        placeholder="Click here and start taking notes for this lead — phone calls, follow-ups, anything…"
+        className="w-full bg-transparent px-4 py-3 text-sm text-[#E5D9A8] placeholder-[#5A6A7A] focus:outline-none resize-none"
+        style={{ minHeight: '120px' }} />
+    </div>
+  )
+}
 
 const ACTIVITY_ICONS = { call: PhoneCall, text: MessageSquare, email: AtSign, note: StickyNote, status: Zap, apt: Calendar }
 const ACTIVITY_COLORS = { call: '#10B981', text: '#3B82F6', email: '#8B5CF6', note: '#F59E0B', status: '#00E5C3', apt: '#F97316' }
@@ -243,6 +289,12 @@ export default function LeadDetail() {
 
         {/* Scrollable content */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
+
+          {/* Notes — big, prominent, top of detail page */}
+          <NotesEditor
+            value={lead.notes}
+            onSave={(v) => typeof updateLead === 'function' ? updateLead(id, { notes: v }) : Promise.resolve()}
+          />
 
           {/* Editable contact info */}
           <div>
