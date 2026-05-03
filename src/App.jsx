@@ -15,6 +15,7 @@ import LeadROI from './pages/ROI'
 import Settings from './pages/Settings'
 import LeadDetail from './pages/LeadDetail'
 import Admin from './pages/Admin'
+import SoldDetailsModal from './components/SoldDetailsModal'
 
 class ErrorBoundary extends Component {
   constructor(props) { super(props); this.state = { error: null, info: null } }
@@ -94,6 +95,8 @@ function AuthGate() {
           </Route>
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
+        {/* Global Sold-product prompt — fires whenever a lead moves to Sold */}
+        <SoldDetailsModal />
       </BrowserRouter>
     </ErrorBoundary>
   )

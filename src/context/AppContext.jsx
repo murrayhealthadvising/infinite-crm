@@ -29,6 +29,10 @@ export function AppProvider({ children }) {
   const [session, setSession] = useState(null)
   const [profile, setProfile] = useState(null)
   const [sidebarOpen, setSidebarOpen] = useState(true)
+  // When a lead is moved to "Sold", we fire a modal asking for product details.
+  // The modal lives at the App level so any caller (Leads card, Pipeline drag,
+  // LeadDetail dropdown, kanban) automatically triggers it.
+  const [pendingSoldLeadId, setPendingSoldLeadId] = useState(null)
 
   // Auth listener
   useEffect(() => {
@@ -217,8 +221,15 @@ export function AppProvider({ children }) {
     // newStage may be a stage id ("interested") OR a status label ("Interested")
     const status = stageIdToStatus[newStage] || (STATUS_LABELS.includes(newStage) ? newStage : 'Not Started')
     const stageId = statusToStageId[status] || newStage
-    await updateLead(leadId, { stage: stageId, status })
+    await updateLead(leadId, { stage: stageId })
     try { await addActivity(leadId, 'status', `Stage changed to: ${status}`) } catch {}
+    // If the lead is being marked Sold, prompt for product details so customer
+    // service later knows what was sold. Skip if details are already on file.
+    if (stageId === 'sold') {
+      const lead = leads.find(l => l.id === leadId)
+      const hasDetails = lead && (lead.carrier || lead.plan_choice || lead.premium)
+      if (!hasDetails) setPendingSoldLeadId(leadId)
+    }
   }
 
   const addLead = async (lead) => {
@@ -324,6 +335,8 @@ export function AppProvider({ children }) {
       deleteLead, deleteLeads, deleteAllLeadsForUser,
       addActivity, getLeadActivities,
       addTag, updateTag, deleteTag,
+      // sold-prompt globals
+      pendingSoldLeadId, setPendingSoldLeadId,
     }}>
       {children}
     </AppContext.Provider>
