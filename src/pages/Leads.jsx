@@ -162,6 +162,81 @@ function TagPill({ stage, tags, onChange }) {
   )
 }
 
+// Inline-editable text pill (campaign name)
+function TextPill({ value, color, onSave, placeholder = 'campaign', maxLen = 24 }) {
+  const [editing, setEditing] = useState(false)
+  const [text, setText] = useState(value || '')
+  useEffect(() => { setText(value || '') }, [value])
+
+  const commit = async () => {
+    const trimmed = text.trim()
+    if (trimmed !== (value || '')) { try { await onSave(trimmed || null) } catch {} }
+    setEditing(false)
+  }
+  const cancel = () => { setText(value || ''); setEditing(false) }
+
+  if (editing) {
+    return (
+      <input autoFocus value={text}
+        onChange={e => setText(e.target.value.slice(0, maxLen))}
+        onBlur={commit}
+        onClick={e => e.stopPropagation()}
+        onKeyDown={e => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') cancel() }}
+        placeholder={placeholder}
+        className="text-[10px] px-1.5 py-0.5 rounded font-mono bg-[#080B0F] border outline-none w-24"
+        style={{ color, borderColor: color + '60' }} />
+    )
+  }
+  const display = value && String(value).trim() ? value : '—'
+  return (
+    <button onClick={(e) => { e.stopPropagation(); setEditing(true) }}
+      className="text-[10px] px-1.5 py-0.5 rounded font-mono cursor-pointer hover:opacity-80 max-w-[140px] truncate"
+      title="Click to edit campaign"
+      style={{ background: color + '15', color }}>
+      {display}
+    </button>
+  )
+}
+
+// Inline-editable price pill — click to type a $ amount, blur or Enter to save
+function PricePill({ value, color, onSave }) {
+  const [editing, setEditing] = useState(false)
+  const [text, setText] = useState(value != null ? String(value) : '')
+  useEffect(() => { setText(value != null ? String(value) : '') }, [value])
+
+  const commit = async () => {
+    const cleaned = String(text).replace(/[^0-9.\-]/g, '')
+    const num = cleaned === '' ? null : parseFloat(cleaned)
+    if (num !== value) {
+      try { await onSave(isNaN(num) ? null : num) } catch {}
+    }
+    setEditing(false)
+  }
+  const cancel = () => { setText(value != null ? String(value) : ''); setEditing(false) }
+
+  if (editing) {
+    return (
+      <input autoFocus value={text}
+        onChange={e => setText(e.target.value)}
+        onBlur={commit}
+        onClick={e => e.stopPropagation()}
+        onKeyDown={e => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') cancel() }}
+        placeholder="$"
+        className="text-[10px] px-1.5 py-0.5 rounded font-mono bg-[#080B0F] border outline-none w-16"
+        style={{ color, borderColor: color + '60' }} />
+    )
+  }
+  const display = value != null && !isNaN(value) ? `$${Number(value).toLocaleString(undefined, { minimumFractionDigits: value % 1 === 0 ? 0 : 2 })}` : '—'
+  return (
+    <button onClick={(e) => { e.stopPropagation(); setEditing(true) }}
+      className="text-[10px] px-1.5 py-0.5 rounded font-mono cursor-pointer hover:opacity-80"
+      title="Click to edit lead cost"
+      style={{ background: color + '15', color }}>
+      {display}
+    </button>
+  )
+}
+
 // Auto-growing notes textarea with auto-save on blur + saved tick
 function NotesField({ value, onSave, placeholder }) {
   const ref = useRef(null)
@@ -211,7 +286,7 @@ function NotesField({ value, onSave, placeholder }) {
 // ───────────────────────────────────────────────────────────────────────────
 // Lead card
 // ───────────────────────────────────────────────────────────────────────────
-function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNavigate, onDelete }) {
+function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNavigate, onDelete, onPriceChange, onCampaignChange }) {
   const { tags, getTag } = useApp()
   const [copied, setCopied] = useState(false)
   const [expanded, setExpanded] = useState(false)
@@ -260,9 +335,10 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNav
             )}
           </div>
           {lead.email && <p className="text-xs text-[#5A6A7A] truncate max-w-[200px] mb-1">{lead.email}</p>}
-          <div className="flex items-center gap-2 mt-1 flex-wrap">
+          <div className="flex items-center gap-1.5 mt-1 flex-wrap">
             <span className="text-xs text-[#5A6A7A]">{[lead.state, lead.zip].filter(Boolean).join(' ')}</span>
-            {lead.source && <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: safeColor + '15', color: safeColor }}>{lead.source}</span>}
+            <TextPill value={lead.campaign || lead.source} color={safeColor} onSave={(v) => onCampaignChange(lead.id, v)} placeholder="campaign" />
+            <PricePill value={lead.price} color={safeColor} onSave={(v) => onPriceChange(lead.id, v)} />
           </div>
         </div>
 
@@ -311,7 +387,10 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNav
         <div className="space-y-1">
           <p className="text-[10px] text-[#3A4A5A] font-mono uppercase tracking-wider">Received</p>
           <p className="text-xs text-[#8899AA]">{safeFormat(lead.created_at, 'MM-dd-yyyy')}</p>
-          <p className="text-xs text-[#5A6A7A]">{lead.source || '—'}</p>
+          {lead.campaign && <p className="text-xs text-[#5A6A7A]">{lead.campaign}</p>}
+          {lead.price != null && !isNaN(lead.price) && (
+            <p className="text-xs font-mono" style={{ color: safeColor }}>${Number(lead.price).toLocaleString(undefined, { minimumFractionDigits: lead.price % 1 === 0 ? 0 : 2 })}</p>
+          )}
         </div>
 
         <div className="flex flex-col items-end gap-1.5 pt-0.5">
@@ -803,6 +882,14 @@ export default function Leads() {
     if (typeof updateLead === 'function') await updateLead(id, { notes })
   }
 
+  const handlePriceChange = async (id, price) => {
+    if (typeof updateLead === 'function') await updateLead(id, { price })
+  }
+
+  const handleCampaignChange = async (id, campaign) => {
+    if (typeof updateLead === 'function') await updateLead(id, { campaign })
+  }
+
   const handleDeleteOne = async (id) => {
     if (typeof deleteLead !== 'function') return
     const ok = await deleteLead(id)
@@ -964,6 +1051,8 @@ export default function Leads() {
               onSelect={toggleSelect}
               onStageChange={(id, s) => typeof updateLeadStage === 'function' && updateLeadStage(id, s)}
               onNoteChange={handleNoteChange}
+              onPriceChange={handlePriceChange}
+              onCampaignChange={handleCampaignChange}
               onNavigate={id => navigate(`/leads/${id}`)}
               onDelete={handleDeleteOne} />
           ))}
