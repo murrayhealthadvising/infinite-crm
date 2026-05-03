@@ -440,33 +440,71 @@ function KanbanCol({ tag, leads, onLeadClick, onDrop }) {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// Ringy / ISalesCRM CSV import (kept from new importer)
+// Ringy / ISalesCRM CSV import — column mapping
+// All target field names below MUST exist in the leads table schema.
 // ───────────────────────────────────────────────────────────────────────────
 const RINGY_MAP = {
   'first name': 'first_name', 'firstname': 'first_name', 'fname': 'first_name',
   'last name': 'last_name',  'lastname':  'last_name',  'lname': 'last_name',
-  'full name': 'name', 'name': 'name', 'contact name': 'name', 'contact': 'name',
+  // 'full name' / 'name' / 'contact' fields are split into first_name + last_name later
+  'full name': '_fullname', 'name': '_fullname', 'contact name': '_fullname', 'contact': '_fullname',
+
   'phone': 'phone', 'phone number': 'phone', 'phonenumber': 'phone',
   'mobile': 'phone', 'mobile phone': 'phone', 'cell': 'phone',
   'cell phone': 'phone', 'primary phone': 'phone', 'phone 1': 'phone',
+
   'email': 'email', 'email address': 'email', 'emailaddress': 'email',
-  'address': 'address', 'street': 'address', 'address 1': 'address', 'street address': 'address',
+
+  'address': 'address', 'street': 'street_address', 'address 1': 'address',
+  'street address': 'street_address',
   'city': 'city',
   'state': 'state', 'state/province': 'state', 'province': 'state',
   'zip': 'zip', 'zip code': 'zip', 'zipcode': 'zip', 'postal code': 'zip', 'postal': 'zip',
-  'source': 'source', 'lead source': 'source',
-  'status': 'status', 'lead status': 'status', 'stage': 'status',
-  'notes': 'notes', 'note': 'notes', 'comments': 'notes', 'description': 'notes',
-  'tags': 'tags_raw',
+
+  'source': 'source', 'lead source': 'source', 'lead vendor': 'source', 'vendor': 'source',
+
+  // Pipeline: Ringy may use any of these; we'll convert to a stage id
+  'status': '_stagelike', 'lead status': '_stagelike', 'stage': '_stagelike',
+  'disposition': '_stagelike', 'lead disposition': '_stagelike',
+
+  // Tags — comma/semicolon/pipe separated; tags that match a stage label
+  // get pulled out and used as the stage, the rest become freeform tags
+  'tags': '_tagsraw', 'disposition tags': '_tagsraw', 'lead tags': '_tagsraw', 'labels': '_tagsraw',
+
+  'notes': 'notes', 'note': 'notes', 'agent notes': 'notes', 'description': 'notes',
+  'comments': 'comments', 'comment': 'comments', 'lead comments': 'comments',
+
   'contact id': 'external_id', 'id': 'external_id', 'lead id': 'external_id', 'ringy id': 'external_id',
-  'date added': 'imported_at', 'created': 'imported_at', 'date created': 'imported_at',
-  'created at': 'imported_at', 'created_at': 'imported_at',
-  'company': 'company', 'company name': 'company',
-  'dob': 'dob', 'date of birth': 'dob', 'birthday': 'dob',
+
+  'dob': 'dob', 'date of birth': 'dob', 'birthday': 'dob', 'birth date': 'dob', 'birthdate': 'dob',
+  'gender': 'gender', 'sex': 'gender',
+  'age': 'age', 'age range': 'age_range',
+  'smoker': 'smoker', 'tobacco': 'smoker',
   'income': 'income', 'annual income': 'income',
-  'household size': 'household_size', 'family size': 'household_size', 'household': 'household_size',
-  'county': 'county',
+  'household': 'household', 'household size': 'household', 'family size': 'household', 'members': 'household',
+  'spouse age': 'spouse_age', 'num children': 'num_children', 'children': 'num_children', 'kids': 'num_children',
+
+  'campaign': 'campaign', 'price': 'price', 'lead cost': 'price',
+  'premium': 'premium', 'monthly premium': 'premium',
+  'carrier': 'carrier', 'insurance carrier': 'carrier', 'plan': 'carrier',
+  'current carrier': 'current_carrier',
+  'effective date': 'effective_date', 'start date': 'effective_date', 'policy start': 'effective_date',
+  'plan choice': 'plan_choice',
+  'monthly budget': 'monthly_budget', 'budget': 'monthly_budget',
+  'best contact time': 'best_contact_time', 'contact time': 'best_contact_time',
+
+  'agent': 'agent', 'assigned to': 'agent', 'agent name': 'agent',
+  'is sold': 'is_sold', 'sold': 'is_sold',
 }
+
+// Schema whitelist — anything outside this set is silently dropped before insert
+const LEADS_COLUMNS = new Set([
+  'first_name','last_name','phone','email','city','state','zip','address','street_address',
+  'source','notes','comments','dob','gender','age','age_range','smoker','spouse_age','num_children',
+  'income','household','external_id','agent','agent_id','campaign','price',
+  'premium','carrier','current_carrier','effective_date','plan_choice','monthly_budget','best_contact_time',
+  'tags','stage','is_sold','user_id','created_at','last_activity',
+])
 const STATUS_MAP = {
   'new': 'Not Started', 'fresh': 'Not Started', 'new lead': 'Not Started',
   'not started': 'Not Started', 'not contacted': 'Not Started', 'uncontacted': 'Not Started',
@@ -519,45 +557,82 @@ function parseCSV(text) {
   }
   return { headers: rawHeaders, rows }
 }
-function mapRow(row) {
-  const out = {}
+// Convert a status label ("Interested") to a stage id ("interested")
+function statusLabelToStageId(label, dbTags) {
+  if (!label) return null
+  const lower = String(label).trim().toLowerCase()
+  const mapped = STATUS_MAP[lower] || STATUSES.find(s => s.toLowerCase() === lower)
+  if (!mapped) return null
+  // Match against actual tags in DB (preferred) so we always insert a valid FK
+  if (Array.isArray(dbTags) && dbTags.length) {
+    const hit = dbTags.find(t => (t.label || '').toLowerCase() === mapped.toLowerCase())
+    if (hit) return hit.id
+  }
+  // Fallback: kebab-case the label
+  return mapped.toLowerCase().replace(/\s+/g, '-')
+}
+
+function mapRow(row, dbTags) {
+  const raw = {}
   for (const [col, val] of Object.entries(row)) {
     const key = String(col).toLowerCase().trim()
     const field = RINGY_MAP[key]
-    if (field && val && String(val).trim()) out[field] = String(val).trim()
+    if (field && val && String(val).trim()) raw[field] = String(val).trim()
   }
-  if (!out.name) {
-    const parts = [out.first_name, out.last_name].filter(Boolean)
-    if (parts.length) out.name = parts.join(' ')
-  }
-  if (out.phone) out.phone = normalizePhone(out.phone)
 
-  // Parse tags column (comma/semicolon/pipe separated). Some Ringy tags
-  // are actually pipeline statuses — pull those out and use them as status.
+  // Split a "Full Name" / "Name" / "Contact" column into first/last if needed
+  if (raw._fullname && (!raw.first_name || !raw.last_name)) {
+    const parts = raw._fullname.split(/\s+/).filter(Boolean)
+    if (!raw.first_name) raw.first_name = parts[0] || ''
+    if (!raw.last_name) raw.last_name = parts.slice(1).join(' ')
+  }
+  delete raw._fullname
+
+  if (raw.phone) raw.phone = normalizePhone(raw.phone)
+
+  // Parse tags column (comma/semicolon/pipe separated)
   let tagList = []
-  if (out.tags_raw) {
-    tagList = out.tags_raw.split(/[,;|]/).map(t => t.trim()).filter(Boolean)
-    delete out.tags_raw
+  if (raw._tagsraw) {
+    tagList = raw._tagsraw.split(/[,;|]/).map(t => t.trim()).filter(Boolean)
+    delete raw._tagsraw
   }
 
-  // If status wasn't set from a status column, try to derive it from a tag
-  // that matches a known stage label (case-insensitive).
-  if (!out.status && tagList.length) {
+  // Determine the stage id, in priority order:
+  //   1. explicit status/stage/disposition column from Ringy
+  //   2. first tag that matches a known stage label
+  let stageLabel = raw._stagelike || null
+  delete raw._stagelike
+  if (!stageLabel) {
     for (const t of tagList) {
-      const mapped = STATUS_MAP[t.toLowerCase()] || STATUSES.find(s => s.toLowerCase() === t.toLowerCase())
-      if (mapped) { out.status = mapped; break }
+      const lower = t.toLowerCase()
+      if (STATUS_MAP[lower] || STATUSES.find(s => s.toLowerCase() === lower)) {
+        stageLabel = t
+        break
+      }
     }
   }
+  raw.stage = statusLabelToStageId(stageLabel, dbTags) || 'not-started'
 
-  // Strip stage-matching tags from the visible tag list (we already represent
-  // them via status), keep the rest as freeform tags.
-  out.tags = tagList.filter(t => {
-    const mapped = STATUS_MAP[t.toLowerCase()] || STATUSES.find(s => s.toLowerCase() === t.toLowerCase())
-    return !mapped
+  // Freeform tags = remaining ones that didn't match a stage
+  raw.tags = tagList.filter(t => {
+    const lower = t.toLowerCase()
+    return !(STATUS_MAP[lower] || STATUSES.find(s => s.toLowerCase() === lower))
   })
 
-  out.status = normalizeStatus(out.status)
-  delete out.imported_at
+  // Coerce numeric fields
+  if (raw.income) raw.income = parseInt(String(raw.income).replace(/[^0-9.\-]/g, '')) || null
+  if (raw.household) raw.household = parseInt(raw.household) || null
+  if (raw.premium) raw.premium = parseInt(String(raw.premium).replace(/[^0-9.\-]/g, '')) || null
+  if (raw.price) raw.price = parseFloat(String(raw.price).replace(/[^0-9.\-]/g, '')) || null
+  if (raw.spouse_age) raw.spouse_age = parseInt(raw.spouse_age) || null
+  if (raw.num_children) raw.num_children = parseInt(raw.num_children) || null
+  if (raw.is_sold !== undefined) raw.is_sold = String(raw.is_sold).toLowerCase() === 'true' || String(raw.is_sold).toLowerCase() === 'yes' || raw.is_sold === '1' || raw.is_sold === 1
+
+  // Drop columns that don't exist in our schema (silently)
+  const out = {}
+  for (const [k, v] of Object.entries(raw)) {
+    if (LEADS_COLUMNS.has(k)) out[k] = v
+  }
   return out
 }
 
@@ -636,7 +711,7 @@ export default function Leads() {
       const text = await file.text()
       const { headers, rows } = parseCSV(text)
       if (!rows.length) { setImportResult({ error: 'No data rows found in CSV.' }); return }
-      const mapped = rows.map(mapRow)
+      const mapped = rows.map(r => mapRow(r, safeTags))
       const unmapped = headers.filter(h => {
         const key = String(h).toLowerCase().trim()
         return !RINGY_MAP[key] && String(h).trim()
@@ -654,36 +729,67 @@ export default function Leads() {
     if (!importPreview || !user?.id) return
     setImporting(true)
     setImportResult(null)
-    const { rows } = importPreview
-    let imported = 0, errors = 0
-    const CHUNK = 100
-    for (let i = 0; i < rows.length; i += CHUNK) {
-      const chunk = rows.slice(i, i + CHUNK).map(r => ({
+    const now = new Date().toISOString()
+
+    // Client-side dedupe by phone against existing leads
+    const existingPhones = new Set(safeLeads.map(l => String(l.phone || '').replace(/\D/g, '')).filter(Boolean))
+    const seen = new Set()
+    let dupes = 0
+    const toInsert = []
+    for (const r of importPreview.rows) {
+      const digits = String(r.phone || '').replace(/\D/g, '')
+      if (digits && (existingPhones.has(digits) || seen.has(digits))) { dupes++; continue }
+      if (digits) seen.add(digits)
+      toInsert.push({
         ...r,
         user_id: user.id,
         source: r.source || 'Ringy Import',
-        tags: r.tags || [],
-      }))
-      const withPhone = chunk.filter(r => r.phone)
-      const withoutPhone = chunk.filter(r => !r.phone)
-      if (withPhone.length) {
-        try {
-          const { error } = await supabase.from('leads').upsert(withPhone, { onConflict: 'user_id,phone', ignoreDuplicates: true })
-          if (error) { console.error(error); errors += withPhone.length } else imported += withPhone.length
-        } catch (e) { console.error(e); errors += withPhone.length }
-      }
-      if (withoutPhone.length) {
-        try {
-          const { error } = await supabase.from('leads').insert(withoutPhone)
-          if (error) { console.error(error); errors += withoutPhone.length } else imported += withoutPhone.length
-        } catch (e) { console.error(e); errors += withoutPhone.length }
+        created_at: now,
+        last_activity: now,
+      })
+    }
+
+    let imported = 0
+    const failures = []
+    const CHUNK = 50
+    for (let i = 0; i < toInsert.length; i += CHUNK) {
+      const batch = toInsert.slice(i, i + CHUNK)
+      try {
+        const { error } = await supabase.from('leads').insert(batch)
+        if (error) {
+          // Fall back to per-row insert so we know which ones fail and why
+          for (const row of batch) {
+            try {
+              const { error: e2 } = await supabase.from('leads').insert([row])
+              if (e2) failures.push({ row, msg: e2.message }); else imported++
+            } catch (e3) { failures.push({ row, msg: e3.message }) }
+          }
+        } else imported += batch.length
+      } catch (e) {
+        for (const row of batch) {
+          try {
+            const { error: e2 } = await supabase.from('leads').insert([row])
+            if (e2) failures.push({ row, msg: e2.message }); else imported++
+          } catch (e3) { failures.push({ row, msg: e3.message }) }
+        }
       }
     }
-    setImportResult({ ok: true, imported, errors, total: rows.length })
+
+    if (failures.length > 0) {
+      console.error('[Import] First 5 failures:', failures.slice(0, 5))
+    }
+    const failMsg = failures.length > 0 ? ` · ${failures.length} failed (${(failures[0]?.msg || '').slice(0, 80)}…)` : ''
+    setImportResult({
+      ok: true,
+      imported,
+      errors: failures.length,
+      total: importPreview.rows.length,
+      msg: `Imported ${imported}${dupes > 0 ? ` · ${dupes} duplicate${dupes === 1 ? '' : 's'} skipped` : ''}${failMsg}`,
+    })
     setImportPreview(null)
     setImporting(false)
     try { await refreshLeads() } catch {}
-    setTimeout(() => setImportResult(null), 6000)
+    setTimeout(() => setImportResult(null), 10000)
   }
 
   const handleDrop = (stageId) => {
@@ -788,7 +894,7 @@ export default function Leads() {
           {importResult.error
             ? <><AlertCircle size={16} className="mt-0.5 flex-shrink-0" />{importResult.error}</>
             : <><CheckCircle size={16} className="mt-0.5 flex-shrink-0" />
-                <span>Imported <strong>{importResult.imported}</strong> leads.{importResult.errors > 0 && ` ${importResult.errors} failed.`}</span>
+                <span>{importResult.msg || `Imported ${importResult.imported} leads${importResult.errors > 0 ? ` · ${importResult.errors} failed` : ''}`}</span>
               </>}
           <button onClick={() => setImportResult(null)} className="ml-auto"><X size={14} /></button>
         </div>
