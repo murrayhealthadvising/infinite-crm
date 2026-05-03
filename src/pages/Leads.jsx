@@ -8,7 +8,7 @@ import AddLeadModal from '../components/AddLeadModal'
 import {
   Search, Plus, LayoutList, Columns, Phone, Copy, Home, DollarSign, Calendar,
   ExternalLink, ChevronDown, ChevronUp, X, Users, Check, Download, Upload,
-  Square, CheckSquare, AlertCircle, CheckCircle,
+  Square, CheckSquare, AlertCircle, CheckCircle, Trash2, AlertTriangle,
 } from 'lucide-react'
 import { format, formatDistanceToNow, differenceInYears, parseISO } from 'date-fns'
 import clsx from 'clsx'
@@ -211,7 +211,7 @@ function NotesField({ value, onSave, placeholder }) {
 // ───────────────────────────────────────────────────────────────────────────
 // Lead card
 // ───────────────────────────────────────────────────────────────────────────
-function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNavigate }) {
+function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNavigate, onDelete }) {
   const { tags, getTag } = useApp()
   const [copied, setCopied] = useState(false)
   const [expanded, setExpanded] = useState(false)
@@ -323,8 +323,27 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNav
             className="p-1.5 rounded-lg text-[#3A4A5A] hover:text-white transition-colors">
             {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
           </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); if (confirm(`Delete "${fullName}"? This cannot be undone.`)) onDelete?.(lead.id) }}
+            className="p-1.5 rounded-lg text-[#3A4A5A] hover:text-[#EF4444] hover:bg-[#EF444415] transition-colors"
+            title="Delete lead">
+            <Trash2 size={14} />
+          </button>
         </div>
       </div>
+
+      {/* Tags row (e.g. from Ringy import) */}
+      {Array.isArray(lead.tags) && lead.tags.length > 0 && (
+        <div className="px-4 pb-2 pl-12 flex flex-wrap gap-1">
+          {lead.tags.map((t, i) => (
+            <span key={i}
+              className="text-[10px] px-1.5 py-0.5 rounded font-mono"
+              style={{ background: '#1A2130', color: '#8899AA', border: '1px solid #2A3547' }}>
+              #{t}
+            </span>
+          ))}
+        </div>
+      )}
 
       {/* Notes — primary element on every card */}
       <div className="px-4 pb-3 pl-12">
@@ -512,11 +531,32 @@ function mapRow(row) {
     if (parts.length) out.name = parts.join(' ')
   }
   if (out.phone) out.phone = normalizePhone(out.phone)
-  out.status = normalizeStatus(out.status)
+
+  // Parse tags column (comma/semicolon/pipe separated). Some Ringy tags
+  // are actually pipeline statuses — pull those out and use them as status.
+  let tagList = []
   if (out.tags_raw) {
-    out.tags = out.tags_raw.split(/[,;|]/).map(t => t.trim()).filter(Boolean)
+    tagList = out.tags_raw.split(/[,;|]/).map(t => t.trim()).filter(Boolean)
     delete out.tags_raw
-  } else { out.tags = [] }
+  }
+
+  // If status wasn't set from a status column, try to derive it from a tag
+  // that matches a known stage label (case-insensitive).
+  if (!out.status && tagList.length) {
+    for (const t of tagList) {
+      const mapped = STATUS_MAP[t.toLowerCase()] || STATUSES.find(s => s.toLowerCase() === t.toLowerCase())
+      if (mapped) { out.status = mapped; break }
+    }
+  }
+
+  // Strip stage-matching tags from the visible tag list (we already represent
+  // them via status), keep the rest as freeform tags.
+  out.tags = tagList.filter(t => {
+    const mapped = STATUS_MAP[t.toLowerCase()] || STATUSES.find(s => s.toLowerCase() === t.toLowerCase())
+    return !mapped
+  })
+
+  out.status = normalizeStatus(out.status)
   delete out.imported_at
   return out
 }
@@ -542,7 +582,7 @@ function exportCSV(leads) {
 // MAIN
 // ───────────────────────────────────────────────────────────────────────────
 export default function Leads() {
-  const { user, leads, tags, updateLeadStage, updateLead, refreshLeads } = useApp()
+  const { user, leads, tags, updateLeadStage, updateLead, refreshLeads, deleteLead, deleteLeads, deleteAllLeadsForUser } = useApp()
   const navigate = useNavigate()
   const [view, setView] = useState('list')
   const [search, setSearch] = useState('')
@@ -556,6 +596,11 @@ export default function Leads() {
   const [importPreview, setImportPreview] = useState(null)
   const [unmappedCols, setUnmappedCols] = useState([])
   const [importResult, setImportResult] = useState(null)
+
+  // Delete-all double-confirm modal state
+  const [showDeleteAll, setShowDeleteAll] = useState(false)
+  const [deleteAllInput, setDeleteAllInput] = useState('')
+  const [deletingAll, setDeletingAll] = useState(false)
 
   const safeTags = Array.isArray(tags) ? tags : []
   const safeLeads = Array.isArray(leads) ? leads : []
@@ -652,6 +697,35 @@ export default function Leads() {
     if (typeof updateLead === 'function') await updateLead(id, { notes })
   }
 
+  const handleDeleteOne = async (id) => {
+    if (typeof deleteLead !== 'function') return
+    const ok = await deleteLead(id)
+    if (ok) setSelected(prev => { const n = new Set(prev); n.delete(id); return n })
+  }
+
+  const handleBulkDelete = async () => {
+    if (selected.size === 0 || typeof deleteLeads !== 'function') return
+    const count = selected.size
+    if (!confirm(`Delete ${count} selected lead${count === 1 ? '' : 's'}? This cannot be undone.`)) return
+    const ids = Array.from(selected)
+    const n = await deleteLeads(ids)
+    setSelected(new Set())
+    setImportResult({ ok: true, imported: 0, errors: 0, total: 0, msg: `Deleted ${n} lead${n === 1 ? '' : 's'}` })
+    setTimeout(() => setImportResult(null), 4000)
+  }
+
+  const handleDeleteAll = async () => {
+    if (typeof deleteAllLeadsForUser !== 'function') return
+    setDeletingAll(true)
+    const n = await deleteAllLeadsForUser()
+    setDeletingAll(false)
+    setShowDeleteAll(false)
+    setDeleteAllInput('')
+    setSelected(new Set())
+    setImportResult({ ok: true, imported: 0, errors: 0, total: 0, msg: `Wiped ${n} lead${n === 1 ? '' : 's'} — ready for fresh import` })
+    setTimeout(() => setImportResult(null), 6000)
+  }
+
   return (
     <div className="flex flex-col h-full animate-fade-in">
       {/* Header */}
@@ -665,6 +739,12 @@ export default function Leads() {
             className="p-2 rounded-lg text-[#5A6A7A] hover:text-white hover:bg-[#1A2130] transition-colors" title="Select all">
             {selected.size === filtered.length && filtered.length > 0 ? <CheckSquare size={16} className="text-[#00E5C3]" /> : <Square size={16} />}
           </button>
+          {selected.size > 0 && (
+            <button onClick={handleBulkDelete}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border border-[#EF444440] text-[#EF4444] hover:bg-[#EF444415] transition-colors">
+              <Trash2 size={13} /> Delete {selected.size}
+            </button>
+          )}
           <button onClick={handleExport}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border border-[#1A2130] text-[#8899AA] hover:text-white hover:border-[#2A3547] transition-colors">
             <Download size={13} /> {selected.size > 0 ? `Export ${selected.size}` : 'Export'}
@@ -674,6 +754,13 @@ export default function Leads() {
             <Upload size={13} /> Import CSV
           </button>
           <input ref={fileRef} type="file" accept=".csv,.tsv,.txt" onChange={handleFileSelect} className="hidden" />
+          {safeLeads.length > 0 && (
+            <button onClick={() => setShowDeleteAll(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border border-[#EF444440] text-[#EF4444] hover:bg-[#EF444415] transition-colors"
+              title="Wipe all leads (for fresh re-import)">
+              <Trash2 size={13} /> Delete All
+            </button>
+          )}
 
           <div className="flex rounded-lg border border-[#1A2130] overflow-hidden" style={{ background: '#0A0E14' }}>
             <button onClick={() => setView('list')} className={clsx('px-3 py-1.5 transition-colors', view === 'list' ? 'bg-[#1A2130] text-white' : 'text-[#5A6A7A] hover:text-white')}>
@@ -771,7 +858,8 @@ export default function Leads() {
               onSelect={toggleSelect}
               onStageChange={(id, s) => typeof updateLeadStage === 'function' && updateLeadStage(id, s)}
               onNoteChange={handleNoteChange}
-              onNavigate={id => navigate(`/leads/${id}`)} />
+              onNavigate={id => navigate(`/leads/${id}`)}
+              onDelete={handleDeleteOne} />
           ))}
           {filtered.length === 0 && (
             <div className="flex flex-col items-center justify-center py-20 text-[#3A4A5A]">
@@ -795,6 +883,54 @@ export default function Leads() {
       )}
 
       {showAdd && <AddLeadModal onClose={() => setShowAdd(false)} />}
+
+      {/* Delete-all confirmation modal */}
+      {showDeleteAll && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => !deletingAll && setShowDeleteAll(false)} />
+          <div className="relative w-full max-w-md rounded-2xl border border-[#EF444440] overflow-hidden" style={{ background: '#0E1318' }}>
+            <div className="flex items-center gap-3 px-6 py-4 border-b border-[#1A2130]">
+              <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: '#EF444415' }}>
+                <AlertTriangle size={18} className="text-[#EF4444]" />
+              </div>
+              <div>
+                <h2 className="text-base font-bold text-white">Delete ALL leads?</h2>
+                <p className="text-xs text-[#8899AA]">{safeLeads.length} leads will be permanently deleted from your account.</p>
+              </div>
+            </div>
+            <div className="p-6 space-y-4">
+              <p className="text-sm text-[#C0D0E0]">This is irreversible. Leads from the email pipeline and CSV imports will all be wiped — recommended only when re-importing a fresh CSV.</p>
+              <div>
+                <label className="text-xs font-mono uppercase tracking-wider text-[#5A6A7A] mb-1.5 block">
+                  Type <span className="text-[#EF4444]">DELETE</span> to confirm
+                </label>
+                <input
+                  value={deleteAllInput}
+                  onChange={e => setDeleteAllInput(e.target.value)}
+                  placeholder="DELETE"
+                  autoFocus
+                  className="w-full px-3 py-2.5 rounded-lg text-sm text-white border border-[#1A2130] bg-[#080B0F] outline-none focus:border-[#EF4444] font-mono"
+                />
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={handleDeleteAll}
+                  disabled={deleteAllInput !== 'DELETE' || deletingAll}
+                  className="flex-1 py-2.5 rounded-lg text-sm font-semibold text-white transition-opacity disabled:opacity-40"
+                  style={{ background: '#EF4444' }}>
+                  {deletingAll ? 'Deleting…' : `Delete all ${safeLeads.length} leads`}
+                </button>
+                <button
+                  onClick={() => { setShowDeleteAll(false); setDeleteAllInput('') }}
+                  disabled={deletingAll}
+                  className="px-4 py-2.5 rounded-lg text-sm bg-[#1A2130] text-[#8899AA] hover:text-white">
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

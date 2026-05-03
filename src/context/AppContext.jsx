@@ -175,6 +175,44 @@ export function AppProvider({ children }) {
     setLeads(prev => prev.map(l => l.id === id ? { ...l, ...updates, last_activity: now } : l))
   }
 
+  const deleteLead = async (id) => {
+    if (!id) return false
+    try {
+      const { error } = await supabase.from('leads').delete().eq('id', id)
+      if (error) { console.error('deleteLead error:', error); return false }
+      setLeads(prev => prev.filter(l => l.id !== id))
+      return true
+    } catch (e) { console.error('deleteLead exception:', e); return false }
+  }
+
+  const deleteLeads = async (ids) => {
+    if (!Array.isArray(ids) || ids.length === 0) return 0
+    let deleted = 0
+    const CHUNK = 100
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const chunk = ids.slice(i, i + CHUNK)
+      try {
+        const { error } = await supabase.from('leads').delete().in('id', chunk)
+        if (error) { console.error('deleteLeads chunk error:', error) }
+        else deleted += chunk.length
+      } catch (e) { console.error('deleteLeads exception:', e) }
+    }
+    if (deleted > 0) setLeads(prev => prev.filter(l => !ids.includes(l.id)))
+    return deleted
+  }
+
+  // Wipe ALL leads for the current user — used by "Delete all" button
+  const deleteAllLeadsForUser = async () => {
+    if (!session?.user?.id) return 0
+    const before = leads.length
+    try {
+      const { error } = await supabase.from('leads').delete().eq('user_id', session.user.id)
+      if (error) { console.error('deleteAllLeadsForUser error:', error); return 0 }
+      setLeads([])
+      return before
+    } catch (e) { console.error('deleteAllLeadsForUser exception:', e); return 0 }
+  }
+
   const updateLeadStage = async (leadId, newStage) => {
     // newStage may be a stage id ("interested") OR a status label ("Interested")
     const status = stageIdToStatus[newStage] || (STATUS_LABELS.includes(newStage) ? newStage : 'Not Started')
@@ -283,6 +321,7 @@ export function AppProvider({ children }) {
       // helpers
       getTag, signOut, refreshLeads,
       addLead, bulkAddLeads, updateLead, updateLeadStage,
+      deleteLead, deleteLeads, deleteAllLeadsForUser,
       addActivity, getLeadActivities,
       addTag, updateTag, deleteTag,
     }}>
