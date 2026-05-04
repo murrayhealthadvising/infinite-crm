@@ -367,10 +367,16 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNav
               <span className="text-xs text-[#8899AA]">Household: {lead.household || lead.household_size}</span>
             </div>
           )}
-          {lead.income && (
+          {(lead.income !== null && lead.income !== undefined && lead.income !== '') && (
             <div className="flex items-center gap-1.5">
               <DollarSign size={11} className="text-[#3A4A5A]" />
-              <span className="text-xs text-[#8899AA]">${Number(String(lead.income).replace(/[^0-9.]/g, '')).toLocaleString()}/yr</span>
+              <span className="text-xs text-[#8899AA]">{(() => {
+                const v = String(lead.income).trim()
+                // USHA emails ship ranges like "$50,000 - $75,000" — render as-is
+                if (/[-–~]/.test(v) && /\d/.test(v)) return v.startsWith('$') ? v + '/yr' : '$' + v + '/yr'
+                const n = Number(v.replace(/[^0-9.]/g, ''))
+                return isFinite(n) && n > 0 ? `$${n.toLocaleString()}/yr` : v
+              })()}</span>
             </div>
           )}
           {lead.dob && (

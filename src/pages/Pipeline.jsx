@@ -31,16 +31,6 @@ function PipelineCard({ lead, onDragStart, onDragEnd, onClick }) {
         </div>
       </div>
       <p className="text-xs text-[#5A6A7A] font-mono mb-1">{lead.phone}</p>
-      {lead.dob && (
-        <p className="text-[10px] text-[#5A6A7A] font-mono mb-1">DOB {lead.dob}</p>
-      )}
-      {lead.comments && (
-        <p className="text-[10px] font-mono mb-1 truncate"
-          title={lead.comments}
-          style={{ color: '#F59E0B' }}>
-          {lead.comments}
-        </p>
-      )}
       <div className="flex items-center justify-between mt-2">
         <span className="text-[10px] text-[#3A4A5A]">{[lead.state, lead.campaign || lead.source].filter(Boolean).join(' · ') || '—'}</span>
         <span className="text-[10px] text-[#3A4A5A]">{safeRel(lead.last_activity || lead.created_at)}</span>
