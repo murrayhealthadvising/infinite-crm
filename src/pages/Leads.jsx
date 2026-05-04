@@ -393,10 +393,6 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNav
         <div className="space-y-1">
           <p className="text-[10px] text-[#3A4A5A] font-mono uppercase tracking-wider">Received</p>
           <p className="text-xs text-[#8899AA]">{safeFormat(lead.created_at, 'MM-dd-yyyy')}</p>
-          {lead.campaign && <p className="text-xs text-[#5A6A7A]">{lead.campaign}</p>}
-          {lead.price != null && !isNaN(lead.price) && (
-            <p className="text-xs font-mono" style={{ color: safeColor }}>${Number(lead.price).toLocaleString(undefined, { minimumFractionDigits: lead.price % 1 === 0 ? 0 : 2 })}</p>
-          )}
         </div>
 
         <div className="flex flex-col items-end gap-1.5 pt-0.5">
