@@ -2,7 +2,7 @@ import { NavLink, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, Shield, Users, GitBranch, Calendar, Clock,
   CheckSquare, Mail, Calculator, TrendingUp, Settings, ChevronLeft,
-  ChevronRight, Menu, LogOut
+  ChevronRight, Menu, LogOut, Star,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import clsx from 'clsx'
@@ -10,6 +10,7 @@ import clsx from 'clsx'
 const NAV = [
   { to: '/dashboard',    icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/leads',        icon: Users,            label: 'Leads' },
+  { to: '/dial-bucket',  icon: Star,             label: 'Dial Bucket' },
   { to: '/pipeline',     icon: GitBranch,        label: 'Pipeline' },
   { to: '/appointments', icon: Calendar,         label: 'Appointments' },
   { to: '/follow-ups',   icon: Clock,            label: 'Follow-Ups' },
