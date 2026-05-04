@@ -757,6 +757,7 @@ export default function Leads() {
   const [view, setView] = useState('list')
   const [search, setSearch] = useState('')
   const [stageFilter, setStageFilter] = useState('')
+  const [sortBy, setSortBy] = useState('created_desc')
   const [showAdd, setShowAdd] = useState(false)
   const [selected, setSelected] = useState(new Set())
   const [dragLeadId, setDragLeadId] = useState(null)
@@ -775,11 +776,19 @@ export default function Leads() {
   const safeTags = Array.isArray(tags) ? tags : []
   const safeLeads = Array.isArray(leads) ? leads : []
 
-  // Newest leads on top
+  // Sort leads by user-selected key
   const sortedLeads = [...safeLeads].sort((a, b) => {
-    const ad = new Date(a.created_at || 0).getTime() || 0
-    const bd = new Date(b.created_at || 0).getTime() || 0
-    return bd - ad
+    const ts = (l, k) => new Date(l[k] || 0).getTime() || 0
+    const nameOf = (l) => (leadName(l) || '').toLowerCase()
+    switch (sortBy) {
+      case 'activity_desc': return ts(b, 'last_activity') - ts(a, 'last_activity')
+      case 'activity_asc':  return ts(a, 'last_activity') - ts(b, 'last_activity')
+      case 'created_asc':   return ts(a, 'created_at') - ts(b, 'created_at')
+      case 'name_asc':      return nameOf(a).localeCompare(nameOf(b))
+      case 'price_desc':    return (Number(b.price) || 0) - (Number(a.price) || 0)
+      case 'created_desc':
+      default:              return ts(b, 'created_at') - ts(a, 'created_at')
+    }
   })
 
   const filtered = sortedLeads.filter(l => {
@@ -1061,6 +1070,16 @@ export default function Leads() {
               className="w-full bg-[#0E1318] border border-[#1A2130] rounded-lg pl-9 pr-4 py-2 text-sm text-white placeholder-[#3A4A5A] focus:outline-none focus:border-[#00E5C340]" />
             {search && <button onClick={() => setSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-[#5A6A7A] hover:text-white"><X size={13} /></button>}
           </div>
+          <label className="text-[10px] font-mono uppercase tracking-wider text-[#5A6A7A]">Sort</label>
+          <select value={sortBy} onChange={e => setSortBy(e.target.value)}
+            className="bg-[#0E1318] border border-[#1A2130] rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-[#00E5C340]">
+            <option value="created_desc">Newest first</option>
+            <option value="created_asc">Oldest first</option>
+            <option value="activity_desc">Recent activity</option>
+            <option value="activity_asc">Stale (no recent activity)</option>
+            <option value="name_asc">Name A→Z</option>
+            <option value="price_desc">Highest cost first</option>
+          </select>
         </div>
         <DragScrollPills stageFilter={stageFilter} setStageFilter={setStageFilter} tags={safeTags} leads={safeLeads} />
       </div>
