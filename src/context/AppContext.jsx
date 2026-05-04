@@ -218,13 +218,26 @@ export function AppProvider({ children }) {
   }
 
   const updateLeadStage = async (leadId, newStage) => {
-    // newStage may be a stage id ("interested") OR a status label ("Interested")
-    const status = stageIdToStatus[newStage] || (STATUS_LABELS.includes(newStage) ? newStage : 'Not Started')
-    const stageId = statusToStageId[status] || newStage
+    // newStage may be a stage id ("interested", "quoted-1730000000") OR a
+    // status label ("Interested"). Resolve in priority order:
+    //   1. Exact match on a tag's id (covers custom stages too)
+    //   2. Status label → stage id (legacy)
+    //   3. Stage id → status label (legacy)
+    //   4. Pass through as-is (assume it's a valid id)
+    let stageId = newStage
+    let stageLabel = ''
+    const safeTags = Array.isArray(tags) ? tags : []
+    const matchById = safeTags.find(t => t.id === newStage)
+    if (matchById) { stageId = matchById.id; stageLabel = matchById.label }
+    else {
+      const matchByLabel = safeTags.find(t => (t.label || '').toLowerCase() === String(newStage).toLowerCase())
+      if (matchByLabel) { stageId = matchByLabel.id; stageLabel = matchByLabel.label }
+      else if (stageIdToStatus[newStage]) { stageId = newStage; stageLabel = stageIdToStatus[newStage] }
+      else if (STATUS_LABELS.includes(newStage)) { stageLabel = newStage; stageId = statusToStageId[newStage] || newStage }
+      else { stageId = newStage; stageLabel = newStage }
+    }
     await updateLead(leadId, { stage: stageId })
-    try { await addActivity(leadId, 'status', `Stage changed to: ${status}`) } catch {}
-    // If the lead is being marked Sold, prompt for product details so customer
-    // service later knows what was sold. Skip if details are already on file.
+    try { await addActivity(leadId, 'status', `Stage changed to: ${stageLabel || stageId}`) } catch {}
     if (stageId === 'sold') {
       const lead = leads.find(l => l.id === leadId)
       const hasDetails = lead && (lead.carrier || lead.plan_choice || lead.premium)
