@@ -237,10 +237,8 @@ function PricePill({ value, color, onSave }) {
   )
 }
 
-// Auto-growing notes textarea with auto-save on blur + saved tick.
-// `lead.comments` (the USHA-parsed comment, e.g. 'health-for-moms') is
-// rendered as an amber pill above the textarea so it's always visible.
-function NotesField({ value, comments, onSave, placeholder }) {
+// Auto-growing notes textarea with auto-save on blur + saved tick
+function NotesField({ value, onSave, placeholder }) {
   const ref = useRef(null)
   const [text, setText] = useState(value || '')
   const [saving, setSaving] = useState(false)
@@ -264,34 +262,23 @@ function NotesField({ value, comments, onSave, placeholder }) {
   }
 
   return (
-    <div onClick={e => e.stopPropagation()}>
-      {comments && (
-        <div className="mb-1.5 flex items-start gap-1.5">
-          <span className="text-[9px] px-1.5 py-0.5 rounded font-mono uppercase tracking-wider flex-shrink-0 mt-0.5"
-            style={{ background: '#F59E0B20', color: '#F59E0B', border: '1px solid #F59E0B30' }}>
-            campaign
-          </span>
-          <span className="text-xs text-[#F59E0B] font-mono leading-tight">{comments}</span>
+    <div className="relative" onClick={e => e.stopPropagation()}>
+      <textarea ref={ref}
+        value={text}
+        onChange={e => setText(e.target.value)}
+        onBlur={handleBlur}
+        placeholder={placeholder}
+        rows={3}
+        className="w-full bg-transparent border border-[#1A2130] rounded-lg px-3 py-2.5 text-sm placeholder-[#3A4A5A] focus:outline-none focus:border-[#2A3547] resize-none overflow-hidden transition-colors"
+        style={{ color: '#C0D0E0', minHeight: '64px' }}
+      />
+      {(saving || savedTick) && (
+        <div className="absolute top-2 right-2 flex items-center gap-1 text-[10px] font-mono"
+          style={{ color: savedTick ? '#00E5C3' : '#5A6A7A' }}>
+          {saving && <span>saving…</span>}
+          {savedTick && <><Check size={10} /> saved</>}
         </div>
       )}
-      <div className="relative">
-        <textarea ref={ref}
-          value={text}
-          onChange={e => setText(e.target.value)}
-          onBlur={handleBlur}
-          placeholder={placeholder}
-          rows={3}
-          className="w-full bg-transparent border border-[#1A2130] rounded-lg px-3 py-2.5 text-sm placeholder-[#3A4A5A] focus:outline-none focus:border-[#2A3547] resize-none overflow-hidden transition-colors"
-          style={{ color: '#C0D0E0', minHeight: '64px' }}
-        />
-        {(saving || savedTick) && (
-          <div className="absolute top-2 right-2 flex items-center gap-1 text-[10px] font-mono"
-            style={{ color: savedTick ? '#00E5C3' : '#5A6A7A' }}>
-            {saving && <span>saving…</span>}
-            {savedTick && <><Check size={10} /> saved</>}
-          </div>
-        )}
-      </div>
     </div>
   )
 }
@@ -352,6 +339,13 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNav
             <span className="text-xs text-[#5A6A7A]">{[lead.state, lead.zip].filter(Boolean).join(' ')}</span>
             <TextPill value={lead.campaign || lead.source} color={safeColor} onSave={(v) => onCampaignChange(lead.id, v)} placeholder="campaign" />
             <PricePill value={lead.price} color={safeColor} onSave={(v) => onPriceChange(lead.id, v)} />
+            {lead.comments && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded font-mono max-w-[180px] truncate"
+                title={lead.comments}
+                style={{ background: '#F59E0B15', color: '#F59E0B', border: '1px solid #F59E0B30' }}>
+                {lead.comments}
+              </span>
+            )}
           </div>
         </div>
 
@@ -436,13 +430,10 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNav
         </div>
       )}
 
-      {/* Notes — primary element on every card. The amber 'campaign' pill
-          shows lead.comments (parsed from USHA email) so agents see at a
-          glance whether this is health-for-moms / acn-leads / quote-yeti / etc. */}
+      {/* Notes — primary element on every card */}
       <div className="px-4 pb-3 pl-12">
         <NotesField
           value={lead.notes || ''}
-          comments={lead.comments}
           onSave={(v) => onNoteChange(lead.id, v)}
           placeholder="Add notes…"
         />
