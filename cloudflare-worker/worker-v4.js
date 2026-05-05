@@ -97,9 +97,23 @@ function fieldGetter(text) {
 function parseMoneyToInt(s) {
   if (!s) return null
   const str = String(s).trim()
-  if (/[-–~]/.test(str)) return null
+  // Range like "$50,000 - $75,000" — take the lower bound (income is an INT column)
+  if (/[-–~]/.test(str)) {
+    const m = str.match(/\$?([0-9,]+)/)
+    if (m) { const n = parseInt(m[1].replace(/,/g, '')); return isFinite(n) && n > 0 ? n : null }
+    return null
+  }
   const n = parseInt(str.replace(/[^0-9.]/g, ''))
   return isFinite(n) && n > 0 ? n : null
+}
+
+// Coerce a possibly-string value into an integer, or null. For numeric DB columns.
+function toIntOrNull(s) {
+  if (s === null || s === undefined || s === '') return null
+  const m = String(s).match(/-?\d+/)
+  if (!m) return null
+  const n = parseInt(m[0])
+  return isFinite(n) ? n : null
 }
 
 function parseHousehold(s) {
@@ -133,7 +147,7 @@ function parseLead(body) {
     dob:           get('Date of Birth') || get('DOB'),
     age:           get('Age'),
     age_range:     get('Age Range'),
-    income:        get('Income'),
+    income:        parseMoneyToInt(get('Income')),  // INT column — handles ranges
     household:     parseHousehold(get('Household')),
     smoker:        get('Smoker'),
     spouse_age:    get('Spouse Age'),
