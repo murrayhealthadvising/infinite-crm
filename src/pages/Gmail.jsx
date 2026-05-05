@@ -29,10 +29,15 @@ function forwardAddressFor(email) {
 function parseUSHAEmail(body) {
   const get = (label) => {
     const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    const re = new RegExp('(?:^|\\n)\\s*' + escaped + '\\s*:\\s*([^\\n\\r]+)', 'i')
+    // Only match horizontal whitespace [ \t] around label/colon. Newlines
+    // would let an empty field like 'Zip:\n' grab the next label's text.
+    const re = new RegExp('(?:^|\\n)[ \\t]*' + escaped + '[ \\t]*:[ \\t]*([^\\n\\r]+)', 'i')
     const m = body.match(re)
     if (!m) return ''
-    return m[1].trim().replace(/<[^>]+>/g, '').replace(/\s+/g, ' ')
+    const v = m[1].trim().replace(/<[^>]+>/g, '')
+    // If the captured value looks like a USHA label (e.g. 'DOB:'), treat as empty
+    if (/^[A-Za-z][A-Za-z ]*:$/.test(v)) return ''
+    return v.replace(/\s+/g, ' ')
   }
   // Smoker only counts if the value clearly says yes / true / 1 — anything
   // else (empty, 'no', 'false', random label leakage) means non-smoker.

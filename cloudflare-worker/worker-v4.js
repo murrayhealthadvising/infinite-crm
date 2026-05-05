@@ -87,10 +87,18 @@ function extractBody(raw) {
 function fieldGetter(text) {
   return (label) => {
     const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    const re = new RegExp('(?:^|\\n)\\s*' + escaped + '\\s*:\\s*([^\\n\\r]+)', 'i')
+    // CRITICAL: only match horizontal whitespace ([ \t]) around label/colon —
+    // never newlines. Otherwise an empty field like 'Zip:\n' captures the
+    // next label's text, e.g. 'Business Name:'. \s would match newlines.
+    const re = new RegExp('(?:^|\\n)[ \\t]*' + escaped + '[ \\t]*:[ \\t]*([^\\n\\r]+)', 'i')
     const m = text.match(re)
     if (!m) return ''
-    return m[1].trim().replace(/\s+/g, ' ')
+    const v = m[1].trim()
+    // Defensive: if the value happens to look exactly like another USHA label
+    // (e.g. 'DOB:' or 'Business Name:'), treat it as empty rather than store
+    // the leaked label as the value.
+    if (/^[A-Za-z][A-Za-z ]*:$/.test(v)) return ''
+    return v.replace(/\s+/g, ' ')
   }
 }
 
