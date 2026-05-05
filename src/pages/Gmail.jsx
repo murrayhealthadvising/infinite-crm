@@ -23,13 +23,30 @@ function forwardAddressFor(email) {
 }
 
 // ─── USHA email parser (manual paste fallback) ───────────────────────────────
+// Strict regex: label MUST be at start-of-line and value is everything until
+// end-of-line. Stops the old bug where 'State: LA\nBusiness Name:' captured
+// 'LA Business Name:' as the state.
 function parseUSHAEmail(body) {
   const get = (label) => {
-    const re = new RegExp(`${label}[:\\s]+([^\\n\\r<]+)`, 'i')
+    const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const re = new RegExp('(?:^|\\n)\\s*' + escaped + '\\s*:\\s*([^\\n\\r]+)', 'i')
     const m = body.match(re)
-    return m ? m[1].trim().replace(/<[^>]+>/g, '') : ''
+    if (!m) return ''
+    return m[1].trim().replace(/<[^>]+>/g, '').replace(/\s+/g, ' ')
   }
-  const parseIncome = (s) => { if (!s) return null; const n = parseInt(String(s).replace(/[$,]/g, '')); return isNaN(n) ? null : n }
+  // Smoker only counts if the value clearly says yes / true / 1 — anything
+  // else (empty, 'no', 'false', random label leakage) means non-smoker.
+  const smokerRaw = (get('Smoker') || '').toLowerCase().trim()
+  const smoker = (smokerRaw === 'yes' || smokerRaw === 'true' || smokerRaw === '1' || smokerRaw === 'y') ? 'Yes' : ''
+  // Household: 'Family' / 'Couple' / 'Individual' / int — keep whatever's parseable
+  const householdRaw = get('Household')
+  let household = null
+  if (householdRaw) {
+    const n = parseInt(householdRaw)
+    if (isFinite(n) && n > 0) household = n
+    else if (householdRaw.toLowerCase() === 'individual') household = 1
+    else if (householdRaw.toLowerCase() === 'couple') household = 2
+  }
   return {
     first_name: get('First Name') || 'Unknown',
     last_name: get('Last Name') || '',
@@ -41,10 +58,18 @@ function parseUSHAEmail(body) {
     address: get('Address') || '',
     dob: get('Date of Birth') || get('DOB') || '',
     gender: get('Gender') || '',
-    income: parseIncome(get('Income')),
-    household: parseInt(get('Household')) || null,
-    smoker: get('Smoker') || '',
+    age: get('Age') || '',
+    age_range: get('Age Range') || '',
+    // Keep income as a string so ranges like "$50,000 - $75,000" survive
+    // verbatim. Exact values like "$30,000" also stored as text.
+    income: get('Income') || '',
+    household,
+    smoker,
     comments: get('Comments') || '',
+    plan_choice: get('Plan Choice') || '',
+    monthly_budget: get('Monthly Budget') || '',
+    campaign: get('Name') || '',
+    external_id: get('Lead Id') || '',
     source: 'USHA Marketplace',
   }
 }
