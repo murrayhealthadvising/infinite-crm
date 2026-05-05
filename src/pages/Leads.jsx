@@ -269,8 +269,16 @@ function NotesField({ value, onSave, placeholder }) {
         onBlur={handleBlur}
         placeholder={placeholder}
         rows={3}
-        className="w-full bg-transparent border border-[#1A2130] rounded-lg px-3 py-2.5 text-sm placeholder-[#3A4A5A] focus:outline-none focus:border-[#2A3547] resize-none overflow-hidden transition-colors"
-        style={{ color: '#C0D0E0', minHeight: '64px' }}
+        className="w-full rounded-lg px-3 py-2.5 text-sm focus:outline-none resize-none overflow-hidden transition-colors"
+        style={{
+          color: '#E0E8F0',
+          minHeight: '72px',
+          background: '#0B0F14',
+          border: '1px solid #2F3A4A',
+          boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.45)',
+        }}
+        onFocus={(e) => { e.currentTarget.style.borderColor = '#00E5C3'; e.currentTarget.style.background = '#0E141B' }}
+        onBlurCapture={(e) => { e.currentTarget.style.borderColor = '#2F3A4A'; e.currentTarget.style.background = '#0B0F14' }}
       />
       {(saving || savedTick) && (
         <div className="absolute top-2 right-2 flex items-center gap-1 text-[10px] font-mono"
@@ -652,19 +660,38 @@ function parseCSV(text) {
   }
   return { headers: rawHeaders, rows }
 }
-// Convert a status label ("Interested") to a stage id ("interested")
+// Convert a Ringy / USHA status-ish label into a stage id we have in `tags`.
+// Resolution order:
+//   1. Direct match on a tags row's label (covers any custom stage user added,
+//      e.g. "Pitched", "Quoted", "Underwriting")
+//   2. STATUS_MAP synonyms (e.g. "appointment" -> "Apt")
+//   3. STATUSES default list match
 function statusLabelToStageId(label, dbTags) {
   if (!label) return null
   const lower = String(label).trim().toLowerCase()
+  // 1. direct match against a custom or default tag's label
+  if (Array.isArray(dbTags) && dbTags.length) {
+    const direct = dbTags.find(t => (t.label || '').toLowerCase() === lower)
+    if (direct) return direct.id
+  }
+  // 2-3. fall through to legacy synonyms / 8-stage defaults
   const mapped = STATUS_MAP[lower] || STATUSES.find(s => s.toLowerCase() === lower)
   if (!mapped) return null
-  // Match against actual tags in DB (preferred) so we always insert a valid FK
   if (Array.isArray(dbTags) && dbTags.length) {
     const hit = dbTags.find(t => (t.label || '').toLowerCase() === mapped.toLowerCase())
     if (hit) return hit.id
   }
-  // Fallback: kebab-case the label
   return mapped.toLowerCase().replace(/\s+/g, '-')
+}
+
+// Test whether a Ringy tag matches ANY stage label (custom or default)
+function tagMatchesStage(tagText, dbTags) {
+  if (!tagText) return false
+  const lower = String(tagText).trim().toLowerCase()
+  if (Array.isArray(dbTags) && dbTags.find(t => (t.label || '').toLowerCase() === lower)) return true
+  if (STATUS_MAP[lower]) return true
+  if (STATUSES.find(s => s.toLowerCase() === lower)) return true
+  return false
 }
 
 function mapRow(row, dbTags) {
@@ -694,25 +721,18 @@ function mapRow(row, dbTags) {
 
   // Determine the stage id, in priority order:
   //   1. explicit status/stage/disposition column from Ringy
-  //   2. first tag that matches a known stage label
+  //   2. first tag that matches a known stage label (including custom stages)
   let stageLabel = raw._stagelike || null
   delete raw._stagelike
   if (!stageLabel) {
     for (const t of tagList) {
-      const lower = t.toLowerCase()
-      if (STATUS_MAP[lower] || STATUSES.find(s => s.toLowerCase() === lower)) {
-        stageLabel = t
-        break
-      }
+      if (tagMatchesStage(t, dbTags)) { stageLabel = t; break }
     }
   }
   raw.stage = statusLabelToStageId(stageLabel, dbTags) || 'not-started'
 
-  // Freeform tags = remaining ones that didn't match a stage
-  raw.tags = tagList.filter(t => {
-    const lower = t.toLowerCase()
-    return !(STATUS_MAP[lower] || STATUSES.find(s => s.toLowerCase() === lower))
-  })
+  // Freeform tags = ones that didn't match any stage (default OR custom)
+  raw.tags = tagList.filter(t => !tagMatchesStage(t, dbTags))
 
   // Coerce numeric fields
   if (raw.income) raw.income = parseInt(String(raw.income).replace(/[^0-9.\-]/g, '')) || null

@@ -220,13 +220,13 @@ export default {
 
   async email(message, env) {
     const recipient = message.to || ''
-    await logErr(env, 'debug-email-received', recipient, 'parse start', { from: message.from, subject: message.headers?.get?.('subject') || '' })
+    console.log('[email] received', { recipient, from: message.from, subject: message.headers?.get?.('subject') || '' })
     try {
       const raw = await streamToString(message.raw)
       const body = extractBody(raw)
       const userId = AGENT_ROUTING[recipient]
       if (!userId) {
-        await logErr(env, 'no-route', recipient, 'no AGENT_ROUTING entry')
+        console.error('[email] no AGENT_ROUTING entry for', recipient)
         return
       }
       const lead = parseLead(body)
@@ -237,14 +237,28 @@ export default {
       lead.created_at = new Date().toISOString()
       lead.last_activity = lead.created_at
 
+      console.log('[email] parsed lead fields:', Object.keys(lead).join(','))
       const result = await insertLead(env, lead)
       if (!result.ok) {
-        await logErr(env, 'insert-failed', recipient, result.body.slice(0, 500), { lead, status: result.status })
+        console.error('[email] INSERT FAILED', { status: result.status, body: result.body.slice(0, 800), lead: JSON.stringify(lead).slice(0, 1500) })
+        // Last-resort: write a stub row so the failure is visible in the CRM
+        const stubLead = {
+          user_id: userId,
+          agent_id: userId,
+          source: 'WORKER_DEBUG',
+          stage: DEFAULT_STAGE,
+          first_name: lead.first_name || 'Worker',
+          last_name: lead.last_name || 'DebugError',
+          notes: `Insert failed (status ${result.status}): ${result.body.slice(0, 800)}\n\nOriginal lead JSON:\n${JSON.stringify(lead, null, 2).slice(0, 1500)}`,
+          created_at: new Date().toISOString(),
+          last_activity: new Date().toISOString(),
+        }
+        await insertLead(env, stubLead)
       } else {
-        await logErr(env, 'inserted', recipient, 'ok', { fields: Object.keys(lead) })
+        console.log('[email] INSERTED ok', { fields: Object.keys(lead) })
       }
     } catch (e) {
-      await logErr(env, 'exception', recipient, String(e).slice(0, 500))
+      console.error('[email] EXCEPTION', String(e), e?.stack)
     }
   },
 }
