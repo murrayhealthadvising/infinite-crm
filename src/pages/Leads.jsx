@@ -741,8 +741,8 @@ function mapRow(row, dbTags) {
   // Freeform tags = ones that didn't match any stage (default OR custom)
   raw.tags = tagList.filter(t => !tagMatchesStage(t, dbTags))
 
-  // Coerce numeric fields
-  if (raw.income) raw.income = parseInt(String(raw.income).replace(/[^0-9.\-]/g, '')) || null
+  // Coerce numeric fields. income is TEXT in the schema so range strings
+  // ('$50,000 - $75,000') survive verbatim — no parseInt needed.
   if (raw.household) raw.household = parseInt(raw.household) || null
   if (raw.premium) raw.premium = parseInt(String(raw.premium).replace(/[^0-9.\-]/g, '')) || null
   if (raw.price) raw.price = parseFloat(String(raw.price).replace(/[^0-9.\-]/g, '')) || null

@@ -147,7 +147,7 @@ function parseLead(body) {
     dob:           get('Date of Birth') || get('DOB'),
     age:           get('Age'),
     age_range:     get('Age Range'),
-    income:        parseMoneyToInt(get('Income')),  // INT column — handles ranges
+    income:        get('Income'),  // TEXT column — preserve range strings verbatim
     household:     parseHousehold(get('Household')),
     smoker:        get('Smoker'),
     spouse_age:    get('Spouse Age'),
