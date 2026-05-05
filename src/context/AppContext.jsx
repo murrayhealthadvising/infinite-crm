@@ -245,16 +245,38 @@ export function AppProvider({ children }) {
     }
   }
 
+  // Whitelist of columns the leads table actually has. Prevents PGRST204
+  // ("column not found in schema cache") when callers hand us extra fields.
+  const LEADS_COLUMNS = new Set([
+    'first_name','last_name','phone','email','city','state','zip','address','street_address',
+    'source','notes','comments','dob','gender','age','age_range','smoker','spouse_age','num_children',
+    'income','household','external_id','agent','agent_id','campaign','price',
+    'premium','carrier','current_carrier','effective_date','plan_choice','monthly_budget','best_contact_time',
+    'tags','stage','is_sold','user_id','created_at','last_activity',
+  ])
+  const sanitizeForInsert = (lead) => {
+    const out = {}
+    for (const [k, v] of Object.entries(lead)) {
+      if (LEADS_COLUMNS.has(k) && v !== undefined && v !== '') out[k] = v
+    }
+    return out
+  }
+  // status -> stage id resolver (only stage exists in schema)
+  const resolveStage = (lead) => {
+    if (lead.stage) return lead.stage
+    if (lead.status) return statusToStageId[lead.status] || 'not-started'
+    return 'not-started'
+  }
+
   const addLead = async (lead) => {
     try {
-      const newLead = { ...lead }
-      delete newLead.id
-      newLead.user_id = session?.user?.id
-      newLead.status = newLead.status || stageIdToStatus[newLead.stage] || 'Not Started'
-      if (!newLead.stage) newLead.stage = statusToStageId[newLead.status] || 'not-started'
-      newLead.created_at = newLead.created_at || new Date().toISOString()
-      newLead.last_activity = newLead.last_activity || new Date().toISOString()
-      Object.keys(newLead).forEach(k => { if (newLead[k] === undefined) delete newLead[k] })
+      const merged = { ...lead }
+      delete merged.id
+      merged.user_id = session?.user?.id
+      merged.stage = resolveStage(merged)
+      merged.created_at = merged.created_at || new Date().toISOString()
+      merged.last_activity = merged.last_activity || new Date().toISOString()
+      const newLead = sanitizeForInsert(merged)
       const { data, error } = await supabase.from('leads').insert([newLead]).select().single()
       if (error) { console.error('addLead error:', error); return newLead }
       if (data) { setLeads(prev => [data, ...prev]); return data }
@@ -266,14 +288,12 @@ export function AppProvider({ children }) {
     if (!Array.isArray(leadsToAdd) || leadsToAdd.length === 0) return 0
     const now = new Date().toISOString()
     const cleaned = leadsToAdd.map(lead => {
-      const l = { ...lead }
-      l.user_id = session?.user?.id
-      l.status = l.status || stageIdToStatus[l.stage] || 'Not Started'
-      if (!l.stage) l.stage = statusToStageId[l.status] || 'not-started'
-      l.created_at = l.created_at || now
-      l.last_activity = l.last_activity || now
-      Object.keys(l).forEach(k => { if (l[k] === undefined) delete l[k] })
-      return l
+      const merged = { ...lead }
+      merged.user_id = session?.user?.id
+      merged.stage = resolveStage(merged)
+      merged.created_at = merged.created_at || now
+      merged.last_activity = merged.last_activity || now
+      return sanitizeForInsert(merged)
     })
     let inserted = 0
     const BATCH = 50
