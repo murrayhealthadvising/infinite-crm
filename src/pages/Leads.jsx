@@ -579,6 +579,13 @@ const RINGY_MAP = {
 
   'contact id': 'external_id', 'id': 'external_id', 'lead id': 'external_id', 'ringy id': 'external_id',
 
+  // Ringy / USHA original received-on date — maps to created_at so imported
+  // leads sort by their real arrival time, not when you clicked Import.
+  'received on': '_received', 'received': '_received',
+  'date added': '_received', 'created': '_received', 'date created': '_received',
+  'created at': '_received', 'created_at': '_received',
+  'lead date': '_received', 'date': '_received',
+
   'dob': 'dob', 'date of birth': 'dob', 'birthday': 'dob', 'birth date': 'dob', 'birthdate': 'dob',
   'gender': 'gender', 'sex': 'gender',
   'age': 'age', 'age range': 'age_range',
@@ -743,6 +750,18 @@ function mapRow(row, dbTags) {
   if (raw.num_children) raw.num_children = parseInt(raw.num_children) || null
   if (raw.is_sold !== undefined) raw.is_sold = String(raw.is_sold).toLowerCase() === 'true' || String(raw.is_sold).toLowerCase() === 'yes' || raw.is_sold === '1' || raw.is_sold === 1
 
+  // Parse the original received-on date (Ringy "Date Added", "Received On", etc.)
+  // Maps to created_at + last_activity so imported leads sort by their real
+  // arrival timestamp instead of all clumping at the import moment.
+  if (raw._received) {
+    const d = new Date(raw._received)
+    if (!isNaN(d.getTime())) {
+      raw.created_at = d.toISOString()
+      raw.last_activity = d.toISOString()
+    }
+  }
+  delete raw._received
+
   // Drop columns that don't exist in our schema (silently)
   const out = {}
   for (const [k, v] of Object.entries(raw)) {
@@ -868,8 +887,10 @@ export default function Leads() {
         ...r,
         user_id: user.id,
         source: r.source || 'Ringy Import',
-        created_at: now,
-        last_activity: now,
+        // Use the row's parsed received-on date if mapRow extracted one
+        // ("Received On" / "Date Added" / etc.), otherwise stamp now.
+        created_at: r.created_at || now,
+        last_activity: r.last_activity || r.created_at || now,
       })
     }
 
