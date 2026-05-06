@@ -129,22 +129,18 @@ export function AppProvider({ children }) {
     setLoading(false)
   }
 
-  // Tags (pipeline stages) — per-account thanks to RLS on the tags table.
-  // If a freshly-signed-up agent has none yet, seed the 8 defaults so their
-  // pipeline isn't empty on first load. Runners are read-only against their
-  // lead-agent's stages, so no seeding for them.
+  // Tags (pipeline stages):
+  //   - 8 defaults are SHARED across the app (owned by sentinel UUID, all-zeros)
+  //   - Custom stages each agent adds are PRIVATE to that agent
+  // RLS lets every authenticated user SELECT the shared defaults + their own
+  // (or their lead-agent's, for runners), so no per-user bootstrap is needed.
   useEffect(() => {
     if (!session) return
     const loadTags = async () => {
       try {
         const { data } = await supabase.from('tags').select('*').order('sort_order')
-        if (data && data.length > 0) { setTags(data); return }
-        // First-login bootstrap: only for actual agents (not runners)
-        if (profile?.role === 'runner') { setTags([]); return }
-        const seed = DEFAULT_TAGS.map((t, i) => ({ ...t, user_id: session.user.id, sort_order: i }))
-        const { data: inserted, error } = await supabase.from('tags').insert(seed).select()
-        if (!error && inserted) setTags(inserted)
-        else setTags(DEFAULT_TAGS)
+        if (data && data.length > 0) setTags(data)
+        else setTags(DEFAULT_TAGS) // last-resort fallback if RLS hides everything
       } catch (e) { /* keep DEFAULT_TAGS */ }
     }
     loadTags()

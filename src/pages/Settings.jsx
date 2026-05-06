@@ -119,17 +119,24 @@ function TagRow({ tag, count, onUpdate, onDelete, isDefault }) {
       </div>
       {!editing && (
         <div className="flex items-center gap-1 flex-shrink-0">
-          <button onClick={() => setEditing(true)}
-            className="text-xs px-2 py-1 rounded border border-[#1A2130] text-[#5A6A7A] hover:text-white hover:border-[#2A3547]">
-            Edit
-          </button>
-          {!isDefault && (
-            <button onClick={() => onDelete(tag, count)}
-              disabled={count > 0}
-              className="p-1.5 rounded text-[#3A4A5A] hover:text-[#EF4444] hover:bg-[#EF444415] disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
-              title={count > 0 ? `Reassign the ${count} lead${count === 1 ? '' : 's'} first` : 'Delete stage'}>
-              <Trash2 size={14} />
-            </button>
+          {isDefault ? (
+            <span className="text-[10px] text-[#3A4A5A] font-mono uppercase tracking-wider"
+              title="Default stages are shared across all agents and cannot be edited.">
+              shared · read-only
+            </span>
+          ) : (
+            <>
+              <button onClick={() => setEditing(true)}
+                className="text-xs px-2 py-1 rounded border border-[#1A2130] text-[#5A6A7A] hover:text-white hover:border-[#2A3547]">
+                Edit
+              </button>
+              <button onClick={() => onDelete(tag, count)}
+                disabled={count > 0}
+                className="p-1.5 rounded text-[#3A4A5A] hover:text-[#EF4444] hover:bg-[#EF444415] disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                title={count > 0 ? `Reassign the ${count} lead${count === 1 ? '' : 's'} first` : 'Delete stage'}>
+                <Trash2 size={14} />
+              </button>
+            </>
           )}
         </div>
       )}
@@ -543,7 +550,7 @@ export default function Settings() {
         </div>
 
         <p className="text-[10px] text-[#3A4A5A] mt-4">
-          Default stages can be re-labeled and re-colored but not deleted (the system uses their IDs to map Ringy/USHA tags). Custom stages can be deleted only when no leads are using them.
+          The 8 default stages are shared across all agents and read-only. Custom stages you add are private to your account — your teammates won't see them, and you won't see theirs. Custom stages can be deleted only when no leads are using them.
         </p>
       </div>
       )}
