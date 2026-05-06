@@ -293,7 +293,7 @@ export function AppProvider({ children }) {
   // ("column not found in schema cache") when callers hand us extra fields.
   const LEADS_COLUMNS = new Set([
     'first_name','last_name','phone','email','city','state','zip','address','street_address',
-    'source','notes','comments','dob','gender','age','age_range','smoker','spouse_age','num_children',
+    'source','notes','notes_b','comments','dob','gender','age','age_range','smoker','spouse_age','num_children',
     'income','household','external_id','agent','agent_id','campaign','price',
     'premium','carrier','current_carrier','effective_date','plan_choice','monthly_budget','best_contact_time',
     'tags','stage','is_sold','user_id','created_at','last_activity',
@@ -390,6 +390,15 @@ export function AppProvider({ children }) {
     agency: 'Murray Health Advising',
   } : null
 
+  // Split-notes preference — boolean on profiles. Persisted per-user.
+  const splitNotes = !!profile?.split_notes
+  const setSplitNotes = async (next) => {
+    const uid = session?.user?.id
+    if (!uid) return
+    setProfile(p => p ? { ...p, split_notes: !!next } : p)
+    try { await supabase.from('profiles').update({ split_notes: !!next }).eq('user_id', uid) } catch {}
+  }
+
   // Permission helpers for the 'runner' role — they work UNDER a specific
   // lead agent and see/edit that agent's leads but can't delete or admin.
   const isRunner = profile?.role === 'runner'
@@ -436,6 +445,8 @@ export function AppProvider({ children }) {
       pendingSoldLeadId, setPendingSoldLeadId,
       // role + permission helpers
       isAdmin, isRunner, isAgent, can, effectiveAgentId,
+      // user preferences
+      splitNotes, setSplitNotes,
     }}>
       {children}
     </AppContext.Provider>

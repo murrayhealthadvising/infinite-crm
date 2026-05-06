@@ -467,8 +467,8 @@ function NotesField({ value, onSave, placeholder }) {
 // ───────────────────────────────────────────────────────────────────────────
 // Lead card
 // ───────────────────────────────────────────────────────────────────────────
-function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNavigate, onDelete, onPriceChange, onCampaignChange, onRunnerChange, onTagsChange, onToggleStar, runnerSuggestions, tagSuggestions, canDelete = true }) {
-  const { tags, getTag } = useApp()
+function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNoteBChange, onNavigate, onDelete, onPriceChange, onCampaignChange, onRunnerChange, onTagsChange, onToggleStar, runnerSuggestions, tagSuggestions, canDelete = true }) {
+  const { tags, getTag, splitNotes } = useApp()
   const [copied, setCopied] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const starred = Array.isArray(lead.tags) && lead.tags.includes('starred')
@@ -620,13 +620,29 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNav
         />
       </div>
 
-      {/* Notes — primary element on every card */}
+      {/* Notes — primary element on every card. Split mode shows a blank
+          companion textarea so you can keep, e.g. "history" vs "next steps". */}
       <div className="px-4 pb-3 pl-12">
-        <NotesField
-          value={lead.notes || ''}
-          onSave={(v) => onNoteChange(lead.id, v)}
-          placeholder="Add notes…"
-        />
+        {splitNotes ? (
+          <div className="grid grid-cols-2 gap-2">
+            <NotesField
+              value={lead.notes || ''}
+              onSave={(v) => onNoteChange(lead.id, v)}
+              placeholder="Add notes…"
+            />
+            <NotesField
+              value={lead.notes_b || ''}
+              onSave={(v) => onNoteBChange(lead.id, v)}
+              placeholder="Notes (B)…"
+            />
+          </div>
+        ) : (
+          <NotesField
+            value={lead.notes || ''}
+            onSave={(v) => onNoteChange(lead.id, v)}
+            placeholder="Add notes…"
+          />
+        )}
       </div>
 
       {expanded && (
@@ -782,7 +798,7 @@ const RINGY_MAP = {
 // Schema whitelist — anything outside this set is silently dropped before insert
 const LEADS_COLUMNS = new Set([
   'first_name','last_name','phone','email','city','state','zip','address','street_address',
-  'source','notes','comments','dob','gender','age','age_range','smoker','spouse_age','num_children',
+  'source','notes','notes_b','comments','dob','gender','age','age_range','smoker','spouse_age','num_children',
   'income','household','external_id','agent','agent_id','campaign','price',
   'premium','carrier','current_carrier','effective_date','plan_choice','monthly_budget','best_contact_time',
   'tags','stage','is_sold','user_id','created_at','last_activity',
@@ -1200,6 +1216,10 @@ export default function Leads() {
     if (typeof updateLead === 'function') await updateLead(id, { notes })
   }
 
+  const handleNoteBChange = async (id, notes_b) => {
+    if (typeof updateLead === 'function') await updateLead(id, { notes_b })
+  }
+
   const handlePriceChange = async (id, price) => {
     if (typeof updateLead === 'function') await updateLead(id, { price })
   }
@@ -1418,6 +1438,7 @@ export default function Leads() {
               onSelect={toggleSelect}
               onStageChange={(id, s) => typeof updateLeadStage === 'function' && updateLeadStage(id, s)}
               onNoteChange={handleNoteChange}
+              onNoteBChange={handleNoteBChange}
               onPriceChange={handlePriceChange}
               onCampaignChange={handleCampaignChange}
               onRunnerChange={handleRunnerChange}

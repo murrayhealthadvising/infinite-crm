@@ -194,7 +194,7 @@ function AIAssistant({ lead }) {
 export default function LeadDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const { leads, tags, updateLead, updateLeadStage, addActivity, getLeadActivities } = useApp()
+  const { leads, tags, updateLead, updateLeadStage, addActivity, getLeadActivities, splitNotes } = useApp()
   const safeLeads = Array.isArray(leads) ? leads : []
   const lead = safeLeads.find(l => l.id === id)
   const [logType, setLogType] = useState('note')
@@ -300,11 +300,25 @@ export default function LeadDetail() {
         {/* Scrollable content */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
 
-          {/* Notes — big, prominent, top of detail page */}
-          <NotesEditor
-            value={lead.notes}
-            onSave={(v) => typeof updateLead === 'function' ? updateLead(id, { notes: v }) : Promise.resolve()}
-          />
+          {/* Notes — big, prominent, top of detail page. Split mode shows
+              two editors side-by-side; second one starts blank for every lead. */}
+          {splitNotes ? (
+            <div className="grid grid-cols-2 gap-3">
+              <NotesEditor
+                value={lead.notes}
+                onSave={(v) => typeof updateLead === 'function' ? updateLead(id, { notes: v }) : Promise.resolve()}
+              />
+              <NotesEditor
+                value={lead.notes_b}
+                onSave={(v) => typeof updateLead === 'function' ? updateLead(id, { notes_b: v }) : Promise.resolve()}
+              />
+            </div>
+          ) : (
+            <NotesEditor
+              value={lead.notes}
+              onSave={(v) => typeof updateLead === 'function' ? updateLead(id, { notes: v }) : Promise.resolve()}
+            />
+          )}
 
           {/* Editable contact info */}
           <div>

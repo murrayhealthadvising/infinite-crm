@@ -528,7 +528,7 @@ function SideTagsPanel() {
 }
 
 export default function Settings() {
-  const { user, profile, leads, tags, addTag, updateTag, deleteTag, reorderTags, isRunner, isAdmin } = useApp()
+  const { user, profile, leads, tags, addTag, updateTag, deleteTag, reorderTags, isRunner, isAdmin, splitNotes, setSplitNotes } = useApp()
   const [dragId, setDragId] = useState(null)
   const [dragOverId, setDragOverId] = useState(null)
 
@@ -653,6 +653,30 @@ export default function Settings() {
 
       {/* Runner Access — hidden for runners themselves (they only manage their own profile + password) */}
       {!isRunner && <RunnerAccessPanel />}
+
+      {/* Preferences — per-user UI toggles */}
+      <div className="rounded-xl border border-[#1A2130] p-5" style={{ background: '#0D1117' }}>
+        <h2 className="text-xs font-mono uppercase tracking-wider text-[#5A6A7A] mb-4">Preferences</h2>
+        <label className="flex items-start gap-3 cursor-pointer select-none">
+          <button
+            type="button"
+            onClick={() => setSplitNotes(!splitNotes)}
+            role="switch"
+            aria-checked={splitNotes}
+            className="relative w-10 h-6 rounded-full flex-shrink-0 mt-0.5 transition-colors"
+            style={{ background: splitNotes ? '#00E5C3' : '#1A2130', border: `1px solid ${splitNotes ? '#00E5C3' : '#2A3547'}` }}>
+            <span
+              className="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all"
+              style={{ left: splitNotes ? '20px' : '2px' }} />
+          </button>
+          <div className="flex-1">
+            <p className="text-sm text-white">Split notes layout</p>
+            <p className="text-xs text-[#5A6A7A] mt-0.5">
+              Show two side-by-side notes textareas on every lead card and lead detail page. The second one starts blank for every lead. Useful if you want a separate place for, say, "history" vs "next steps".
+            </p>
+          </div>
+        </label>
+      </div>
 
       {/* Side Tags — chip tags on lead cards, central rename/delete editor */}
       <SideTagsPanel />
