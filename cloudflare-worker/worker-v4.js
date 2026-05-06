@@ -214,6 +214,30 @@ async function insertLead(env, lead) {
   return { ok: resp.ok, status: resp.status, body: text }
 }
 
+// Bump last_activity on an existing lead (used when a duplicate USHA email
+// arrives — the lead is already in the CRM, but we want to surface that the
+// marketplace re-sent it so the agent sees it move to the top of "recent").
+async function touchLeadByPhone(env, userId, phone) {
+  const url = `${env.SUPABASE_URL}/rest/v1/leads?user_id=eq.${encodeURIComponent(userId)}&phone=eq.${encodeURIComponent(phone)}`
+  const resp = await fetch(url, {
+    method: 'PATCH',
+    headers: {
+      apikey: env.SUPABASE_SERVICE_KEY,
+      authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}`,
+      'content-type': 'application/json',
+      prefer: 'return=minimal',
+    },
+    body: JSON.stringify({ last_activity: new Date().toISOString() }),
+  })
+  return { ok: resp.ok, status: resp.status }
+}
+
+// Detect Postgres unique-violation in PostgREST's JSON error body
+function isDuplicate(result) {
+  if (result.status !== 409) return false
+  try { return JSON.parse(result.body)?.code === '23505' } catch { return false }
+}
+
 // ─── Worker entry points ───────────────────────────────────────────────────
 export default {
   async fetch(req, env) {
@@ -261,9 +285,18 @@ export default {
 
       console.log('[email] parsed lead fields:', Object.keys(lead).join(','))
       const result = await insertLead(env, lead)
-      if (!result.ok) {
+      if (result.ok) {
+        console.log('[email] INSERTED ok', { fields: Object.keys(lead) })
+      } else if (isDuplicate(result) && lead.phone) {
+        // USHA forwarded the same lead twice (e.g. via Gmail filter AND directly
+        // to murray-leads@). Bump last_activity on the existing row instead of
+        // failing or writing a debug stub.
+        console.log('[email] DUPLICATE — bumping last_activity', { phone: lead.phone })
+        const t = await touchLeadByPhone(env, userId, lead.phone)
+        console.log('[email] touch result', t)
+      } else {
         console.error('[email] INSERT FAILED', { status: result.status, body: result.body.slice(0, 800), lead: JSON.stringify(lead).slice(0, 1500) })
-        // Last-resort: write a stub row so the failure is visible in the CRM
+        // Last-resort: write a stub row so genuine failures are visible in the CRM
         const stubLead = {
           user_id: userId,
           agent_id: userId,
@@ -276,8 +309,6 @@ export default {
           last_activity: new Date().toISOString(),
         }
         await insertLead(env, stubLead)
-      } else {
-        console.log('[email] INSERTED ok', { fields: Object.keys(lead) })
       }
     } catch (e) {
       console.error('[email] EXCEPTION', String(e), e?.stack)
