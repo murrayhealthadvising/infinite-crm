@@ -198,6 +198,77 @@ function TextPill({ value, color, onSave, placeholder = 'campaign', maxLen = 24 
   )
 }
 
+// Inline-editable runner pill — who actually worked / dialed the lead.
+// Free-text + a dropdown of recently used runner names for one-click selection.
+function RunnerPill({ value, color, onSave, suggestions = [] }) {
+  const [editing, setEditing] = useState(false)
+  const [text, setText] = useState(value || '')
+  const [open, setOpen] = useState(false)
+  const wrapRef = useRef(null)
+  useEffect(() => { setText(value || '') }, [value])
+
+  // Close suggestions on outside click
+  useEffect(() => {
+    if (!editing) return
+    const handler = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) commit() }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing, text])
+
+  const commit = async () => {
+    const trimmed = (text || '').trim()
+    if (trimmed !== (value || '')) { try { await onSave(trimmed || null) } catch {} }
+    setEditing(false); setOpen(false)
+  }
+  const cancel = () => { setText(value || ''); setEditing(false); setOpen(false) }
+  const pickSuggestion = async (s) => { setText(s); try { await onSave(s) } catch {}; setEditing(false); setOpen(false) }
+
+  if (editing) {
+    const filtered = suggestions
+      .filter(s => s && s.toLowerCase() !== (text || '').toLowerCase())
+      .filter(s => !text || s.toLowerCase().includes(text.toLowerCase()))
+      .slice(0, 6)
+    return (
+      <div ref={wrapRef} className="relative" onClick={e => e.stopPropagation()}>
+        <input autoFocus value={text}
+          onChange={e => { setText(e.target.value.slice(0, 24)); setOpen(true) }}
+          onFocus={() => setOpen(true)}
+          onKeyDown={e => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') cancel() }}
+          placeholder="runner"
+          className="text-[10px] px-1.5 py-0.5 rounded font-mono bg-[#080B0F] border outline-none w-24"
+          style={{ color, borderColor: color + '60' }} />
+        {open && filtered.length > 0 && (
+          <div className="absolute top-full left-0 mt-1 z-50 rounded-lg overflow-hidden border"
+            style={{ background: '#0A0E14', borderColor: '#1A2130', boxShadow: '0 8px 20px rgba(0,0,0,0.5)', minWidth: 120 }}>
+            {filtered.map(s => (
+              <button key={s} onMouseDown={e => { e.preventDefault(); pickSuggestion(s) }}
+                className="block w-full text-left px-2.5 py-1.5 text-[11px] font-mono hover:bg-[#1A2130]"
+                style={{ color }}>
+                {s}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    )
+  }
+  const display = value && String(value).trim() ? value : '+ runner'
+  const isEmpty = !value || !String(value).trim()
+  return (
+    <button onClick={(e) => { e.stopPropagation(); setEditing(true); setOpen(true) }}
+      className="text-[10px] px-1.5 py-0.5 rounded font-mono cursor-pointer hover:opacity-80 max-w-[140px] truncate inline-flex items-center gap-1"
+      title={isEmpty ? 'Set runner' : `Runner: ${value} (click to edit)`}
+      style={{
+        background: isEmpty ? 'transparent' : '#A78BFA15',
+        color: isEmpty ? '#5A6A7A' : '#A78BFA',
+        border: isEmpty ? '1px dashed #2A3547' : '1px solid #A78BFA40',
+      }}>
+      <Users size={9} />{display}
+    </button>
+  )
+}
+
 // Inline-editable price pill — click to type a $ amount, blur or Enter to save
 function PricePill({ value, color, onSave }) {
   const [editing, setEditing] = useState(false)
@@ -294,7 +365,7 @@ function NotesField({ value, onSave, placeholder }) {
 // ───────────────────────────────────────────────────────────────────────────
 // Lead card
 // ───────────────────────────────────────────────────────────────────────────
-function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNavigate, onDelete, onPriceChange, onCampaignChange, onToggleStar }) {
+function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNavigate, onDelete, onPriceChange, onCampaignChange, onRunnerChange, onToggleStar, runnerSuggestions }) {
   const { tags, getTag } = useApp()
   const [copied, setCopied] = useState(false)
   const [expanded, setExpanded] = useState(false)
@@ -348,6 +419,7 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNav
             <span className="text-xs text-[#5A6A7A]">{[lead.state, lead.zip].filter(Boolean).join(' ')}</span>
             <TextPill value={lead.campaign || lead.source} color={safeColor} onSave={(v) => onCampaignChange(lead.id, v)} placeholder="campaign" />
             <PricePill value={lead.price} color={safeColor} onSave={(v) => onPriceChange(lead.id, v)} />
+            <RunnerPill value={lead.runner} color={safeColor} onSave={(v) => onRunnerChange(lead.id, v)} suggestions={runnerSuggestions} />
             {lead.comments && (
               <span className="text-[10px] px-1.5 py-0.5 rounded font-mono max-w-[180px] truncate"
                 title={lead.comments}
@@ -614,6 +686,7 @@ const LEADS_COLUMNS = new Set([
   'income','household','external_id','agent','agent_id','campaign','price',
   'premium','carrier','current_carrier','effective_date','plan_choice','monthly_budget','best_contact_time',
   'tags','stage','is_sold','user_id','created_at','last_activity',
+  'runner',  // free-text attribution: who actually worked the lead
 ])
 const STATUS_MAP = {
   'new': 'Not Started', 'fresh': 'Not Started', 'new lead': 'Not Started',
@@ -956,6 +1029,15 @@ export default function Leads() {
     if (typeof updateLead === 'function') await updateLead(id, { campaign })
   }
 
+  const handleRunnerChange = async (id, runner) => {
+    if (typeof updateLead === 'function') await updateLead(id, { runner })
+  }
+
+  // Distinct runner names already used across the user's leads — autocomplete fodder
+  const runnerSuggestions = Array.from(new Set(
+    safeLeads.map(l => (l.runner || '').trim()).filter(Boolean)
+  )).sort((a, b) => a.localeCompare(b))
+
   const handleToggleStar = async (lead) => {
     if (typeof updateLead !== 'function') return
     const tags = Array.isArray(lead.tags) ? [...lead.tags] : []
@@ -1136,6 +1218,8 @@ export default function Leads() {
               onNoteChange={handleNoteChange}
               onPriceChange={handlePriceChange}
               onCampaignChange={handleCampaignChange}
+              onRunnerChange={handleRunnerChange}
+              runnerSuggestions={runnerSuggestions}
               onToggleStar={handleToggleStar}
               onNavigate={id => navigate(`/leads/${id}`)}
               onDelete={handleDeleteOne} />

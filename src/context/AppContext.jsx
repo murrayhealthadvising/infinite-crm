@@ -81,17 +81,21 @@ export function AppProvider({ children }) {
     }
   }
 
-  // Load leads + realtime subscription so worker-inserted leads appear live
+  // Load leads + realtime subscription so worker-inserted leads appear live.
+  // Re-run when profile changes too, since runners filter by their lead_agent_id.
   useEffect(() => {
     if (!session?.user) { setLeads([]); setLoading(false); return }
     refreshLeads()
+    const targetId = (profile?.role === 'runner' && profile?.lead_agent_id)
+      ? profile.lead_agent_id
+      : session.user.id
     let channel
     try {
       channel = supabase
-        .channel('leads-changes-' + session.user.id)
+        .channel('leads-changes-' + targetId)
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'leads' }, (payload) => {
           const row = payload.new; if (!row) return
-          if (row.user_id && row.user_id !== session.user.id) return
+          if (row.user_id && row.user_id !== targetId) return
           setLeads(prev => prev.find(l => l.id === row.id) ? prev : [row, ...prev])
         })
         .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'leads' }, (payload) => {
@@ -105,15 +109,19 @@ export function AppProvider({ children }) {
         .subscribe()
     } catch (e) { console.error('realtime subscribe failed:', e) }
     return () => { try { if (channel) supabase.removeChannel(channel) } catch {} }
-  }, [session?.user?.id])
+  }, [session?.user?.id, profile?.role, profile?.lead_agent_id])
 
   const refreshLeads = async () => {
     if (!session?.user) { setLoading(false); return }
+    // Runners pull their lead-agent's leads; everyone else pulls their own.
+    const targetId = (profile?.role === 'runner' && profile?.lead_agent_id)
+      ? profile.lead_agent_id
+      : session.user.id
     setLoading(true)
     try {
       const { data, error } = await supabase
         .from('leads').select('*')
-        .eq('user_id', session.user.id)
+        .eq('user_id', targetId)
         .order('created_at', { ascending: false })
       if (error) console.error('refreshLeads error:', error)
       if (Array.isArray(data)) setLeads(data)
@@ -181,6 +189,7 @@ export function AppProvider({ children }) {
 
   const deleteLead = async (id) => {
     if (!id) return false
+    if (profile?.role === 'runner') { console.warn('runners cannot delete leads'); return false }
     try {
       const { error } = await supabase.from('leads').delete().eq('id', id)
       if (error) { console.error('deleteLead error:', error); return false }
@@ -253,6 +262,7 @@ export function AppProvider({ children }) {
     'income','household','external_id','agent','agent_id','campaign','price',
     'premium','carrier','current_carrier','effective_date','plan_choice','monthly_budget','best_contact_time',
     'tags','stage','is_sold','user_id','created_at','last_activity',
+    'runner',  // free-text attribution: who actually worked the lead
   ])
   const sanitizeForInsert = (lead) => {
     const out = {}
@@ -345,6 +355,25 @@ export function AppProvider({ children }) {
     agency: 'Murray Health Advising',
   } : null
 
+  // Permission helpers for the 'runner' role — they work UNDER a specific
+  // lead agent and see/edit that agent's leads but can't delete or admin.
+  const isRunner = profile?.role === 'runner'
+  const isAdmin = profile?.role === 'admin'
+  const isAgent = !isRunner && !!profile  // admin or agent
+  // The user_id whose leads we should be operating on. For runners this is
+  // their lead_agent_id; for everyone else it's their own id.
+  const effectiveAgentId = isRunner && profile?.lead_agent_id
+    ? profile.lead_agent_id
+    : session?.user?.id
+  const can = {
+    deleteLeads:      isAdmin || isAgent,
+    addLeads:         isAdmin || isAgent,
+    manageTags:       isAdmin,
+    accessAdmin:      isAdmin,
+    bulkActions:      isAdmin || isAgent,
+    editLeads:        true,  // runners can edit notes, stage, etc.
+  }
+
   // Stats supporting BOTH `stage` (legacy) and `status` (new) schemas
   const safeArr = Array.isArray(leads) ? leads : []
   const stats = {
@@ -370,6 +399,8 @@ export function AppProvider({ children }) {
       addTag, updateTag, deleteTag,
       // sold-prompt globals
       pendingSoldLeadId, setPendingSoldLeadId,
+      // role + permission helpers
+      isAdmin, isRunner, isAgent, can, effectiveAgentId,
     }}>
       {children}
     </AppContext.Provider>
