@@ -198,6 +198,101 @@ function TextPill({ value, color, onSave, placeholder = 'campaign', maxLen = 24 
   )
 }
 
+// Multi-select secondary tags on a lead — independent of the pipeline stage.
+// e.g. a "Long Term" lead can also be tagged "pitched" + "appointment" without
+// changing its main stage. Displayed as removable chips with a + adder.
+const SUGGESTED_TAGS = [
+  'pitched', 'appointment', 'callback', 'voicemail',
+  'texted', 'emailed', 'follow-up', 'quoted', 'objection', 'spouse',
+]
+function TagChips({ tags = [], onChange, suggestions = [] }) {
+  const [adding, setAdding] = useState(false)
+  const [text, setText] = useState('')
+  const wrapRef = useRef(null)
+
+  // Hide the "starred" tag from the chip row — it has special meaning (Dial Bucket).
+  const visible = (Array.isArray(tags) ? tags : []).filter(t => t && t !== 'starred')
+
+  useEffect(() => {
+    if (!adding) return
+    const handler = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) close() }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [adding])
+
+  const close = () => { setAdding(false); setText('') }
+
+  const addTag = async (raw) => {
+    const v = String(raw || '').trim().toLowerCase()
+    if (!v) return
+    const current = Array.isArray(tags) ? [...tags] : []
+    if (current.includes(v)) { close(); return }
+    current.push(v)
+    try { await onChange(current) } catch {}
+    close()
+  }
+
+  const removeTag = async (tag) => {
+    const next = (Array.isArray(tags) ? tags : []).filter(t => t !== tag)
+    try { await onChange(next) } catch {}
+  }
+
+  // Build the autocomplete pool: suggestions + defaults, minus already-used
+  const pool = Array.from(new Set([...SUGGESTED_TAGS, ...suggestions]))
+    .filter(s => s && !visible.includes(s) && s !== 'starred')
+    .filter(s => !text || s.toLowerCase().includes(text.toLowerCase()))
+    .slice(0, 8)
+
+  return (
+    <div className="flex flex-wrap items-center gap-1" onClick={e => e.stopPropagation()}>
+      {visible.map(t => (
+        <span key={t}
+          className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded font-mono"
+          style={{ background: '#1A2130', color: '#8899AA', border: '1px solid #2A3547' }}>
+          #{t}
+          <button onClick={() => removeTag(t)}
+            className="text-[#5A6A7A] hover:text-[#EF4444] transition-colors leading-none"
+            title="Remove tag">
+            <X size={9} />
+          </button>
+        </span>
+      ))}
+      {adding ? (
+        <div ref={wrapRef} className="relative">
+          <input autoFocus value={text}
+            onChange={e => setText(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') { e.preventDefault(); addTag(text) }
+              if (e.key === 'Escape') close()
+            }}
+            placeholder="add tag…"
+            className="text-[10px] px-1.5 py-0.5 rounded font-mono bg-[#080B0F] border outline-none w-28"
+            style={{ color: '#8899AA', borderColor: '#2A3547' }} />
+          {pool.length > 0 && (
+            <div className="absolute top-full left-0 mt-1 z-50 rounded-lg overflow-hidden border max-h-56 overflow-y-auto"
+              style={{ background: '#0A0E14', borderColor: '#1A2130', boxShadow: '0 8px 20px rgba(0,0,0,0.5)', minWidth: 140 }}>
+              {pool.map(s => (
+                <button key={s} onMouseDown={e => { e.preventDefault(); addTag(s) }}
+                  className="block w-full text-left px-2.5 py-1.5 text-[11px] font-mono text-[#8899AA] hover:bg-[#1A2130]">
+                  #{s}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : (
+        <button onClick={() => setAdding(true)}
+          className="text-[10px] px-1.5 py-0.5 rounded font-mono cursor-pointer hover:opacity-80"
+          title="Add tag"
+          style={{ background: 'transparent', color: '#5A6A7A', border: '1px dashed #2A3547' }}>
+          + tag
+        </button>
+      )}
+    </div>
+  )
+}
+
 // Inline-editable runner pill — who actually worked / dialed the lead.
 // Free-text + a dropdown of recently used runner names for one-click selection.
 function RunnerPill({ value, color, onSave, suggestions = [] }) {
@@ -365,7 +460,7 @@ function NotesField({ value, onSave, placeholder }) {
 // ───────────────────────────────────────────────────────────────────────────
 // Lead card
 // ───────────────────────────────────────────────────────────────────────────
-function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNavigate, onDelete, onPriceChange, onCampaignChange, onRunnerChange, onToggleStar, runnerSuggestions, canDelete = true }) {
+function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNavigate, onDelete, onPriceChange, onCampaignChange, onRunnerChange, onTagsChange, onToggleStar, runnerSuggestions, tagSuggestions, canDelete = true }) {
   const { tags, getTag } = useApp()
   const [copied, setCopied] = useState(false)
   const [expanded, setExpanded] = useState(false)
@@ -509,18 +604,14 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNav
         </div>
       </div>
 
-      {/* Tags row (e.g. from Ringy import) */}
-      {Array.isArray(lead.tags) && lead.tags.length > 0 && (
-        <div className="px-4 pb-2 pl-12 flex flex-wrap gap-1">
-          {lead.tags.map((t, i) => (
-            <span key={i}
-              className="text-[10px] px-1.5 py-0.5 rounded font-mono"
-              style={{ background: '#1A2130', color: '#8899AA', border: '1px solid #2A3547' }}>
-              #{t}
-            </span>
-          ))}
-        </div>
-      )}
+      {/* Secondary tags row — multi-select chips, independent of pipeline stage */}
+      <div className="px-4 pb-2 pl-12">
+        <TagChips
+          tags={lead.tags}
+          onChange={(next) => onTagsChange?.(lead.id, next)}
+          suggestions={tagSuggestions}
+        />
+      </div>
 
       {/* Notes — primary element on every card */}
       <div className="px-4 pb-3 pl-12">
@@ -1038,9 +1129,23 @@ export default function Leads() {
     if (typeof updateLead === 'function') await updateLead(id, { runner })
   }
 
+  const handleTagsChange = async (id, nextTags) => {
+    if (typeof updateLead !== 'function') return
+    // Preserve any 'starred' state on the lead (driven by the Star button, not the chip UI)
+    const lead = safeLeads.find(l => l.id === id)
+    const wasStarred = Array.isArray(lead?.tags) && lead.tags.includes('starred')
+    const merged = Array.from(new Set([...(nextTags || []), ...(wasStarred ? ['starred'] : [])]))
+    await updateLead(id, { tags: merged })
+  }
+
   // Distinct runner names already used across the user's leads — autocomplete fodder
   const runnerSuggestions = Array.from(new Set(
     safeLeads.map(l => (l.runner || '').trim()).filter(Boolean)
+  )).sort((a, b) => a.localeCompare(b))
+
+  // Distinct secondary tags already used (minus 'starred', which is internal)
+  const tagSuggestions = Array.from(new Set(
+    safeLeads.flatMap(l => Array.isArray(l.tags) ? l.tags : []).filter(t => t && t !== 'starred')
   )).sort((a, b) => a.localeCompare(b))
 
   const handleToggleStar = async (lead) => {
@@ -1229,6 +1334,8 @@ export default function Leads() {
               onCampaignChange={handleCampaignChange}
               onRunnerChange={handleRunnerChange}
               runnerSuggestions={runnerSuggestions}
+              onTagsChange={handleTagsChange}
+              tagSuggestions={tagSuggestions}
               onToggleStar={handleToggleStar}
               onNavigate={id => navigate(`/leads/${id}`)}
               onDelete={handleDeleteOne}
