@@ -860,6 +860,27 @@ function statusLabelToStageId(label, dbTags) {
   return mapped.toLowerCase().replace(/\s+/g, '-')
 }
 
+// Pick the candidate stage label from a raw CSV row — matches mapRow's logic.
+// Used pre-import to find labels we should auto-create as custom stages.
+function pickStageCandidate(rawRow) {
+  // 1. explicit status/stage/disposition column
+  for (const [col, val] of Object.entries(rawRow)) {
+    const key = String(col).toLowerCase().trim()
+    if (RINGY_MAP[key] === '_stagelike' && val && String(val).trim()) {
+      return String(val).trim()
+    }
+  }
+  // 2. first tag in the tags column
+  for (const [col, val] of Object.entries(rawRow)) {
+    const key = String(col).toLowerCase().trim()
+    if (RINGY_MAP[key] === '_tagsraw' && val && String(val).trim()) {
+      const list = String(val).split(/[,;|]/).map(t => t.trim()).filter(Boolean)
+      return list[0] || null
+    }
+  }
+  return null
+}
+
 // Test whether a Ringy tag matches ANY stage label (custom or default)
 function tagMatchesStage(tagText, dbTags) {
   if (!tagText) return false
@@ -895,20 +916,19 @@ function mapRow(row, dbTags) {
     delete raw._tagsraw
   }
 
-  // Determine the stage id, in priority order:
-  //   1. explicit status/stage/disposition column from Ringy
-  //   2. first tag that matches a known stage label (including custom stages)
+  // Pipeline stage = explicit status column OR the FIRST tag in the tags
+  // column. Whatever isn't the pipeline tag becomes a secondary chip — even
+  // if it could have matched another stage. This is the seamless Ringy →
+  // Infinite flow: a lead tagged "Pitched, Callback, Voicemail" lands in
+  // Pitched with #callback + #voicemail as side chips.
   let stageLabel = raw._stagelike || null
   delete raw._stagelike
-  if (!stageLabel) {
-    for (const t of tagList) {
-      if (tagMatchesStage(t, dbTags)) { stageLabel = t; break }
-    }
-  }
+  if (!stageLabel && tagList.length > 0) stageLabel = tagList[0]
   raw.stage = statusLabelToStageId(stageLabel, dbTags) || 'not-started'
 
-  // Freeform tags = ones that didn't match any stage (default OR custom)
-  raw.tags = tagList.filter(t => !tagMatchesStage(t, dbTags))
+  // Side tags = every tag that isn't the chosen pipeline tag
+  const stageLower = (stageLabel || '').toLowerCase()
+  raw.tags = tagList.filter(t => t.toLowerCase() !== stageLower)
 
   // Coerce numeric fields. income is TEXT in the schema so range strings
   // ('$50,000 - $75,000') survive verbatim — no parseInt needed.
@@ -1030,7 +1050,29 @@ export default function Leads() {
       })
       setUnmappedCols(unmapped)
       const withPhone = mapped.filter(r => r.phone).length
-      setImportPreview({ rows: mapped, total: mapped.length, withPhone, filename: file.name, sample: mapped.slice(0, 3) })
+
+      // Pre-scan for stage candidates that aren't already a known stage —
+      // those will be auto-created as custom stages on confirmImport so
+      // every Ringy disposition lands in a real pipeline column.
+      const knownLabels = new Set([
+        ...safeTags.map(t => (t.label || '').toLowerCase()),
+        ...Object.keys(STATUS_MAP),
+        ...STATUSES.map(s => s.toLowerCase()),
+      ])
+      const newStages = new Map()
+      for (const r of rows) {
+        const c = pickStageCandidate(r)
+        if (c && !knownLabels.has(c.toLowerCase()) && !newStages.has(c.toLowerCase())) {
+          newStages.set(c.toLowerCase(), c.trim())
+        }
+      }
+
+      setImportPreview({
+        rows: mapped, rawRows: rows,
+        total: mapped.length, withPhone,
+        filename: file.name, sample: mapped.slice(0, 3),
+        stagesToCreate: Array.from(newStages.values()),
+      })
       setImportResult(null)
     } catch (err) {
       setImportResult({ error: 'Could not read file: ' + err.message })
@@ -1043,12 +1085,45 @@ export default function Leads() {
     setImportResult(null)
     const now = new Date().toISOString()
 
-    // Client-side dedupe by phone against existing leads
+    // 1. Auto-create any unknown stages so every Ringy disposition becomes a
+    //    real pipeline column on this account. Defaults stay shared, customs
+    //    stay private — these new stages get user_id = current user.
+    let enrichedTags = safeTags
+    let createdStages = 0
+    const palette = ['#A78BFA','#F59E0B','#EC4899','#22D3EE','#84CC16','#FB7185','#F97316','#06B6D4']
+    if (Array.isArray(importPreview.stagesToCreate) && importPreview.stagesToCreate.length > 0) {
+      const stamp = Date.now()
+      const newStageRows = importPreview.stagesToCreate.map((label, i) => {
+        const color = palette[i % palette.length]
+        return {
+          id: label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') + '-' + stamp + '-' + i,
+          label,
+          color,
+          bg: color + '18',
+          sort_order: safeTags.length + i,
+          user_id: user.id,
+        }
+      })
+      try {
+        const { data: inserted, error } = await supabase.from('tags').insert(newStageRows).select()
+        if (!error && inserted) {
+          enrichedTags = [...safeTags, ...inserted]
+          createdStages = inserted.length
+        }
+      } catch (e) { console.error('auto-create stages failed:', e) }
+    }
+
+    // 2. Re-map raw rows against the enriched stage list so first-tag landings
+    //    point at real stage IDs (whether shared default, existing custom, or
+    //    just-created custom).
+    const remapped = (importPreview.rawRows || []).map(r => mapRow(r, enrichedTags))
+
+    // 3. Client-side dedupe by phone against existing leads
     const existingPhones = new Set(safeLeads.map(l => String(l.phone || '').replace(/\D/g, '')).filter(Boolean))
     const seen = new Set()
     let dupes = 0
     const toInsert = []
-    for (const r of importPreview.rows) {
+    for (const r of remapped) {
       const digits = String(r.phone || '').replace(/\D/g, '')
       if (digits && (existingPhones.has(digits) || seen.has(digits))) { dupes++; continue }
       if (digits) seen.add(digits)
@@ -1093,12 +1168,13 @@ export default function Leads() {
       console.error('[Import] First 5 failures:', failures.slice(0, 5))
     }
     const failMsg = failures.length > 0 ? ` · ${failures.length} failed (${(failures[0]?.msg || '').slice(0, 80)}…)` : ''
+    const stagesMsg = createdStages > 0 ? ` · created ${createdStages} new stage${createdStages === 1 ? '' : 's'}` : ''
     setImportResult({
       ok: true,
       imported,
       errors: failures.length,
-      total: importPreview.rows.length,
-      msg: `Imported ${imported}${dupes > 0 ? ` · ${dupes} duplicate${dupes === 1 ? '' : 's'} skipped` : ''}${failMsg}`,
+      total: remapped.length,
+      msg: `Imported ${imported}${dupes > 0 ? ` · ${dupes} duplicate${dupes === 1 ? '' : 's'} skipped` : ''}${stagesMsg}${failMsg}`,
     })
     setImportPreview(null)
     setImporting(false)
@@ -1269,6 +1345,11 @@ export default function Leads() {
               </p>
               {unmappedCols.length > 0 && (
                 <p className="text-xs text-yellow-500/80 mt-1">Skipped columns: {unmappedCols.join(', ')}</p>
+              )}
+              {Array.isArray(importPreview.stagesToCreate) && importPreview.stagesToCreate.length > 0 && (
+                <p className="text-xs text-[#A78BFA] mt-1">
+                  Will create new pipeline stage{importPreview.stagesToCreate.length === 1 ? '' : 's'}: {importPreview.stagesToCreate.map(s => `"${s}"`).join(', ')}
+                </p>
               )}
             </div>
             <button onClick={() => setImportPreview(null)} className="text-[#8899AA] hover:text-white"><X size={14} /></button>

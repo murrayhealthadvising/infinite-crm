@@ -391,6 +391,143 @@ function RunnerAccessPanel() {
   )
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Side Tags panel — central editor for the chip tags (lead.tags array values).
+// Rename/delete here propagates across every lead that uses that tag.
+// ─────────────────────────────────────────────────────────────────────────────
+function SideTagsPanel() {
+  const { leads, updateLead } = useApp()
+  const [renaming, setRenaming] = useState(null)
+  const [renameText, setRenameText] = useState('')
+  const [working, setWorking] = useState(null)
+  const [msg, setMsg] = useState(null)
+
+  // Add-tag (creates a placeholder by attaching to no lead — we just track the
+  // user's library so it shows up in autocomplete). To make it visible without
+  // touching any lead, we keep a local-only set; real persistence happens the
+  // moment a tag lands on its first lead.
+  const safeLeads = Array.isArray(leads) ? leads : []
+  const tagCounts = useMemo(() => {
+    const c = new Map()
+    for (const l of safeLeads) {
+      for (const t of (Array.isArray(l.tags) ? l.tags : [])) {
+        if (!t || t === 'starred') continue
+        c.set(t, (c.get(t) || 0) + 1)
+      }
+    }
+    return c
+  }, [safeLeads])
+
+  const sorted = useMemo(
+    () => Array.from(tagCounts.entries()).sort((a, b) => a[0].localeCompare(b[0])),
+    [tagCounts]
+  )
+
+  const handleRename = async (oldName) => {
+    const next = renameText.trim().toLowerCase()
+    if (!next || next === oldName) { setRenaming(null); setRenameText(''); return }
+    setWorking(oldName); setMsg(null)
+    const affected = safeLeads.filter(l => Array.isArray(l.tags) && l.tags.includes(oldName))
+    for (const l of affected) {
+      const merged = Array.from(new Set(l.tags.map(t => t === oldName ? next : t)))
+      try { await updateLead(l.id, { tags: merged }) } catch {}
+    }
+    setMsg({ type: 'success', text: `Renamed "${oldName}" → "${next}" on ${affected.length} lead${affected.length === 1 ? '' : 's'}` })
+    setTimeout(() => setMsg(null), 4000)
+    setWorking(null); setRenaming(null); setRenameText('')
+  }
+
+  const handleDelete = async (name) => {
+    const count = tagCounts.get(name) || 0
+    if (!confirm(`Remove the "${name}" tag from ${count} lead${count === 1 ? '' : 's'}? The tag will disappear from those cards.`)) return
+    setWorking(name); setMsg(null)
+    const affected = safeLeads.filter(l => Array.isArray(l.tags) && l.tags.includes(name))
+    for (const l of affected) {
+      const next = l.tags.filter(t => t !== name)
+      try { await updateLead(l.id, { tags: next }) } catch {}
+    }
+    setMsg({ type: 'success', text: `Removed "${name}" from ${affected.length} lead${affected.length === 1 ? '' : 's'}` })
+    setTimeout(() => setMsg(null), 4000)
+    setWorking(null)
+  }
+
+  return (
+    <div className="rounded-xl border border-[#1A2130] p-5" style={{ background: '#0D1117' }}>
+      <div className="mb-4">
+        <h2 className="text-xs font-mono uppercase tracking-wider text-[#5A6A7A] flex items-center gap-2">
+          <TagsIcon size={12} /> Side Tags
+        </h2>
+        <p className="text-xs text-[#3A4A5A] mt-1">
+          Chip tags on lead cards (pitched, callback, voicemail, etc.). Rename or delete here and it updates across every lead using that tag.
+        </p>
+      </div>
+
+      {msg && (
+        <div className={`mb-3 px-3 py-2 rounded-lg flex items-center gap-2 text-xs ${
+          msg.type === 'success' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+          : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}>
+          {msg.type === 'success' ? <CheckCircle size={13} /> : <AlertTriangle size={13} />}
+          {msg.text}
+          <button onClick={() => setMsg(null)} className="ml-auto"><X size={12} /></button>
+        </div>
+      )}
+
+      {sorted.length === 0 ? (
+        <div className="border border-dashed border-[#1A2130] rounded-lg py-6 text-center">
+          <p className="text-sm text-[#5A6A7A]">No side tags yet.</p>
+          <p className="text-xs text-[#3A4A5A] mt-1">Add chips on a lead card and they'll show up here.</p>
+        </div>
+      ) : (
+        <div className="border border-[#1A2130] rounded-lg overflow-hidden divide-y divide-[#1A2130]">
+          {sorted.map(([name, count]) => (
+            <div key={name} className="flex items-center gap-2 px-3 py-2.5">
+              {renaming === name ? (
+                <>
+                  <input autoFocus value={renameText}
+                    onChange={e => setRenameText(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') handleRename(name)
+                      if (e.key === 'Escape') { setRenaming(null); setRenameText('') }
+                    }}
+                    className="flex-1 px-2 py-1 rounded text-sm text-white bg-[#080B0F] border border-[#1A2130] focus:outline-none focus:border-[#00E5C340] font-mono" />
+                  <button onClick={() => handleRename(name)}
+                    disabled={!renameText.trim() || working === name}
+                    className="px-2 py-1 rounded text-xs font-medium text-black disabled:opacity-50"
+                    style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
+                    {working === name ? 'Saving…' : 'Save'}
+                  </button>
+                  <button onClick={() => { setRenaming(null); setRenameText('') }}
+                    className="px-2 py-1 rounded text-xs text-[#5A6A7A] hover:text-white">
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <>
+                  <span className="text-[11px] px-1.5 py-0.5 rounded font-mono"
+                    style={{ background: '#1A2130', color: '#8899AA', border: '1px solid #2A3547' }}>
+                    #{name}
+                  </span>
+                  <span className="text-xs text-[#5A6A7A]">{count} lead{count === 1 ? '' : 's'}</span>
+                  <div className="flex-1" />
+                  <button onClick={() => { setRenaming(name); setRenameText(name) }}
+                    className="text-xs px-2 py-1 rounded border border-[#1A2130] text-[#5A6A7A] hover:text-white hover:border-[#2A3547]">
+                    Rename
+                  </button>
+                  <button onClick={() => handleDelete(name)}
+                    disabled={working === name}
+                    className="p-1.5 rounded text-[#3A4A5A] hover:text-[#EF4444] hover:bg-[#EF444415] disabled:opacity-30">
+                    <Trash2 size={13} />
+                  </button>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function Settings() {
   const { user, profile, leads, tags, addTag, updateTag, deleteTag, isRunner, isAdmin } = useApp()
 
@@ -492,6 +629,9 @@ export default function Settings() {
 
       {/* Runner Access — hidden for runners themselves (they only manage their own profile + password) */}
       {!isRunner && <RunnerAccessPanel />}
+
+      {/* Side Tags — chip tags on lead cards, central rename/delete editor */}
+      <SideTagsPanel />
 
       {/* Pipeline stages / tags — runners don't get to edit stages */}
       {!isRunner && (
