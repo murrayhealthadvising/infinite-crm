@@ -83,8 +83,16 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'Already a runner for another agent.'; END IF;
   -- Upsert profile (use user_id as the conflict key, matching the existing schema)
-  INSERT INTO public.profiles(user_id, role, lead_agent_id)
-  VALUES (rid, 'runner', auth.uid())
+  -- profiles requires email + full_name; fill them from the lookup so the
+  -- INSERT doesn't violate NOT NULL constraints on first-time runner activation
+  INSERT INTO public.profiles(user_id, email, full_name, role, lead_agent_id)
+  VALUES (
+    rid,
+    lower(runner_email),
+    split_part(runner_email, '@', 1),
+    'runner',
+    auth.uid()
+  )
   ON CONFLICT (user_id) DO UPDATE SET role = 'runner', lead_agent_id = auth.uid();
   RETURN jsonb_build_object('id', rid, 'email', runner_email);
 END; $$;
