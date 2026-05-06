@@ -405,16 +405,29 @@ function PricePill({ value, color, onSave }) {
   )
 }
 
-// Notes textarea: fixed resting height (~6 lines), scrolls internally when
-// content overflows, user can drag the bottom-right corner to resize bigger.
-// No auto-grow — staying a consistent size keeps card scanning predictable.
+// Notes textarea: auto-fits content between 6 lines (min) and 15 lines (max).
+// Past 15 lines the textarea caps and scrolls internally. User can also drag
+// the bottom-right corner to expand into a huge notepad whenever they want.
+const NOTES_MIN_H = 132   // ~6 lines at our padding/line-height
+const NOTES_MAX_H = 330   // ~15 lines — content past this scrolls internally
 function NotesField({ value, onSave, placeholder }) {
+  const ref = useRef(null)
   const [text, setText] = useState(value || '')
   const [saving, setSaving] = useState(false)
   const [savedTick, setSavedTick] = useState(false)
   const initialRef = useRef(value || '')
 
   useEffect(() => { setText(value || ''); initialRef.current = value || '' }, [value])
+
+  // Auto-fit height to content within [min, max]. Past max, scrollbar engages.
+  // Re-run on every keystroke so growing content reveals itself smoothly.
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    el.style.height = 'auto'
+    const sh = el.scrollHeight
+    el.style.height = Math.min(NOTES_MAX_H, Math.max(NOTES_MIN_H, sh)) + 'px'
+  }, [text])
 
   const handleFocus = (e) => {
     e.currentTarget.style.borderColor = '#00E5C3'
@@ -433,21 +446,20 @@ function NotesField({ value, onSave, placeholder }) {
   return (
     <div className="relative" onClick={e => e.stopPropagation()}>
       <textarea
+        ref={ref}
         value={text}
         onChange={e => setText(e.target.value)}
         onFocus={handleFocus}
         onBlur={handleBlur}
         placeholder={placeholder}
-        rows={6}
         className="w-full rounded-lg px-3 py-2 text-sm focus:outline-none"
         style={{
           color: '#E0E8F0',
           background: '#0B0F14',
           border: '1px solid #2F3A4A',
           boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.45)',
-          height: '132px',
-          minHeight: '132px',
-          maxHeight: '600px',
+          minHeight: NOTES_MIN_H + 'px',
+          maxHeight: NOTES_MAX_H + 'px',
           resize: 'vertical',
           overflowY: 'auto',
           transition: 'border-color 120ms, background-color 120ms',
