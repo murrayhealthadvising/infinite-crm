@@ -129,18 +129,22 @@ export function AppProvider({ children }) {
     setLoading(false)
   }
 
-  // Tags (pipeline stages):
-  //   - 8 defaults are SHARED across the app (owned by sentinel UUID, all-zeros)
-  //   - Custom stages each agent adds are PRIVATE to that agent
-  // RLS lets every authenticated user SELECT the shared defaults + their own
-  // (or their lead-agent's, for runners), so no per-user bootstrap is needed.
+  // Tags (pipeline stages) — every agent owns a personal copy of the 8 defaults
+  // PLUS any custom stages they add. They can edit/recolor/reorder/delete any
+  // of them independently of teammates. Runners see their lead-agent's stages
+  // via RLS, read-only.
   useEffect(() => {
     if (!session) return
     const loadTags = async () => {
       try {
         const { data } = await supabase.from('tags').select('*').order('sort_order')
-        if (data && data.length > 0) setTags(data)
-        else setTags(DEFAULT_TAGS) // last-resort fallback if RLS hides everything
+        if (data && data.length > 0) { setTags(data); return }
+        // Fresh agent (no rows yet) → seed their own copies of the 8 defaults
+        if (profile?.role === 'runner') { setTags([]); return }
+        const seed = DEFAULT_TAGS.map((t, i) => ({ ...t, user_id: session.user.id, sort_order: i }))
+        const { data: inserted, error } = await supabase.from('tags').insert(seed).select()
+        if (!error && inserted) setTags(inserted)
+        else setTags(DEFAULT_TAGS)
       } catch (e) { /* keep DEFAULT_TAGS */ }
     }
     loadTags()
@@ -195,6 +199,21 @@ export function AppProvider({ children }) {
     const uid = session?.user?.id
     try { await supabase.from('tags').delete().eq('id', id).eq('user_id', uid) } catch {}
     setTags(prev => prev.filter(t => t.id !== id))
+  }
+
+  // Persist a new ordering of stage IDs by writing sort_order back to the DB.
+  // Optimistic: update local state immediately, then fan out per-row updates.
+  const reorderTags = async (orderedIds) => {
+    const uid = session?.user?.id
+    setTags(prev => {
+      const map = new Map(prev.map(t => [t.id, t]))
+      return orderedIds.map((id, i) => ({ ...(map.get(id) || { id }), sort_order: i }))
+    })
+    try {
+      await Promise.all(orderedIds.map((id, i) =>
+        supabase.from('tags').update({ sort_order: i }).eq('id', id).eq('user_id', uid)
+      ))
+    } catch (e) { console.error('reorderTags failed:', e) }
   }
 
   const updateLead = async (id, updates) => {
@@ -412,7 +431,7 @@ export function AppProvider({ children }) {
       addLead, bulkAddLeads, updateLead, updateLeadStage,
       deleteLead, deleteLeads, deleteAllLeadsForUser,
       addActivity, getLeadActivities,
-      addTag, updateTag, deleteTag,
+      addTag, updateTag, deleteTag, reorderTags,
       // sold-prompt globals
       pendingSoldLeadId, setPendingSoldLeadId,
       // role + permission helpers

@@ -65,7 +65,7 @@ function ColorPicker({ value, onChange }) {
   )
 }
 
-function TagRow({ tag, count, onUpdate, onDelete, isDefault }) {
+function TagRow({ tag, count, onUpdate, onDelete, isDefault, onDragStart, onDragOver, onDrop, dragging }) {
   const [editing, setEditing] = useState(false)
   const [label, setLabel] = useState(tag.label)
   const [color, setColor] = useState(tag.color)
@@ -80,7 +80,13 @@ function TagRow({ tag, count, onUpdate, onDelete, isDefault }) {
   const cancel = () => { setLabel(tag.label); setColor(tag.color); setEditing(false) }
 
   return (
-    <div className="flex items-start gap-3 py-3 border-b border-[#1A2130] last:border-0">
+    <div
+      draggable={!editing}
+      onDragStart={(e) => onDragStart?.(e, tag.id)}
+      onDragOver={(e) => onDragOver?.(e, tag.id)}
+      onDrop={(e) => onDrop?.(e, tag.id)}
+      className={`flex items-start gap-3 py-3 border-b border-[#1A2130] last:border-0 ${dragging ? 'opacity-40' : ''}`}
+      style={{ cursor: editing ? 'default' : 'grab' }}>
       <GripVertical size={14} className="text-[#3A4A5A] mt-1 flex-shrink-0" />
       <div className="flex-1 min-w-0">
         {editing ? (
@@ -119,24 +125,17 @@ function TagRow({ tag, count, onUpdate, onDelete, isDefault }) {
       </div>
       {!editing && (
         <div className="flex items-center gap-1 flex-shrink-0">
-          {isDefault ? (
-            <span className="text-[10px] text-[#3A4A5A] font-mono uppercase tracking-wider"
-              title="Default stages are shared across all agents and cannot be edited.">
-              shared · read-only
-            </span>
-          ) : (
-            <>
-              <button onClick={() => setEditing(true)}
-                className="text-xs px-2 py-1 rounded border border-[#1A2130] text-[#5A6A7A] hover:text-white hover:border-[#2A3547]">
-                Edit
-              </button>
-              <button onClick={() => onDelete(tag, count)}
-                disabled={count > 0}
-                className="p-1.5 rounded text-[#3A4A5A] hover:text-[#EF4444] hover:bg-[#EF444415] disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
-                title={count > 0 ? `Reassign the ${count} lead${count === 1 ? '' : 's'} first` : 'Delete stage'}>
-                <Trash2 size={14} />
-              </button>
-            </>
+          <button onClick={() => setEditing(true)}
+            className="text-xs px-2 py-1 rounded border border-[#1A2130] text-[#5A6A7A] hover:text-white hover:border-[#2A3547]">
+            Edit
+          </button>
+          {!isDefault && (
+            <button onClick={() => onDelete(tag, count)}
+              disabled={count > 0}
+              className="p-1.5 rounded text-[#3A4A5A] hover:text-[#EF4444] hover:bg-[#EF444415] disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+              title={count > 0 ? `Reassign the ${count} lead${count === 1 ? '' : 's'} first` : 'Delete stage'}>
+              <Trash2 size={14} />
+            </button>
           )}
         </div>
       )}
@@ -529,7 +528,9 @@ function SideTagsPanel() {
 }
 
 export default function Settings() {
-  const { user, profile, leads, tags, addTag, updateTag, deleteTag, isRunner, isAdmin } = useApp()
+  const { user, profile, leads, tags, addTag, updateTag, deleteTag, reorderTags, isRunner, isAdmin } = useApp()
+  const [dragId, setDragId] = useState(null)
+  const [dragOverId, setDragOverId] = useState(null)
 
   // Password state
   const [newPassword, setNewPassword] = useState('')
@@ -594,6 +595,29 @@ export default function Settings() {
       setTagMsg({ type: 'success', text: `Deleted "${tag.label}"` })
       setTimeout(() => setTagMsg(null), 3000)
     } catch (e) { setTagMsg({ type: 'error', text: 'Delete failed: ' + e.message }) }
+  }
+
+  const handleDragStart = (e, id) => {
+    setDragId(id)
+    e.dataTransfer.effectAllowed = 'move'
+    try { e.dataTransfer.setData('text/plain', id) } catch {}
+  }
+  const handleDragOver = (e, id) => {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    if (id !== dragOverId) setDragOverId(id)
+  }
+  const handleDrop = async (e, targetId) => {
+    e.preventDefault()
+    const sourceId = dragId
+    setDragId(null); setDragOverId(null)
+    if (!sourceId || sourceId === targetId) return
+    const ids = sortedTags.map(t => t.id)
+    const fromIdx = ids.indexOf(sourceId)
+    const toIdx = ids.indexOf(targetId)
+    if (fromIdx < 0 || toIdx < 0) return
+    ids.splice(toIdx, 0, ids.splice(fromIdx, 1)[0])
+    if (typeof reorderTags === 'function') await reorderTags(ids)
   }
 
   const initials = (user?.email || '?')[0].toUpperCase()
@@ -682,7 +706,11 @@ export default function Settings() {
           {sortedTags.map(t => (
             <TagRow key={t.id} tag={t} count={leadCounts[t.id] || 0}
               onUpdate={updateTag} onDelete={handleDelete}
-              isDefault={DEFAULT_TAG_IDS.has(t.id)} />
+              isDefault={DEFAULT_TAG_IDS.has(t.id)}
+              onDragStart={handleDragStart}
+              onDragOver={handleDragOver}
+              onDrop={handleDrop}
+              dragging={dragId === t.id} />
           ))}
           {sortedTags.length === 0 && (
             <p className="text-sm text-[#5A6A7A] py-6 text-center">No stages yet — add your first one above.</p>
@@ -690,7 +718,7 @@ export default function Settings() {
         </div>
 
         <p className="text-[10px] text-[#3A4A5A] mt-4">
-          The 8 default stages are shared across all agents and read-only. Custom stages you add are private to your account — your teammates won't see them, and you won't see theirs. Custom stages can be deleted only when no leads are using them.
+          Drag any row by its handle to reorder — the order here drives column order on Pipeline and pill order on Leads. Every stage is yours to edit (label + color). Custom stages can be deleted when no leads use them; the 8 default IDs (used to map Ringy/USHA dispositions) cannot be deleted but can be re-labeled or re-colored. Your changes don't affect teammates.
         </p>
       </div>
       )}
