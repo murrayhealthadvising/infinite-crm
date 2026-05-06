@@ -38,9 +38,13 @@ ALTER TABLE public.tags ADD COLUMN IF NOT EXISTS user_id UUID;
 UPDATE public.tags SET user_id = '01ef1bd7-f5d1-4279-bf9b-15a02eec5f4a' WHERE user_id IS NULL;
 ALTER TABLE public.tags ALTER COLUMN user_id SET NOT NULL;
 
--- 2) Allow same id ('interested', 'not-started', etc.) across different agents
-ALTER TABLE public.tags DROP CONSTRAINT IF EXISTS tags_pkey;
-ALTER TABLE public.tags ADD CONSTRAINT tags_pkey PRIMARY KEY (id, user_id);
+-- 2) Allow same id ('interested', 'not-started', etc.) across different agents.
+-- We have to drop the leads.stage FK first since it depends on the old pkey;
+-- the frontend already validates stages against the loaded tags so we don't
+-- re-add it (that would block the migration until every agent's tags are seeded).
+ALTER TABLE public.leads DROP CONSTRAINT IF EXISTS leads_stage_fkey;
+ALTER TABLE public.tags  DROP CONSTRAINT IF EXISTS tags_pkey;
+ALTER TABLE public.tags  ADD CONSTRAINT tags_pkey PRIMARY KEY (id, user_id);
 CREATE INDEX IF NOT EXISTS tags_user_id_idx ON public.tags(user_id);
 
 -- 3) RLS: agents see/manage their own stages; runners see their lead-agent's
