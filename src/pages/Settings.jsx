@@ -1,10 +1,34 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useApp } from '../context/AppContext'
 import { supabase } from '../lib/supabase'
+import { createClient } from '@supabase/supabase-js'
 import {
-  Key, CheckCircle, XCircle, Eye, EyeOff,
+  Key, CheckCircle, XCircle, Eye, EyeOff, Copy,
   Plus, Trash2, Check, X, GripVertical, AlertTriangle, Tags as TagsIcon,
+  UserPlus, Users as UsersIcon, RefreshCw,
 } from 'lucide-react'
+
+// Headless secondary Supabase client — used to create a runner account
+// WITHOUT logging the current agent out. persistSession=false so it leaves
+// no trace in localStorage; the agent's own session stays untouched.
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL
+const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY
+let _headless = null
+function headlessClient() {
+  if (_headless) return _headless
+  if (!SUPABASE_URL || !SUPABASE_KEY) return null
+  _headless = createClient(SUPABASE_URL, SUPABASE_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }
+  })
+  return _headless
+}
+
+function randomPassword(len = 12) {
+  const chars = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789'
+  let out = ''
+  for (let i = 0; i < len; i++) out += chars[Math.floor(Math.random() * chars.length)]
+  return out
+}
 
 const PRESET_COLORS = [
   '#00E5C3','#3B82F6','#10B981','#F59E0B','#EF4444','#8B5CF6',
@@ -113,8 +137,255 @@ function TagRow({ tag, count, onUpdate, onDelete, isDefault }) {
   )
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Runner Access — manage temp runner accounts that work UNDER this agent
+// Each runner gets their own login but sees this agent's leads (RLS enforced).
+// Creation uses a headless Supabase client so the current agent stays signed in.
+// ─────────────────────────────────────────────────────────────────────────────
+function RunnerAccessPanel() {
+  const [runners, setRunners] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [showAdd, setShowAdd] = useState(false)
+  const [msg, setMsg] = useState(null)
+
+  // Add-runner form
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [creating, setCreating] = useState(false)
+  const [created, setCreated] = useState(null)  // {email, password} after success
+  const [showPw, setShowPw] = useState(false)
+  const [copyHit, setCopyHit] = useState('')
+
+  const refresh = async () => {
+    setLoading(true)
+    const { data, error } = await supabase.rpc('list_my_runners')
+    if (!error) setRunners(Array.isArray(data) ? data : [])
+    setLoading(false)
+  }
+  useEffect(() => { refresh() }, [])
+
+  const resetForm = () => {
+    setEmail(''); setPassword(''); setCreated(null); setMsg(null); setShowPw(false)
+  }
+  const closeModal = () => { setShowAdd(false); resetForm() }
+
+  const handleCreate = async (e) => {
+    e?.preventDefault()
+    setMsg(null)
+    if (!email.trim()) { setMsg({ type: 'error', text: 'Email required' }); return }
+    if (!password || password.length < 6) { setMsg({ type: 'error', text: 'Password must be 6+ characters' }); return }
+    setCreating(true)
+    try {
+      const tmp = headlessClient()
+      if (!tmp) throw new Error('Supabase env vars missing')
+      // Create the auth account (without disturbing the agent's session)
+      const { error: signErr } = await tmp.auth.signUp({
+        email: email.trim().toLowerCase(),
+        password,
+        options: { data: { full_name: email.split('@')[0], role: 'runner' } },
+      })
+      if (signErr && !/already registered/i.test(signErr.message)) {
+        throw signErr
+      }
+      // Promote them to runner under this agent
+      const { error: actErr } = await supabase.rpc('activate_runner', { runner_email: email.trim().toLowerCase() })
+      if (actErr) throw actErr
+      setCreated({ email: email.trim().toLowerCase(), password })
+      setMsg({ type: 'success', text: 'Runner created. Share these credentials with them.' })
+      refresh()
+    } catch (err) {
+      setMsg({ type: 'error', text: err.message || 'Failed to create runner.' })
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  const handleDeactivate = async (r) => {
+    if (!confirm(`Revoke runner access for ${r.email}? They will no longer see your leads.`)) return
+    const { error } = await supabase.rpc('deactivate_runner', { rid: r.id })
+    if (error) { setMsg({ type: 'error', text: error.message }); return }
+    setMsg({ type: 'success', text: `${r.email} deactivated.` })
+    refresh()
+    setTimeout(() => setMsg(null), 4000)
+  }
+
+  const copy = (text, key) => {
+    navigator.clipboard.writeText(text); setCopyHit(key); setTimeout(() => setCopyHit(''), 1200)
+  }
+
+  return (
+    <div className="rounded-xl border border-[#1A2130] p-5" style={{ background: '#0D1117' }}>
+      <div className="flex items-start justify-between mb-4 gap-3">
+        <div>
+          <h2 className="text-xs font-mono uppercase tracking-wider text-[#5A6A7A] flex items-center gap-2">
+            <UsersIcon size={12} /> Runner Access
+          </h2>
+          <p className="text-xs text-[#3A4A5A] mt-1">
+            Create logins for people working under you. Runners see and edit your leads (notes, stage, runner pill) but cannot delete, import, or invite. Each runner gets their own login.
+          </p>
+        </div>
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          <button onClick={refresh} title="Refresh"
+            className="p-2 rounded-lg text-[#5A6A7A] hover:text-white hover:bg-[#1A2130]">
+            <RefreshCw size={13} />
+          </button>
+          <button onClick={() => setShowAdd(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-black"
+            style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
+            <UserPlus size={13} /> Add Runner
+          </button>
+        </div>
+      </div>
+
+      {msg && !showAdd && (
+        <div className={`mb-3 px-3 py-2 rounded-lg flex items-center gap-2 text-xs ${
+          msg.type === 'success' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+          : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}>
+          {msg.type === 'success' ? <CheckCircle size={13} /> : <AlertTriangle size={13} />}
+          {msg.text}
+          <button onClick={() => setMsg(null)} className="ml-auto"><X size={12} /></button>
+        </div>
+      )}
+
+      {loading ? (
+        <p className="text-xs text-[#5A6A7A] py-3">Loading runners…</p>
+      ) : runners.length === 0 ? (
+        <div className="border border-dashed border-[#1A2130] rounded-lg py-6 text-center">
+          <p className="text-sm text-[#5A6A7A]">No runners yet.</p>
+          <p className="text-xs text-[#3A4A5A] mt-1">Click <strong className="text-[#8899AA]">Add Runner</strong> to create one.</p>
+        </div>
+      ) : (
+        <div className="divide-y divide-[#1A2130] border border-[#1A2130] rounded-lg overflow-hidden">
+          {runners.map(r => (
+            <div key={r.id} className="flex items-center gap-3 px-3 py-2.5">
+              <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-black flex-shrink-0"
+                style={{ background: 'linear-gradient(135deg, #A78BFA, #7C3AED)' }}>
+                {(r.email || '?')[0].toUpperCase()}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm text-white truncate">{r.full_name || r.email.split('@')[0]}</p>
+                <p className="text-xs text-[#5A6A7A] truncate">{r.email}</p>
+              </div>
+              <span className="text-[10px] px-1.5 py-0.5 rounded font-mono"
+                style={{ background: '#A78BFA15', color: '#A78BFA', border: '1px solid #A78BFA40' }}>
+                runner
+              </span>
+              <button onClick={() => handleDeactivate(r)}
+                className="p-1.5 rounded-lg text-[#5A6A7A] hover:text-[#EF4444] hover:bg-[#EF444415]"
+                title="Revoke access">
+                <Trash2 size={13} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Add Runner modal */}
+      {showAdd && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => !creating && closeModal()} />
+          <div className="relative w-full max-w-md rounded-2xl border border-[#1A2130] overflow-hidden" style={{ background: '#0E1318' }}>
+            <div className="flex items-center justify-between px-5 py-4 border-b border-[#1A2130]">
+              <h3 className="text-base font-semibold text-white flex items-center gap-2">
+                <UserPlus size={15} /> {created ? 'Runner created' : 'Add a runner'}
+              </h3>
+              <button onClick={closeModal} disabled={creating} className="text-[#5A6A7A] hover:text-white">
+                <X size={16} />
+              </button>
+            </div>
+
+            {created ? (
+              <div className="p-5 space-y-4">
+                <div className="px-3 py-2 rounded-lg text-xs flex items-center gap-2 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                  <CheckCircle size={13} /> Send these credentials to your runner. They can change the password later from their own Settings.
+                </div>
+                <div className="rounded-lg border border-[#1A2130] p-3 space-y-3" style={{ background: '#080B0F' }}>
+                  <div>
+                    <label className="text-[10px] font-mono uppercase tracking-wider text-[#5A6A7A] block mb-1">Email</label>
+                    <div className="flex items-center gap-2">
+                      <code className="flex-1 text-sm text-white font-mono truncate">{created.email}</code>
+                      <button onClick={() => copy(created.email, 'em')}
+                        className="text-[#5A6A7A] hover:text-white">
+                        {copyHit === 'em' ? <Check size={13} className="text-[#00E5C3]" /> : <Copy size={13} />}
+                      </button>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-mono uppercase tracking-wider text-[#5A6A7A] block mb-1">Password</label>
+                    <div className="flex items-center gap-2">
+                      <code className="flex-1 text-sm text-white font-mono truncate">{created.password}</code>
+                      <button onClick={() => copy(created.password, 'pw')}
+                        className="text-[#5A6A7A] hover:text-white">
+                        {copyHit === 'pw' ? <Check size={13} className="text-[#00E5C3]" /> : <Copy size={13} />}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <button onClick={closeModal}
+                  className="w-full py-2.5 rounded-lg text-sm font-semibold text-black"
+                  style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
+                  Done
+                </button>
+              </div>
+            ) : (
+              <form onSubmit={handleCreate} className="p-5 space-y-3">
+                {msg && (
+                  <div className={`px-3 py-2 rounded-lg flex items-center gap-2 text-xs ${
+                    msg.type === 'success' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                    : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}>
+                    {msg.type === 'success' ? <CheckCircle size={13} /> : <AlertTriangle size={13} />}
+                    {msg.text}
+                  </div>
+                )}
+                <div>
+                  <label className="text-xs text-[#8899AA] block mb-1">Runner's email</label>
+                  <input type="email" value={email} onChange={e => setEmail(e.target.value)}
+                    placeholder="alex-runner@example.com" required
+                    className="w-full px-3 py-2 rounded-lg text-sm text-white bg-[#080B0F] border border-[#1A2130] focus:outline-none focus:border-[#00E5C340]" />
+                </div>
+                <div>
+                  <label className="text-xs text-[#8899AA] block mb-1">Password</label>
+                  <div className="relative">
+                    <input type={showPw ? 'text' : 'password'} value={password}
+                      onChange={e => setPassword(e.target.value)}
+                      placeholder="At least 6 characters" required minLength={6}
+                      className="w-full px-3 py-2 pr-20 rounded-lg text-sm text-white bg-[#080B0F] border border-[#1A2130] focus:outline-none focus:border-[#00E5C340] font-mono" />
+                    <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                      <button type="button" onClick={() => setShowPw(v => !v)} className="text-[#5A6A7A] hover:text-white p-1">
+                        {showPw ? <EyeOff size={13} /> : <Eye size={13} />}
+                      </button>
+                      <button type="button" onClick={() => { setPassword(randomPassword()); setShowPw(true) }}
+                        className="text-[10px] font-mono text-[#00E5C3] hover:underline px-1">
+                        gen
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <p className="text-[10px] text-[#5A6A7A] leading-relaxed">
+                  We'll create the account in the background — you stay signed in. The runner uses these credentials at <span className="text-[#00E5C3] font-mono">/login</span> and lands in your CRM with read/edit access (no delete, no import).
+                </p>
+                <div className="flex gap-2 pt-1">
+                  <button type="submit" disabled={creating}
+                    className="flex-1 py-2.5 rounded-lg text-sm font-semibold text-black transition-opacity disabled:opacity-50"
+                    style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
+                    {creating ? 'Creating…' : 'Create runner'}
+                  </button>
+                  <button type="button" onClick={closeModal} disabled={creating}
+                    className="px-4 py-2.5 rounded-lg text-sm bg-[#1A2130] text-[#8899AA] hover:text-white">
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function Settings() {
-  const { user, profile, leads, tags, addTag, updateTag, deleteTag } = useApp()
+  const { user, profile, leads, tags, addTag, updateTag, deleteTag, isRunner, isAdmin } = useApp()
 
   // Password state
   const [newPassword, setNewPassword] = useState('')
@@ -212,7 +483,11 @@ export default function Settings() {
         </div>
       </div>
 
-      {/* Pipeline stages / tags */}
+      {/* Runner Access — hidden for runners themselves (they only manage their own profile + password) */}
+      {!isRunner && <RunnerAccessPanel />}
+
+      {/* Pipeline stages / tags — runners don't get to edit stages */}
+      {!isRunner && (
       <div className="rounded-xl border border-[#1A2130] p-5" style={{ background: '#0D1117' }}>
         <div className="flex items-start justify-between mb-4 gap-3">
           <div>
@@ -271,6 +546,7 @@ export default function Settings() {
           Default stages can be re-labeled and re-colored but not deleted (the system uses their IDs to map Ringy/USHA tags). Custom stages can be deleted only when no leads are using them.
         </p>
       </div>
+      )}
 
       {/* Change password */}
       <div className="rounded-xl border border-[#1A2130] p-5" style={{ background: '#0D1117' }}>

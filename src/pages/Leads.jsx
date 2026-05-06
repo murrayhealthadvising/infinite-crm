@@ -365,7 +365,7 @@ function NotesField({ value, onSave, placeholder }) {
 // ───────────────────────────────────────────────────────────────────────────
 // Lead card
 // ───────────────────────────────────────────────────────────────────────────
-function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNavigate, onDelete, onPriceChange, onCampaignChange, onRunnerChange, onToggleStar, runnerSuggestions }) {
+function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNavigate, onDelete, onPriceChange, onCampaignChange, onRunnerChange, onToggleStar, runnerSuggestions, canDelete = true }) {
   const { tags, getTag } = useApp()
   const [copied, setCopied] = useState(false)
   const [expanded, setExpanded] = useState(false)
@@ -498,12 +498,14 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNav
             className="p-1.5 rounded-lg text-[#3A4A5A] hover:text-white transition-colors">
             {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
           </button>
-          <button
-            onClick={(e) => { e.stopPropagation(); if (confirm(`Delete "${fullName}"? This cannot be undone.`)) onDelete?.(lead.id) }}
-            className="p-1.5 rounded-lg text-[#3A4A5A] hover:text-[#EF4444] hover:bg-[#EF444415] transition-colors"
-            title="Delete lead">
-            <Trash2 size={14} />
-          </button>
+          {canDelete && (
+            <button
+              onClick={(e) => { e.stopPropagation(); if (confirm(`Delete "${fullName}"? This cannot be undone.`)) onDelete?.(lead.id) }}
+              className="p-1.5 rounded-lg text-[#3A4A5A] hover:text-[#EF4444] hover:bg-[#EF444415] transition-colors"
+              title="Delete lead">
+              <Trash2 size={14} />
+            </button>
+          )}
         </div>
       </div>
 
@@ -864,7 +866,7 @@ function exportCSV(leads) {
 // MAIN
 // ───────────────────────────────────────────────────────────────────────────
 export default function Leads() {
-  const { user, leads, tags, updateLeadStage, updateLead, refreshLeads, deleteLead, deleteLeads, deleteAllLeadsForUser } = useApp()
+  const { user, leads, tags, updateLeadStage, updateLead, refreshLeads, deleteLead, deleteLeads, deleteAllLeadsForUser, isRunner, can } = useApp()
   const navigate = useNavigate()
   const [view, setView] = useState('list')
   const [search, setSearch] = useState('')
@@ -1087,7 +1089,7 @@ export default function Leads() {
             className="p-2 rounded-lg text-[#5A6A7A] hover:text-white hover:bg-[#1A2130] transition-colors" title="Select all">
             {selected.size === filtered.length && filtered.length > 0 ? <CheckSquare size={16} className="text-[#00E5C3]" /> : <Square size={16} />}
           </button>
-          {selected.size > 0 && (
+          {selected.size > 0 && can?.deleteLeads && (
             <button onClick={handleBulkDelete}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border border-[#EF444440] text-[#EF4444] hover:bg-[#EF444415] transition-colors">
               <Trash2 size={13} /> Delete {selected.size}
@@ -1097,12 +1099,14 @@ export default function Leads() {
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border border-[#1A2130] text-[#8899AA] hover:text-white hover:border-[#2A3547] transition-colors">
             <Download size={13} /> {selected.size > 0 ? `Export ${selected.size}` : 'Export'}
           </button>
-          <button onClick={() => fileRef.current?.click()}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border border-[#1A2130] text-[#8899AA] hover:text-white hover:border-[#2A3547] transition-colors">
-            <Upload size={13} /> Import CSV
-          </button>
+          {!isRunner && (
+            <button onClick={() => fileRef.current?.click()}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border border-[#1A2130] text-[#8899AA] hover:text-white hover:border-[#2A3547] transition-colors">
+              <Upload size={13} /> Import CSV
+            </button>
+          )}
           <input ref={fileRef} type="file" accept=".csv,.tsv,.txt" onChange={handleFileSelect} className="hidden" />
-          {safeLeads.length > 0 && (
+          {safeLeads.length > 0 && can?.deleteLeads && (
             <button onClick={() => setShowDeleteAll(true)}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border border-[#EF444440] text-[#EF4444] hover:bg-[#EF444415] transition-colors"
               title="Wipe all leads (for fresh re-import)">
@@ -1118,11 +1122,13 @@ export default function Leads() {
               <Columns size={15} />
             </button>
           </div>
-          <button onClick={() => setShowAdd(true)}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-black transition-opacity hover:opacity-90"
-            style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
-            <Plus size={15} /> Add Lead
-          </button>
+          {!isRunner && (
+            <button onClick={() => setShowAdd(true)}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-black transition-opacity hover:opacity-90"
+              style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
+              <Plus size={15} /> Add Lead
+            </button>
+          )}
         </div>
       </div>
 
@@ -1222,7 +1228,8 @@ export default function Leads() {
               runnerSuggestions={runnerSuggestions}
               onToggleStar={handleToggleStar}
               onNavigate={id => navigate(`/leads/${id}`)}
-              onDelete={handleDeleteOne} />
+              onDelete={handleDeleteOne}
+              canDelete={can?.deleteLeads !== false && !isRunner} />
           ))}
           {filtered.length === 0 && (
             <div className="flex flex-col items-center justify-center py-20 text-[#3A4A5A]">

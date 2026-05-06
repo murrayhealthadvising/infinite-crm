@@ -7,7 +7,7 @@ import {
 import { useApp } from '../context/AppContext'
 import clsx from 'clsx'
 
-const NAV = [
+const NAV_FULL = [
   { to: '/dashboard',    icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/leads',        icon: Users,            label: 'Leads' },
   { to: '/dial-bucket',  icon: Star,             label: 'Dial Bucket' },
@@ -23,8 +23,21 @@ const NAV = [
   { to: '/settings',     icon: Settings,         label: 'Settings' },
 ]
 
+// Runner-mode nav: focus on the work, hide lead-acquisition + analytics surfaces
+const NAV_RUNNER = [
+  { to: '/leads',       icon: Users,       label: 'Leads' },
+  { to: '/dial-bucket', icon: Star,        label: 'Dial Bucket' },
+  { to: '/pipeline',    icon: GitBranch,   label: 'Pipeline' },
+  { to: '/appointments',icon: Calendar,    label: 'Appointments' },
+  { to: '/follow-ups',  icon: Clock,       label: 'Follow-Ups' },
+  { to: '/tasks',       icon: CheckSquare, label: 'Tasks' },
+  null,
+  { to: '/settings',    icon: Settings,    label: 'Settings' },
+]
+
 export default function Sidebar() {
-  const { sidebarOpen, setSidebarOpen, stats, user, profile, signOut } = useApp()
+  const { sidebarOpen, setSidebarOpen, stats, user, profile, signOut, isRunner } = useApp()
+  const NAV = isRunner ? NAV_RUNNER : NAV_FULL
 
   return (
     <>
