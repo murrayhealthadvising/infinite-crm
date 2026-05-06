@@ -417,15 +417,17 @@ function NotesField({ value, onSave, placeholder }) {
 
   useEffect(() => { setText(value || ''); initialRef.current = value || '' }, [value])
 
-  // Compact when blurred (~1 line), auto-grow when focused. Animated by the
-  // CSS transition below for a smooth shrink/expand.
+  // Resting height ~6 lines so notes are readable at a glance; auto-grows
+  // when focused if content needs more room. Animated by the CSS transition
+  // below for a smooth expand/contract.
   useEffect(() => {
     if (!ref.current) return
+    const REST_H = 132 // ~6 lines at our padding/line-height
     if (focused) {
       ref.current.style.height = 'auto'
-      ref.current.style.height = Math.max(72, ref.current.scrollHeight) + 'px'
+      ref.current.style.height = Math.max(REST_H, ref.current.scrollHeight) + 'px'
     } else {
-      ref.current.style.height = '36px'
+      ref.current.style.height = REST_H + 'px'
     }
   }, [text, focused])
 
@@ -453,8 +455,8 @@ function NotesField({ value, onSave, placeholder }) {
         onFocus={handleFocus}
         onBlur={handleBlur}
         placeholder={placeholder}
-        rows={1}
-        className="w-full rounded-lg px-3 py-1.5 text-sm focus:outline-none resize-none overflow-hidden"
+        rows={6}
+        className="w-full rounded-lg px-3 py-2 text-sm focus:outline-none resize-none overflow-hidden"
         style={{
           color: '#E0E8F0',
           background: '#0B0F14',
