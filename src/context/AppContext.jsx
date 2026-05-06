@@ -129,17 +129,26 @@ export function AppProvider({ children }) {
     setLoading(false)
   }
 
-  // Tags
+  // Tags (pipeline stages) — per-account thanks to RLS on the tags table.
+  // If a freshly-signed-up agent has none yet, seed the 8 defaults so their
+  // pipeline isn't empty on first load. Runners are read-only against their
+  // lead-agent's stages, so no seeding for them.
   useEffect(() => {
     if (!session) return
     const loadTags = async () => {
       try {
         const { data } = await supabase.from('tags').select('*').order('sort_order')
-        if (data && data.length > 0) setTags(data)
+        if (data && data.length > 0) { setTags(data); return }
+        // First-login bootstrap: only for actual agents (not runners)
+        if (profile?.role === 'runner') { setTags([]); return }
+        const seed = DEFAULT_TAGS.map((t, i) => ({ ...t, user_id: session.user.id, sort_order: i }))
+        const { data: inserted, error } = await supabase.from('tags').insert(seed).select()
+        if (!error && inserted) setTags(inserted)
+        else setTags(DEFAULT_TAGS)
       } catch (e) { /* keep DEFAULT_TAGS */ }
     }
     loadTags()
-  }, [session?.user?.id])
+  }, [session?.user?.id, profile?.role])
 
   // ---- API exposed to consumers --------------------------------------------
   const signOut = async () => {
@@ -166,18 +175,29 @@ export function AppProvider({ children }) {
   }
 
   const addTag = async (tag) => {
-    const newTag = { ...tag, id: tag.label.toLowerCase().replace(/\s+/g, '-') + '-' + Date.now(), sort_order: tags.length }
+    const uid = session?.user?.id
+    const newTag = {
+      ...tag,
+      id: tag.label.toLowerCase().replace(/\s+/g, '-') + '-' + Date.now(),
+      sort_order: tags.length,
+      user_id: uid,
+    }
     try {
       const { data } = await supabase.from('tags').insert([newTag]).select().single()
       if (data) setTags(prev => [...prev, data])
     } catch (e) { setTags(prev => [...prev, newTag]) }
   }
+  // Tags table now uses composite key (id, user_id) — scope updates/deletes
+  // to the current user so RLS doesn't reject and we can't accidentally touch
+  // someone else's row of the same id.
   const updateTag = async (id, updates) => {
-    try { await supabase.from('tags').update(updates).eq('id', id) } catch {}
+    const uid = session?.user?.id
+    try { await supabase.from('tags').update(updates).eq('id', id).eq('user_id', uid) } catch {}
     setTags(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t))
   }
   const deleteTag = async (id) => {
-    try { await supabase.from('tags').delete().eq('id', id) } catch {}
+    const uid = session?.user?.id
+    try { await supabase.from('tags').delete().eq('id', id).eq('user_id', uid) } catch {}
     setTags(prev => prev.filter(t => t.id !== id))
   }
 
