@@ -405,39 +405,22 @@ function PricePill({ value, color, onSave }) {
   )
 }
 
-// Notes textarea: collapsed to a single line when not focused (so cards stay
-// scannable), auto-grows to fit content while focused, auto-saves on blur.
+// Notes textarea: fixed resting height (~6 lines), scrolls internally when
+// content overflows, user can drag the bottom-right corner to resize bigger.
+// No auto-grow — staying a consistent size keeps card scanning predictable.
 function NotesField({ value, onSave, placeholder }) {
-  const ref = useRef(null)
   const [text, setText] = useState(value || '')
-  const [focused, setFocused] = useState(false)
   const [saving, setSaving] = useState(false)
   const [savedTick, setSavedTick] = useState(false)
   const initialRef = useRef(value || '')
 
   useEffect(() => { setText(value || ''); initialRef.current = value || '' }, [value])
 
-  // Resting height ~6 lines so notes are readable at a glance; auto-grows
-  // when focused if content needs more room. Animated by the CSS transition
-  // below for a smooth expand/contract.
-  useEffect(() => {
-    if (!ref.current) return
-    const REST_H = 132 // ~6 lines at our padding/line-height
-    if (focused) {
-      ref.current.style.height = 'auto'
-      ref.current.style.height = Math.max(REST_H, ref.current.scrollHeight) + 'px'
-    } else {
-      ref.current.style.height = REST_H + 'px'
-    }
-  }, [text, focused])
-
   const handleFocus = (e) => {
-    setFocused(true)
     e.currentTarget.style.borderColor = '#00E5C3'
     e.currentTarget.style.background = '#0E141B'
   }
   const handleBlur = async (e) => {
-    setFocused(false)
     e.currentTarget.style.borderColor = '#2F3A4A'
     e.currentTarget.style.background = '#0B0F14'
     if (text === initialRef.current) return
@@ -449,24 +432,29 @@ function NotesField({ value, onSave, placeholder }) {
 
   return (
     <div className="relative" onClick={e => e.stopPropagation()}>
-      <textarea ref={ref}
+      <textarea
         value={text}
         onChange={e => setText(e.target.value)}
         onFocus={handleFocus}
         onBlur={handleBlur}
         placeholder={placeholder}
         rows={6}
-        className="w-full rounded-lg px-3 py-2 text-sm focus:outline-none resize-none overflow-hidden"
+        className="w-full rounded-lg px-3 py-2 text-sm focus:outline-none"
         style={{
           color: '#E0E8F0',
           background: '#0B0F14',
           border: '1px solid #2F3A4A',
           boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.45)',
-          transition: 'height 180ms cubic-bezier(0.4, 0, 0.2, 1), border-color 120ms, background-color 120ms',
+          height: '132px',
+          minHeight: '132px',
+          maxHeight: '600px',
+          resize: 'vertical',
+          overflowY: 'auto',
+          transition: 'border-color 120ms, background-color 120ms',
         }}
       />
       {(saving || savedTick) && (
-        <div className="absolute top-1.5 right-2 flex items-center gap-1 text-[10px] font-mono"
+        <div className="absolute top-1.5 right-6 flex items-center gap-1 text-[10px] font-mono pointer-events-none"
           style={{ color: savedTick ? '#00E5C3' : '#5A6A7A' }}>
           {saving && <span>saving…</span>}
           {savedTick && <><Check size={10} /> saved</>}

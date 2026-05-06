@@ -6,21 +6,15 @@ import { Phone, Mail, MapPin, Calendar, ArrowLeft, MessageSquare, PhoneCall, AtS
 import { format, formatDistanceToNow } from 'date-fns'
 import clsx from 'clsx'
 
-// Big notes panel — auto-grow, auto-save on blur, saved tick
+// Big notes panel — fixed resting height with internal scroll. User can drag
+// the bottom-right corner to expand it into a notepad as big as they want.
 function NotesEditor({ value, onSave }) {
-  const ref = useRef(null)
   const [text, setText] = useState(value || '')
   const [saving, setSaving] = useState(false)
   const [savedTick, setSavedTick] = useState(false)
   const initialRef = useRef(value || '')
 
   useEffect(() => { setText(value || ''); initialRef.current = value || '' }, [value])
-  useEffect(() => {
-    if (ref.current) {
-      ref.current.style.height = 'auto'
-      ref.current.style.height = Math.max(120, ref.current.scrollHeight) + 'px'
-    }
-  }, [text])
 
   const handleBlur = async () => {
     if (text === initialRef.current) return
@@ -38,16 +32,22 @@ function NotesEditor({ value, onSave }) {
           <span className="text-xs font-mono uppercase tracking-wider text-[#F59E0B]">Notes</span>
         </div>
         <div className="text-[10px] font-mono" style={{ color: savedTick ? '#00E5C3' : '#5A6A7A' }}>
-          {saving ? 'saving…' : savedTick ? <span className="inline-flex items-center gap-1"><Check size={10} /> saved</span> : 'auto-save on blur'}
+          {saving ? 'saving…' : savedTick ? <span className="inline-flex items-center gap-1"><Check size={10} /> saved</span> : 'drag corner to expand · auto-save'}
         </div>
       </div>
-      <textarea ref={ref}
+      <textarea
         value={text}
         onChange={e => setText(e.target.value)}
         onBlur={handleBlur}
         placeholder="Click here and start taking notes for this lead — phone calls, follow-ups, anything…"
-        className="w-full bg-transparent px-4 py-3 text-sm text-[#E5D9A8] placeholder-[#5A6A7A] focus:outline-none resize-none"
-        style={{ minHeight: '120px' }} />
+        className="w-full bg-transparent px-4 py-3 text-sm text-[#E5D9A8] placeholder-[#5A6A7A] focus:outline-none"
+        style={{
+          height: '220px',
+          minHeight: '160px',
+          maxHeight: '80vh',
+          resize: 'vertical',
+          overflowY: 'auto',
+        }} />
     </div>
   )
 }
