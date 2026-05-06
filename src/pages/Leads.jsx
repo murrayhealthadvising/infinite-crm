@@ -403,23 +403,39 @@ function PricePill({ value, color, onSave }) {
   )
 }
 
-// Auto-growing notes textarea with auto-save on blur + saved tick
+// Notes textarea: collapsed to a single line when not focused (so cards stay
+// scannable), auto-grows to fit content while focused, auto-saves on blur.
 function NotesField({ value, onSave, placeholder }) {
   const ref = useRef(null)
   const [text, setText] = useState(value || '')
+  const [focused, setFocused] = useState(false)
   const [saving, setSaving] = useState(false)
   const [savedTick, setSavedTick] = useState(false)
   const initialRef = useRef(value || '')
 
   useEffect(() => { setText(value || ''); initialRef.current = value || '' }, [value])
-  useEffect(() => {
-    if (ref.current) {
-      ref.current.style.height = 'auto'
-      ref.current.style.height = Math.max(64, ref.current.scrollHeight) + 'px'
-    }
-  }, [text])
 
-  const handleBlur = async () => {
+  // Compact when blurred (~1 line), auto-grow when focused. Animated by the
+  // CSS transition below for a smooth shrink/expand.
+  useEffect(() => {
+    if (!ref.current) return
+    if (focused) {
+      ref.current.style.height = 'auto'
+      ref.current.style.height = Math.max(72, ref.current.scrollHeight) + 'px'
+    } else {
+      ref.current.style.height = '36px'
+    }
+  }, [text, focused])
+
+  const handleFocus = (e) => {
+    setFocused(true)
+    e.currentTarget.style.borderColor = '#00E5C3'
+    e.currentTarget.style.background = '#0E141B'
+  }
+  const handleBlur = async (e) => {
+    setFocused(false)
+    e.currentTarget.style.borderColor = '#2F3A4A'
+    e.currentTarget.style.background = '#0B0F14'
     if (text === initialRef.current) return
     setSaving(true)
     try { await onSave(text); initialRef.current = text; setSavedTick(true); setTimeout(() => setSavedTick(false), 1800) }
@@ -432,22 +448,21 @@ function NotesField({ value, onSave, placeholder }) {
       <textarea ref={ref}
         value={text}
         onChange={e => setText(e.target.value)}
+        onFocus={handleFocus}
         onBlur={handleBlur}
         placeholder={placeholder}
-        rows={3}
-        className="w-full rounded-lg px-3 py-2.5 text-sm focus:outline-none resize-none overflow-hidden transition-colors"
+        rows={1}
+        className="w-full rounded-lg px-3 py-1.5 text-sm focus:outline-none resize-none overflow-hidden"
         style={{
           color: '#E0E8F0',
-          minHeight: '72px',
           background: '#0B0F14',
           border: '1px solid #2F3A4A',
           boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.45)',
+          transition: 'height 180ms cubic-bezier(0.4, 0, 0.2, 1), border-color 120ms, background-color 120ms',
         }}
-        onFocus={(e) => { e.currentTarget.style.borderColor = '#00E5C3'; e.currentTarget.style.background = '#0E141B' }}
-        onBlurCapture={(e) => { e.currentTarget.style.borderColor = '#2F3A4A'; e.currentTarget.style.background = '#0B0F14' }}
       />
       {(saving || savedTick) && (
-        <div className="absolute top-2 right-2 flex items-center gap-1 text-[10px] font-mono"
+        <div className="absolute top-1.5 right-2 flex items-center gap-1 text-[10px] font-mono"
           style={{ color: savedTick ? '#00E5C3' : '#5A6A7A' }}>
           {saving && <span>saving…</span>}
           {savedTick && <><Check size={10} /> saved</>}
