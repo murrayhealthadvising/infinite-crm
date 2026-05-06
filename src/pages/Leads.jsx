@@ -99,7 +99,8 @@ function TagPill({ stage, tags, onChange }) {
   const safeTags = Array.isArray(tags) && tags.length > 0 ? tags : [{ id: 'not-started', label: 'Not Started', color: '#8899AA', bg: '#1A2130' }]
   const tag = safeTags.find(t => t.id === stage) || safeTags[0]
   const ITEM_H = 40
-  const DROPDOWN_H = safeTags.length * ITEM_H + 8
+  const MAX_DROPDOWN_H = 320  // cap so it never blows past the viewport
+  const DROPDOWN_H = Math.min(safeTags.length * ITEM_H + 8, MAX_DROPDOWN_H)
 
   useEffect(() => {
     if (!open) return
@@ -128,8 +129,9 @@ function TagPill({ stage, tags, onChange }) {
   const dropdown = open ? (
     <div id="tag-portal"
       style={{ position: 'fixed', top: pos.top, left: pos.left, width: '192px',
+        maxHeight: MAX_DROPDOWN_H + 'px',
         background: '#0A0E14', border: '1px solid #1A2130', borderRadius: '12px',
-        boxShadow: '0 20px 40px rgba(0,0,0,0.6)', zIndex: 9999, overflow: 'hidden' }}>
+        boxShadow: '0 20px 40px rgba(0,0,0,0.6)', zIndex: 9999, overflowY: 'auto', overflowX: 'hidden' }}>
       {safeTags.map(t => (
         <button key={t.id}
           onClick={(e) => { e.stopPropagation(); onChange(t.id); setOpen(false) }}
