@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useApp } from '../context/AppContext'
+import { normalizePhone, displayPhone } from '../lib/phone'
 import StatusTag from '../components/StatusTag'
 import AddLeadModal from '../components/AddLeadModal'
 import {
@@ -519,7 +520,7 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
             {lead.phone && (
               <a href={`tel:${lead.phone}`} onClick={e => e.stopPropagation()}
                 className="text-sm font-mono hover:underline" style={{ color: safeColor }}>
-                {lead.phone}
+                {displayPhone(lead.phone)}
               </a>
             )}
             {lead.phone && (
@@ -728,7 +729,7 @@ function KanbanCol({ tag, leads, onLeadClick, onDrop }) {
             className="p-3 rounded-lg border cursor-pointer transition-colors group"
             style={{ background: tag.bg, borderColor: tag.color + '30' }}>
             <button className="text-sm font-medium text-white group-hover:underline text-left block truncate w-full">{leadName(lead) || '—'}</button>
-            <p className="text-xs font-mono mt-1" style={{ color: tag.color }}>{lead.phone || ''}</p>
+            <p className="text-xs font-mono mt-1" style={{ color: tag.color }}>{displayPhone(lead.phone) || ''}</p>
             <p className="text-xs text-[#3A4A5A] mt-1">{[lead.state, lead.zip].filter(Boolean).join(' · ')}{lead.source ? ` · ${lead.source}` : ''}</p>
           </div>
         ))}
@@ -831,14 +832,6 @@ const STATUS_MAP = {
   'long term': 'Long Term', 'future': 'Long Term', 'follow up later': 'Long Term',
 }
 const STATUSES = ['Not Started','Interested','Apt','Ghosted','Sold','Aged','Stop','Long Term']
-function normalizePhone(raw) {
-  if (!raw) return ''
-  const digits = String(raw).replace(/\D/g, '')
-  if (digits.length === 10) return `+1${digits}`
-  if (digits.length === 11 && digits[0] === '1') return `+${digits}`
-  if (digits.length > 6) return String(raw).trim()
-  return ''
-}
 function normalizeStatus(raw) {
   if (!raw) return 'Not Started'
   const lower = String(raw).trim().toLowerCase()
@@ -1397,7 +1390,7 @@ export default function Leads() {
             <p className="text-xs text-[#556677] mb-2">Preview (first 3 rows):</p>
             {importPreview.sample.map((r, i) => (
               <div key={i} className="text-xs text-[#8899AA] font-mono">
-                {r.name || '(no name)'} · {r.phone || '(no phone)'} · {r.status}
+                {r.name || '(no name)'} · {displayPhone(r.phone) || '(no phone)'} · {r.status}
                 {r.city && ` · ${r.city}, ${r.state || ''}`}
               </div>
             ))}

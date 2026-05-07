@@ -5,6 +5,7 @@ import {
   Phone, Copy, Check, Star, ChevronLeft, ChevronRight, ExternalLink,
   PhoneCall, MessageSquare, AtSign, StickyNote, Zap, X, Trash2,
 } from 'lucide-react'
+import { displayPhone } from '../lib/phone'
 
 const STAR_TAG = 'starred'
 
@@ -165,7 +166,7 @@ export default function DialBucket() {
                   <a href={`tel:${lead.phone}`}
                     className="flex items-center gap-3 px-5 py-4 rounded-xl text-2xl font-mono font-bold text-black flex-1 justify-center hover:opacity-90 transition-opacity"
                     style={{ background: `linear-gradient(135deg, ${sColor}, ${sColor}AA)` }}>
-                    <PhoneCall size={20} /> {lead.phone}
+                    <PhoneCall size={20} /> {displayPhone(lead.phone)}
                   </a>
                   <button onClick={copyPhone}
                     className="p-4 rounded-xl border border-[#1A2130] text-[#8899AA] hover:text-white"

@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useApp } from '../context/AppContext'
 import StatusTag from '../components/StatusTag'
 import { Phone, Mail, MapPin, Calendar, ArrowLeft, MessageSquare, PhoneCall, AtSign, StickyNote, ChevronDown, Zap, Send, User, Home, DollarSign, Heart, Pencil, Check, X } from 'lucide-react'
+import { normalizePhone, displayPhone } from '../lib/phone'
 import { format, formatDistanceToNow } from 'date-fns'
 import clsx from 'clsx'
 
@@ -236,8 +237,11 @@ export default function LeadDetail() {
   const fullName = leadFullName(lead)
 
   const field = (key) => (val) => {
-    if (typeof updateLead === 'function') updateLead(id, { [key]: val })
-    if (typeof addActivity === 'function') addActivity(id, 'note', `Updated ${key.replace(/_/g,' ')}: ${val}`)
+    // Phone gets normalized to +1XXXXXXXXXX before save (and any +1 the user
+    // pastes is collapsed automatically — see lib/phone.js)
+    const normalized = key === 'phone' ? normalizePhone(val) : val
+    if (typeof updateLead === 'function') updateLead(id, { [key]: normalized })
+    if (typeof addActivity === 'function') addActivity(id, 'note', `Updated ${key.replace(/_/g,' ')}: ${normalized}`)
   }
 
   const logActivity = async () => {
@@ -329,7 +333,7 @@ export default function LeadDetail() {
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
               <EditableField label="First Name" value={lead.first_name} icon={User} onSave={field('first_name')} />
               <EditableField label="Last Name" value={lead.last_name} icon={User} onSave={field('last_name')} />
-              <EditableField label="Phone" value={lead.phone} icon={Phone} onSave={field('phone')} />
+              <EditableField label="Phone" value={displayPhone(lead.phone)} icon={Phone} onSave={field('phone')} />
               <EditableField label="Email" value={lead.email} icon={Mail} onSave={field('email')} type="email" />
               <EditableField label="State" value={lead.state} icon={MapPin} onSave={field('state')} />
               <EditableField label="Source" value={lead.source} icon={AtSign} onSave={field('source')} />
