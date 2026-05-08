@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useApp } from '../context/AppContext'
 import { normalizePhone, displayPhone } from '../lib/phone'
+import { localTimeFor, localHourFor } from '../lib/timezone'
 import StatusTag from '../components/StatusTag'
 import AddLeadModal from '../components/AddLeadModal'
 import {
@@ -70,6 +71,28 @@ function useDragScroll() {
     }
   }, [])
   return ref
+}
+
+// Live "local time" for the lead based on state (with ZIP overrides for
+// multi-timezone states). Ticks every 30s. Tinted amber outside 8am–9pm
+// to signal "probably not a great time to call right now."
+function LocalTime({ lead }) {
+  const [tick, setTick] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => setTick(t => t + 1), 30000)
+    return () => clearInterval(id)
+  }, [])
+  const t = localTimeFor(lead)
+  if (!t) return null
+  const h = localHourFor(lead)
+  const offHours = h != null && (h < 8 || h >= 21)
+  return (
+    <span className="text-xs font-mono"
+      style={{ color: offHours ? '#F59E0B' : '#5A6A7A' }}
+      title={offHours ? "Outside typical 8a–9p window" : "Local time at this lead"}>
+      · {t}
+    </span>
+  )
 }
 
 // DOB tooltip
@@ -532,6 +555,7 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
           {lead.email && <p className="text-xs text-[#5A6A7A] truncate max-w-[200px] mb-1">{lead.email}</p>}
           <div className="flex items-center gap-1.5 mt-1 flex-wrap">
             <span className="text-xs text-[#5A6A7A]">{[lead.state, lead.zip].filter(Boolean).join(' ')}</span>
+            <LocalTime lead={lead} />
             <TextPill value={lead.campaign || lead.source} color={safeColor} onSave={(v) => onCampaignChange(lead.id, v)} placeholder="campaign" />
             <PricePill value={lead.price} color={safeColor} onSave={(v) => onPriceChange(lead.id, v)} />
             <RunnerPill value={lead.runner} color={safeColor} onSave={(v) => onRunnerChange(lead.id, v)} suggestions={runnerSuggestions} />
