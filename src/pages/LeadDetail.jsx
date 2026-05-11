@@ -118,6 +118,46 @@ function EditableField({ label, value, icon: Icon, onSave, type = 'text', option
   )
 }
 
+// Custom user-defined field row (lives in lead.custom_fields JSONB)
+function CustomFieldRow({ name, value, onUpdate, onDelete }) {
+  const [editing, setEditing] = useState(false)
+  const [val, setVal] = useState(value || '')
+  useEffect(() => setVal(value || ''), [value])
+
+  const save = () => { onUpdate(val); setEditing(false) }
+  const cancel = () => { setVal(value || ''); setEditing(false) }
+
+  return (
+    <div className="p-3 rounded-lg border border-[#1A2130] group relative" style={{ background: '#080B0F' }}>
+      <div className="flex items-center justify-between gap-2 mb-1">
+        <span className="text-[10px] font-mono uppercase tracking-wider text-[#A78BFA] truncate">{name}</span>
+        <button onClick={onDelete}
+          className="opacity-0 group-hover:opacity-100 text-[#3A4A5A] hover:text-[#EF4444] transition-colors flex-shrink-0"
+          title="Remove this field">
+          <X size={11} />
+        </button>
+      </div>
+      {editing ? (
+        <div className="flex items-center gap-1">
+          <input value={val} onChange={e => setVal(e.target.value)} autoFocus
+            onKeyDown={e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') cancel() }}
+            className="flex-1 bg-[#0E1318] border border-[#00E5C340] rounded px-2 py-1 text-sm text-white focus:outline-none min-w-0" />
+          <button onClick={save} className="p-1 text-[#00E5C3] flex-shrink-0"><Check size={13} /></button>
+          <button onClick={cancel} className="p-1 text-[#5A6A7A] flex-shrink-0"><X size={13} /></button>
+        </div>
+      ) : (
+        <div className="flex items-center justify-between">
+          <p className="text-sm text-white truncate">{val || <span className="text-[#3A4A5A]">—</span>}</p>
+          <button onClick={() => setEditing(true)}
+            className="opacity-0 group-hover:opacity-100 transition-opacity p-1 text-[#3A4A5A] hover:text-[#00E5C3] flex-shrink-0">
+            <Pencil size={11} />
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function leadFullName(lead) {
   if (lead?.name) return lead.name
   return [lead?.first_name, lead?.last_name].filter(Boolean).join(' ').trim() || 'this lead'
@@ -408,6 +448,40 @@ export default function LeadDetail() {
               <EditableField label="Zip" value={lead.zip} icon={MapPin} onSave={field('zip')} />
               <EditableField label="Source" value={lead.source} icon={AtSign} onSave={field('source')} />
               <EditableField label="Age" value={lead.age} icon={Heart} onSave={field('age')} type="number" />
+
+              {/* User-defined custom fields */}
+              {Object.entries(lead.custom_fields || {}).map(([key, value]) => (
+                <CustomFieldRow key={key}
+                  name={key}
+                  value={value}
+                  onUpdate={(v) => {
+                    const next = { ...(lead.custom_fields || {}), [key]: v }
+                    if (typeof updateLead === 'function') updateLead(id, { custom_fields: next })
+                  }}
+                  onDelete={() => {
+                    const next = { ...(lead.custom_fields || {}) }
+                    delete next[key]
+                    if (typeof updateLead === 'function') updateLead(id, { custom_fields: next })
+                  }}
+                />
+              ))}
+
+              {/* Add a new custom field — full-row dashed button */}
+              <button
+                onClick={() => {
+                  const raw = window.prompt('Field name (e.g. "Spouse Name", "Renewal Date", "Best time to call"):')
+                  const name = (raw || '').trim()
+                  if (!name) return
+                  if ((lead.custom_fields || {})[name] !== undefined) {
+                    alert('That field already exists on this lead.')
+                    return
+                  }
+                  const next = { ...(lead.custom_fields || {}), [name]: '' }
+                  if (typeof updateLead === 'function') updateLead(id, { custom_fields: next })
+                }}
+                className="col-span-2 lg:col-span-4 p-3 rounded-lg border border-dashed border-[#2A3547] text-sm text-[#5A6A7A] hover:text-white hover:border-[#A78BFA]/40 transition-colors">
+                + Add custom field
+              </button>
             </div>
           )}
         </div>

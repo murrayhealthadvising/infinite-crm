@@ -301,6 +301,7 @@ export function AppProvider({ children }) {
     'tags','stage','is_sold','user_id','created_at','last_activity',
     'runner',  // free-text attribution: who actually worked the lead
     'stage_changed_at',  // when the lead's stage was last updated (drives "time in stage" badge)
+    'custom_fields',  // user-defined {key: value} pairs the agent adds in Edit
   ])
   const sanitizeForInsert = (lead) => {
     const out = {}

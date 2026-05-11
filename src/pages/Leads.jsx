@@ -506,6 +506,7 @@ function NotesField({ value, onSave, placeholder }) {
 function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNoteBChange, onNavigate, onDelete, onPriceChange, onCampaignChange, onRunnerChange, onTagsChange, runnerSuggestions, tagSuggestions, canDelete = true }) {
   const { tags, getTag, splitNotes } = useApp()
   const [copied, setCopied] = useState(false)
+  const [nameCopied, setNameCopied] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const safeTags = Array.isArray(tags) && tags.length > 0 ? tags : [{ id: 'not-started', label: 'Not Started', color: '#8899AA', bg: '#1A2130' }]
   const stageId = leadStageId(lead, safeTags)
@@ -519,6 +520,11 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
     if (lead.phone) navigator.clipboard.writeText(lead.phone)
     setCopied(true); setTimeout(() => setCopied(false), 1500)
   }
+  const copyName = (e) => {
+    e.stopPropagation()
+    if (fullName && fullName !== '—') navigator.clipboard.writeText(fullName)
+    setNameCopied(true); setTimeout(() => setNameCopied(false), 1500)
+  }
 
   return (
     <div className="rounded-xl border overflow-hidden transition-all duration-200"
@@ -531,22 +537,33 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
         </div>
 
         <div>
-          <button onClick={() => onNavigate(lead.id)}
-            className="text-sm font-semibold text-white hover:underline text-left mb-1 block"
+          {/* Name: clicking copies to clipboard (does NOT navigate or dial) */}
+          <button onClick={copyName}
+            className="text-sm font-semibold text-left mb-1 inline-flex items-center gap-1.5"
             style={{ color: 'white' }}
-            onMouseEnter={e => e.target.style.color = safeColor}
-            onMouseLeave={e => e.target.style.color = 'white'}>
+            onMouseEnter={e => e.currentTarget.style.color = safeColor}
+            onMouseLeave={e => e.currentTarget.style.color = 'white'}
+            title="Click to copy name">
             {fullName}
+            {nameCopied
+              ? <Check size={11} className="text-[#00E5C3] flex-shrink-0" />
+              : <Copy size={10} className="text-[#3A4A5A] flex-shrink-0 opacity-60" />}
           </button>
           <div className="flex items-center gap-1.5 mb-1">
+            {/* Phone: clicking opens the lead detail (does NOT dial). Only the
+                Call button dials. The little Copy icon copies the number. */}
             {lead.phone && (
-              <a href={`tel:${lead.phone}`} onClick={e => e.stopPropagation()}
-                className="text-sm font-mono hover:underline" style={{ color: safeColor }}>
+              <button onClick={(e) => { e.stopPropagation(); onNavigate(lead.id) }}
+                className="text-sm font-mono hover:underline"
+                style={{ color: safeColor }}
+                title="Click to open this lead">
                 {displayPhone(lead.phone)}
-              </a>
+              </button>
             )}
             {lead.phone && (
-              <button onClick={copyPhone} className="text-[#3A4A5A] hover:text-[#8899AA] transition-colors">
+              <button onClick={copyPhone}
+                className="text-[#3A4A5A] hover:text-[#8899AA] transition-colors"
+                title="Copy phone (with +1)">
                 {copied ? <Check size={11} className="text-[#00E5C3]" /> : <Copy size={11} />}
               </button>
             )}
@@ -832,6 +849,7 @@ const LEADS_COLUMNS = new Set([
   'premium','carrier','current_carrier','effective_date','plan_choice','monthly_budget','best_contact_time',
   'tags','stage','is_sold','user_id','created_at','last_activity',
   'runner',  // free-text attribution: who actually worked the lead
+  'stage_changed_at','custom_fields',
 ])
 const STATUS_MAP = {
   'new': 'Not Started', 'fresh': 'Not Started', 'new lead': 'Not Started',
