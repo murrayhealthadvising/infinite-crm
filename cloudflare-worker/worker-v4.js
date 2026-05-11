@@ -41,10 +41,38 @@ function decodeQuotedPrintable(s) {
     .replace(/=([0-9A-F]{2})/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
 }
 
+// Strip HTML tags + leftover quoted-printable artifacts. Safety net used both
+// when finalizing the extracted body AND on each individual captured field.
+function stripHtmlAndQp(s) {
+  if (!s) return ''
+  return String(s)
+    // QP soft line breaks
+    .replace(/=\r?\n/g, '')
+    // QP hex sequences (=3D → =, =20 → space, etc.)
+    .replace(/=([0-9A-F]{2})/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
+    // Drop <style>/<script> blocks
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    // Convert <br> to newline, then strip every other tag (no leftover <
+    // even if the tag is unterminated)
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]*>?/g, '')
+    // Common HTML entities seen in marketplace emails
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/g, "'")
+}
+
 // Find the text/plain (preferred) or text/html part of a MIME message.
-// Returns the decoded body (plain text). Strips HTML tags if html-only.
+// Returns the decoded body (plain text). Handles NESTED multipart by recursing
+// into any multipart/* child part — necessary for USHA Lead Arena emails that
+// ship multipart/mixed → multipart/alternative → html.
 function extractBody(raw) {
   const headerEnd = raw.indexOf('\r\n\r\n')
+  if (headerEnd < 0) return stripHtmlAndQp(raw)
   const headers = raw.slice(0, headerEnd)
   let body = raw.slice(headerEnd + 4)
 
@@ -58,9 +86,18 @@ function extractBody(raw) {
     for (const part of parts) {
       const pHeaderEnd = part.indexOf('\r\n\r\n')
       if (pHeaderEnd < 0) continue
-      const pHeaders = part.slice(0, pHeaderEnd).toLowerCase()
+      const pHeadersRaw = part.slice(0, pHeaderEnd)
+      const pHeaders = pHeadersRaw.toLowerCase()
       let pBody = part.slice(pHeaderEnd + 4)
       const cte = (pHeaders.match(/content-transfer-encoding:\s*([^\r\n]+)/) || [])[1] || ''
+      // Recurse into nested multipart — common in marketplace emails where the
+      // outer is multipart/mixed and the actual text lives inside an inner
+      // multipart/alternative.
+      if (pHeaders.match(/content-type:\s*multipart\//)) {
+        const inner = extractBody(part)
+        if (inner) plain += inner + '\n'
+        continue
+      }
       if (cte.includes('quoted-printable')) pBody = decodeQuotedPrintable(pBody)
       else if (cte.includes('base64')) {
         try { pBody = atob(pBody.replace(/\s+/g, '')) } catch {}
@@ -69,8 +106,8 @@ function extractBody(raw) {
       else if (pHeaders.includes('text/html')) html += pBody + '\n'
     }
     if (plain) return plain
-    if (html) return html.replace(/<style[\s\S]*?<\/style>/gi, '').replace(/<[^>]+>/g, '\n')
-    return body
+    if (html) return stripHtmlAndQp(html)
+    return stripHtmlAndQp(body)
   }
 
   // Single-part
@@ -79,7 +116,7 @@ function extractBody(raw) {
   else if (cte.toLowerCase().includes('base64')) {
     try { body = atob(body.replace(/\s+/g, '')) } catch {}
   }
-  if (contentType.includes('html')) body = body.replace(/<style[\s\S]*?<\/style>/gi, '').replace(/<[^>]+>/g, '\n')
+  if (contentType.includes('html')) body = stripHtmlAndQp(body)
   return body
 }
 
@@ -93,7 +130,11 @@ function fieldGetter(text) {
     const re = new RegExp('(?:^|\\n)[ \\t]*' + escaped + '[ \\t]*:[ \\t]*([^\\n\\r]+)', 'i')
     const m = text.match(re)
     if (!m) return ''
-    const v = m[1].trim()
+    // Safety net: clean any QP/HTML residue out of the captured value before
+    // we trust it. Helps when the upstream MIME parsing missed something
+    // (e.g. a nested multipart or unflagged QP-encoded HTML chunk).
+    let v = stripHtmlAndQp(m[1]).trim()
+    if (!v) return ''
     // Defensive: if the value happens to look exactly like another USHA label
     // (e.g. 'DOB:' or 'Business Name:'), treat it as empty rather than store
     // the leaked label as the value.
