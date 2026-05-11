@@ -507,6 +507,7 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
   const { tags, getTag, splitNotes } = useApp()
   const [copied, setCopied] = useState(false)
   const [nameCopied, setNameCopied] = useState(false)
+  const [emailCopied, setEmailCopied] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const safeTags = Array.isArray(tags) && tags.length > 0 ? tags : [{ id: 'not-started', label: 'Not Started', color: '#8899AA', bg: '#1A2130' }]
   const stageId = leadStageId(lead, safeTags)
@@ -524,6 +525,11 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
     e.stopPropagation()
     if (fullName && fullName !== '—') navigator.clipboard.writeText(fullName)
     setNameCopied(true); setTimeout(() => setNameCopied(false), 1500)
+  }
+  const copyEmail = (e) => {
+    e.stopPropagation()
+    if (lead.email) navigator.clipboard.writeText(lead.email)
+    setEmailCopied(true); setTimeout(() => setEmailCopied(false), 1500)
   }
 
   return (
@@ -568,7 +574,16 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
               </button>
             )}
           </div>
-          {lead.email && <p className="text-xs text-[#5A6A7A] truncate max-w-[200px] mb-1">{lead.email}</p>}
+          {lead.email && (
+            <button onClick={copyEmail}
+              title={`Click to copy · ${lead.email}`}
+              className="text-xs text-[#5A6A7A] hover:text-[#8899AA] transition-colors mb-1 inline-flex items-center gap-1 max-w-full text-left">
+              <span className="truncate min-w-0">{lead.email}</span>
+              {emailCopied
+                ? <Check size={10} className="text-[#00E5C3] flex-shrink-0" />
+                : <Copy size={10} className="text-[#3A4A5A] flex-shrink-0 opacity-60" />}
+            </button>
+          )}
           <div className="flex items-center gap-1.5 mt-1 flex-wrap">
             <span className="text-xs text-[#5A6A7A]">{[lead.state, lead.zip].filter(Boolean).join(' ')}</span>
             <LocalTime lead={lead} />
