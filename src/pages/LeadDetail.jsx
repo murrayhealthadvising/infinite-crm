@@ -4,6 +4,7 @@ import { useApp } from '../context/AppContext'
 import StatusTag from '../components/StatusTag'
 import { Phone, Mail, MapPin, Calendar, ArrowLeft, MessageSquare, PhoneCall, AtSign, StickyNote, ChevronDown, Zap, Send, User, Home, DollarSign, Heart, Pencil, Check, X } from 'lucide-react'
 import { normalizePhone, displayPhone } from '../lib/phone'
+import { localTimeFor, localHourFor } from '../lib/timezone'
 import { format, formatDistanceToNow } from 'date-fns'
 import clsx from 'clsx'
 
@@ -202,6 +203,8 @@ export default function LeadDetail() {
   const [logNote, setLogNote] = useState('')
   const [editStage, setEditStage] = useState(false)
   const [leadActivities, setLeadActivities] = useState([])
+  const [editContact, setEditContact] = useState(false)
+  const lastCallRef = useRef(0)
 
   useEffect(() => {
     if (id && typeof getLeadActivities === 'function') {
@@ -252,41 +255,78 @@ export default function LeadDetail() {
     setLogNote('')
   }
 
+  // Log a call timestamp when the agent presses Call. Coalesced so spamming
+  // the call button doesn't fill the timeline — only one log per 15 min.
+  const logCall = async () => {
+    const now = Date.now()
+    if (now - lastCallRef.current < 15 * 60 * 1000) return
+    lastCallRef.current = now
+    if (typeof addActivity !== 'function') return
+    try {
+      const entry = await addActivity(id, 'call', `Called ${displayPhone(lead.phone) || lead.phone || ''}`.trim())
+      if (entry) setLeadActivities(prev => [entry, ...prev])
+    } catch {}
+  }
+
+  // Most-recent call activity → "Last called 2h ago" badge
+  const lastCallAt = (() => {
+    const calls = (leadActivities || []).filter(a => a?.type === 'call')
+    if (!calls.length) return null
+    const t = new Date(calls[0].created_at).getTime()
+    return isFinite(t) ? t : null
+  })()
+  const lastCallLabel = lastCallAt ? formatDistanceToNow(new Date(lastCallAt), { addSuffix: true }) : null
+
+  const tzTime = localTimeFor(lead)
+  const tzHour = localHourFor(lead)
+  const tzOffHours = tzHour != null && (tzHour < 8 || tzHour >= 21)
+
   return (
-    <div className="flex h-full overflow-hidden animate-fade-in">
-      {/* Main — scrollable */}
-      <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-[#1A2130] flex-shrink-0">
-          <div className="flex items-center gap-4">
-            <button onClick={goBack} className="p-1.5 rounded-lg text-[#5A6A7A] hover:text-white hover:bg-[#1A2130] transition-colors" title="Back">
-              <ArrowLeft size={16} />
-            </button>
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0"
-                style={{ background: (tag?.color || '#5A6A7A') + '25', color: tag?.color || '#5A6A7A' }}>
-                {initials}
-              </div>
-              <div>
-                <h1 className="text-lg font-display font-bold text-white">{fullName}</h1>
-                <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                  <StatusTag stage={lead.stage} status={lead.status} size="sm" />
-                  <span className="text-xs text-[#5A6A7A]">{[lead.source, lead.state].filter(Boolean).join(' · ') || '—'}</span>
-                  {lead.created_at && (
-                    <span className="text-xs text-[#3A4A5A]">· added {(() => { try { return format(new Date(lead.created_at), 'MMM d, yyyy') } catch { return '' } })()}</span>
-                  )}
-                </div>
-              </div>
+    <div className="flex flex-col h-full overflow-hidden animate-fade-in">
+      {/* Header — back, name, prominent Call, stage move */}
+      <div className="flex items-center justify-between px-6 py-4 border-b border-[#1A2130] flex-shrink-0 gap-4">
+        <div className="flex items-center gap-3 min-w-0">
+          <button onClick={goBack} className="p-1.5 rounded-lg text-[#5A6A7A] hover:text-white hover:bg-[#1A2130] transition-colors flex-shrink-0" title="Back">
+            <ArrowLeft size={16} />
+          </button>
+          <div className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0"
+            style={{ background: (tag?.color || '#5A6A7A') + '25', color: tag?.color || '#5A6A7A' }}>
+            {initials}
+          </div>
+          <div className="min-w-0">
+            <h1 className="text-lg font-display font-bold text-white truncate">{fullName}</h1>
+            <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+              <StatusTag stage={lead.stage} status={lead.status} size="sm" />
+              {tzTime && (
+                <span className="text-xs font-mono"
+                  style={{ color: tzOffHours ? '#F59E0B' : '#5A6A7A' }}
+                  title={tzOffHours ? 'Outside 8a–9p local time' : 'Local time'}>
+                  · {tzTime}
+                </span>
+              )}
+              {lastCallLabel && (
+                <span className="text-xs text-[#5A6A7A]">· last called {lastCallLabel}</span>
+              )}
             </div>
           </div>
-          {/* Stage changer */}
+        </div>
+
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {lead.phone && (
+            <a href={`tel:${lead.phone}`}
+              onClick={logCall}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold text-black transition-opacity hover:opacity-90"
+              style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
+              <PhoneCall size={14} /> Call {displayPhone(lead.phone)}
+            </a>
+          )}
           <div className="relative">
             <button onClick={() => setEditStage(!editStage)}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-[#1A2130] text-sm text-[#8899AA] hover:border-[#2A3547] transition-colors">
+              className="flex items-center gap-2 px-3 py-2 rounded-lg border border-[#1A2130] text-sm text-[#8899AA] hover:border-[#2A3547] transition-colors">
               Move stage <ChevronDown size={13} className={clsx('transition-transform', editStage && 'rotate-180')} />
             </button>
             {editStage && (
-              <div className="absolute right-0 top-full mt-1 w-44 rounded-xl border border-[#1A2130] overflow-hidden z-20 shadow-xl" style={{ background: '#0E1318' }}>
+              <div className="absolute right-0 top-full mt-1 w-44 rounded-xl border border-[#1A2130] overflow-hidden z-20 shadow-xl max-h-80 overflow-y-auto" style={{ background: '#0E1318' }}>
                 {safeTags.map(t => (
                   <button key={t.id} onClick={() => { if (typeof updateLeadStage === 'function') updateLeadStage(id, t.id); setEditStage(false) }}
                     className="w-full flex items-center gap-2 px-3 py-2.5 text-sm hover:bg-[#1A2130] transition-colors"
@@ -300,113 +340,77 @@ export default function LeadDetail() {
             )}
           </div>
         </div>
+      </div>
 
-        {/* Scrollable content */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+      {/* Body */}
+      <div className="flex-1 overflow-y-auto p-6 space-y-5 max-w-5xl mx-auto w-full">
 
-          {/* Notes — big, prominent, top of detail page. Split mode shows
-              two editors side-by-side; second one starts blank for every lead. */}
-          {splitNotes ? (
-            <div className="grid grid-cols-2 gap-3">
-              <NotesEditor
-                value={lead.notes}
-                onSave={(v) => typeof updateLead === 'function' ? updateLead(id, { notes: v }) : Promise.resolve()}
-              />
-              <NotesEditor
-                value={lead.notes_b}
-                onSave={(v) => typeof updateLead === 'function' ? updateLead(id, { notes_b: v }) : Promise.resolve()}
-              />
-            </div>
-          ) : (
+        {/* Notes — big notepad, primary surface */}
+        {splitNotes ? (
+          <div className="grid grid-cols-2 gap-3">
             <NotesEditor
               value={lead.notes}
               onSave={(v) => typeof updateLead === 'function' ? updateLead(id, { notes: v }) : Promise.resolve()}
             />
-          )}
+            <NotesEditor
+              value={lead.notes_b}
+              onSave={(v) => typeof updateLead === 'function' ? updateLead(id, { notes_b: v }) : Promise.resolve()}
+            />
+          </div>
+        ) : (
+          <NotesEditor
+            value={lead.notes}
+            onSave={(v) => typeof updateLead === 'function' ? updateLead(id, { notes: v }) : Promise.resolve()}
+          />
+        )}
 
-          {/* Editable contact info */}
-          <div>
-            <div className="flex items-center gap-2 mb-3">
-              <span className="text-xs font-mono uppercase tracking-wider text-[#5A6A7A]">Contact Info</span>
-              <span className="text-[10px] text-[#3A4A5A]">— hover any field to edit</span>
-            </div>
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        {/* Sold product (only on sold stage) */}
+        {lead.plan_choice && lead.stage === 'sold' && (
+          <div className="p-4 rounded-xl border border-[#00E5C330]" style={{ background: '#00E5C308' }}>
+            <p className="text-[10px] font-mono uppercase tracking-wider text-[#00E5C3] mb-2">Sold — Product</p>
+            <p className="text-sm text-[#C0D0E0] whitespace-pre-wrap">{lead.plan_choice}</p>
+            <button
+              onClick={() => {
+                const v = prompt('Update product details:', lead.plan_choice || '')
+                if (v !== null && typeof updateLead === 'function') updateLead(id, { plan_choice: v })
+              }}
+              className="mt-2 text-[10px] text-[#00E5C3] hover:underline">
+              Edit
+            </button>
+          </div>
+        )}
+
+        {/* Vendor comments (raw from marketplace) */}
+        {lead.comments && (
+          <div className="p-4 rounded-lg border border-[#F59E0B20]" style={{ background: '#F59E0B08' }}>
+            <p className="text-[10px] font-mono uppercase tracking-wider text-[#F59E0B] mb-2">Marketplace Comments</p>
+            <p className="text-sm text-[#C0D0E0]">{lead.comments}</p>
+          </div>
+        )}
+
+        {/* Edit contact details — collapsed by default. Click to expand. */}
+        <div className="rounded-xl border border-[#1A2130]" style={{ background: '#0E1318' }}>
+          <button
+            onClick={() => setEditContact(v => !v)}
+            className="w-full flex items-center justify-between px-4 py-3 text-left">
+            <span className="text-xs font-mono uppercase tracking-wider text-[#5A6A7A]">
+              Edit contact details
+            </span>
+            <ChevronDown size={13} className={clsx('text-[#5A6A7A] transition-transform', editContact && 'rotate-180')} />
+          </button>
+          {editContact && (
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 px-4 pb-4">
               <EditableField label="First Name" value={lead.first_name} icon={User} onSave={field('first_name')} />
               <EditableField label="Last Name" value={lead.last_name} icon={User} onSave={field('last_name')} />
               <EditableField label="Phone" value={displayPhone(lead.phone)} icon={Phone} onSave={field('phone')} />
               <EditableField label="Email" value={lead.email} icon={Mail} onSave={field('email')} type="email" />
               <EditableField label="State" value={lead.state} icon={MapPin} onSave={field('state')} />
+              <EditableField label="Zip" value={lead.zip} icon={MapPin} onSave={field('zip')} />
               <EditableField label="Source" value={lead.source} icon={AtSign} onSave={field('source')} />
-              <EditableField label="DOB" value={lead.dob} icon={Heart} onSave={field('dob')} type="date" />
-              <EditableField label="Agent" value={lead.agent} icon={User} onSave={field('agent')} />
-            </div>
-          </div>
-
-
-          {/* Sold info — only render if there's a plan_choice (set via Sold modal) */}
-          {lead.plan_choice && lead.stage === 'sold' && (
-            <div className="p-4 rounded-xl border border-[#00E5C330]" style={{ background: '#00E5C308' }}>
-              <p className="text-[10px] font-mono uppercase tracking-wider text-[#00E5C3] mb-2">Sold — Product</p>
-              <p className="text-sm text-[#C0D0E0] whitespace-pre-wrap">{lead.plan_choice}</p>
-              <button
-                onClick={() => {
-                  const v = prompt('Update product details:', lead.plan_choice || '')
-                  if (v !== null && typeof updateLead === 'function') updateLead(id, { plan_choice: v })
-                }}
-                className="mt-2 text-[10px] text-[#00E5C3] hover:underline">
-                Edit
-              </button>
+              <EditableField label="Age" value={lead.age} icon={Heart} onSave={field('age')} type="number" />
             </div>
           )}
-
-          {/* Comments from lead vendor */}
-          {lead.comments && (
-            <div className="p-4 rounded-lg border border-[#F59E0B20]" style={{ background: '#F59E0B08' }}>
-              <p className="text-[10px] font-mono uppercase tracking-wider text-[#F59E0B] mb-2">Lead Vendor Comments</p>
-              <p className="text-sm text-[#C0D0E0]">{lead.comments}</p>
-            </div>
-          )}
-
-          {/* Log activity */}
-          <div className="p-4 rounded-xl border border-[#1A2130]" style={{ background: '#0E1318' }}>
-            <p className="text-xs font-mono uppercase tracking-wider text-[#5A6A7A] mb-3">Log Activity</p>
-            <div className="flex gap-2 mb-3 flex-wrap">
-              {Object.entries(ACTIVITY_ICONS).map(([type, Icon]) => (
-                <button key={type} onClick={() => setLogType(type)}
-                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs capitalize transition-colors border"
-                  style={logType === type
-                    ? { borderColor: ACTIVITY_COLORS[type] + '60', background: ACTIVITY_COLORS[type] + '15', color: ACTIVITY_COLORS[type] }
-                    : { borderColor: '#1A2130', color: '#5A6A7A' }}>
-                  <Icon size={12} />{type}
-                </button>
-              ))}
-            </div>
-            <div className="flex gap-2">
-              <input value={logNote} onChange={e => setLogNote(e.target.value)} onKeyDown={e => e.key === 'Enter' && logActivity()}
-                placeholder={`Log a ${logType}...`}
-                className="flex-1 bg-[#080B0F] border border-[#1A2130] rounded-lg px-3 py-2 text-sm text-white placeholder-[#3A4A5A] focus:outline-none focus:border-[#00E5C340]" />
-              <button onClick={logActivity}
-                className="px-4 py-2 rounded-lg text-sm font-medium text-black transition-opacity hover:opacity-80"
-                style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>Log</button>
-            </div>
-          </div>
-
-          {/* Timeline */}
-          <div>
-            <p className="text-xs font-mono uppercase tracking-wider text-[#5A6A7A] mb-4">Activity Timeline</p>
-            {leadActivities.length > 0
-              ? leadActivities.map(a => <ActivityEntry key={a.id} activity={a} />)
-              : <div className="flex items-center justify-center h-16 border border-dashed border-[#1A2130] rounded-lg">
-                  <p className="text-sm text-[#3A4A5A]">No activity yet</p>
-                </div>
-            }
-          </div>
         </div>
-      </div>
-
-      {/* AI Panel */}
-      <div className="w-72 border-l border-[#1A2130] flex flex-col flex-shrink-0" style={{ background: '#0A0E14' }}>
-        <AIAssistant lead={lead} />
       </div>
     </div>
   )

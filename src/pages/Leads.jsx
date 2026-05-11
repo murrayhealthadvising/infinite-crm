@@ -10,7 +10,7 @@ import AddLeadModal from '../components/AddLeadModal'
 import {
   Search, Plus, LayoutList, Columns, Phone, Copy, Home, DollarSign, Calendar,
   ExternalLink, ChevronDown, ChevronUp, X, Users, Check, Download, Upload,
-  Square, CheckSquare, AlertCircle, CheckCircle, Trash2, AlertTriangle, Star,
+  Square, CheckSquare, AlertCircle, CheckCircle, Trash2, AlertTriangle,
 } from 'lucide-react'
 import { format, formatDistanceToNow, differenceInYears, parseISO } from 'date-fns'
 import clsx from 'clsx'
@@ -503,11 +503,10 @@ function NotesField({ value, onSave, placeholder }) {
 // ───────────────────────────────────────────────────────────────────────────
 // Lead card
 // ───────────────────────────────────────────────────────────────────────────
-function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNoteBChange, onNavigate, onDelete, onPriceChange, onCampaignChange, onRunnerChange, onTagsChange, onToggleStar, runnerSuggestions, tagSuggestions, canDelete = true }) {
+function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNoteBChange, onNavigate, onDelete, onPriceChange, onCampaignChange, onRunnerChange, onTagsChange, runnerSuggestions, tagSuggestions, canDelete = true }) {
   const { tags, getTag, splitNotes } = useApp()
   const [copied, setCopied] = useState(false)
   const [expanded, setExpanded] = useState(false)
-  const starred = Array.isArray(lead.tags) && lead.tags.includes('starred')
   const safeTags = Array.isArray(tags) && tags.length > 0 ? tags : [{ id: 'not-started', label: 'Not Started', color: '#8899AA', bg: '#1A2130' }]
   const stageId = leadStageId(lead, safeTags)
   const tag = (typeof getTag === 'function' ? getTag(stageId) : null) || safeTags.find(t => t.id === stageId) || safeTags[0]
@@ -622,13 +621,6 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
         </div>
 
         <div className="flex flex-col items-end gap-1.5 pt-0.5">
-          <button
-            onClick={(e) => { e.stopPropagation(); onToggleStar?.(lead) }}
-            className="p-1.5 rounded-lg transition-colors"
-            style={{ color: starred ? '#F59E0B' : '#3A4A5A' }}
-            title={starred ? 'Remove from Dial Bucket' : 'Add to Dial Bucket'}>
-            <Star size={14} fill={starred ? '#F59E0B' : 'none'} />
-          </button>
           <button onClick={() => onNavigate(lead.id)}
             className="p-1.5 rounded-lg text-[#3A4A5A] hover:text-white transition-colors" title="Open detail">
             <ExternalLink size={14} />
@@ -1280,13 +1272,6 @@ export default function Leads() {
     safeLeads.flatMap(l => Array.isArray(l.tags) ? l.tags : []).filter(t => t && t !== 'starred')
   )).sort((a, b) => a.localeCompare(b))
 
-  const handleToggleStar = async (lead) => {
-    if (typeof updateLead !== 'function') return
-    const tags = Array.isArray(lead.tags) ? [...lead.tags] : []
-    const next = tags.includes('starred') ? tags.filter(t => t !== 'starred') : [...tags, 'starred']
-    await updateLead(lead.id, { tags: next })
-  }
-
   const handleDeleteOne = async (id) => {
     if (typeof deleteLead !== 'function') return
     const ok = await deleteLead(id)
@@ -1474,7 +1459,6 @@ export default function Leads() {
               runnerSuggestions={runnerSuggestions}
               onTagsChange={handleTagsChange}
               tagSuggestions={tagSuggestions}
-              onToggleStar={handleToggleStar}
               onNavigate={id => navigate(`/leads/${id}`)}
               onDelete={handleDeleteOne}
               canDelete={can?.deleteLeads !== false && !isRunner} />

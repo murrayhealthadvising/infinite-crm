@@ -280,7 +280,9 @@ export function AppProvider({ children }) {
       else if (STATUS_LABELS.includes(newStage)) { stageLabel = newStage; stageId = statusToStageId[newStage] || newStage }
       else { stageId = newStage; stageLabel = newStage }
     }
-    await updateLead(leadId, { stage: stageId })
+    // Stamp stage_changed_at so the "Xd in stage" badge on Pipeline cards
+    // tracks how long the lead has been sitting in this bucket.
+    await updateLead(leadId, { stage: stageId, stage_changed_at: new Date().toISOString() })
     try { await addActivity(leadId, 'status', `Stage changed to: ${stageLabel || stageId}`) } catch {}
     if (stageId === 'sold') {
       const lead = leads.find(l => l.id === leadId)
@@ -298,6 +300,7 @@ export function AppProvider({ children }) {
     'premium','carrier','current_carrier','effective_date','plan_choice','monthly_budget','best_contact_time',
     'tags','stage','is_sold','user_id','created_at','last_activity',
     'runner',  // free-text attribution: who actually worked the lead
+    'stage_changed_at',  // when the lead's stage was last updated (drives "time in stage" badge)
   ])
   const sanitizeForInsert = (lead) => {
     const out = {}

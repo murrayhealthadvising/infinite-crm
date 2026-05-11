@@ -15,7 +15,6 @@ import LeadROI from './pages/ROI'
 import Settings from './pages/Settings'
 import LeadDetail from './pages/LeadDetail'
 import Admin from './pages/Admin'
-import DialBucket from './pages/DialBucket'
 import SoldDetailsModal from './components/SoldDetailsModal'
 
 class ErrorBoundary extends Component {
@@ -84,7 +83,8 @@ function AuthGate() {
             <Route path="dashboard" element={<Dashboard />} />
             <Route path="leads" element={<Leads />} />
             <Route path="leads/:id" element={<LeadDetail />} />
-            <Route path="dial-bucket" element={<DialBucket />} />
+            {/* Old /dial-bucket route redirects to /pipeline — buckets are stages now */}
+            <Route path="dial-bucket" element={<Navigate to="/pipeline" replace />} />
             <Route path="pipeline" element={<Pipeline />} />
             <Route path="appointments" element={<Appointments />} />
             <Route path="follow-ups" element={<FollowUps />} />

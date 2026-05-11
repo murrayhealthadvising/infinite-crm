@@ -2,46 +2,125 @@ import { useNavigate } from 'react-router-dom'
 import { useApp } from '../context/AppContext'
 import StatusTag from '../components/StatusTag'
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { formatDistanceToNow } from 'date-fns'
-import { GripHorizontal } from 'lucide-react'
+import { formatDistanceToNow, formatDistanceToNowStrict } from 'date-fns'
+import { GripHorizontal, Phone } from 'lucide-react'
 import clsx from 'clsx'
+import { displayPhone } from '../lib/phone'
+import { localTimeFor, localHourFor } from '../lib/timezone'
 
 function safeRel(d) { if (!d) return ''; const dt = new Date(d); if (isNaN(dt.getTime())) return ''; try { return formatDistanceToNow(dt, { addSuffix: true }) } catch { return '' } }
+// Strict "5d", "2h", "3mo" form for the time-in-stage badge
+function shortAge(d) {
+  if (!d) return ''
+  const dt = new Date(d)
+  if (isNaN(dt.getTime())) return ''
+  try {
+    return formatDistanceToNowStrict(dt, { roundingMethod: 'floor' })
+      .replace('seconds', 's').replace('second', 's')
+      .replace('minutes', 'm').replace('minute', 'm')
+      .replace('hours', 'h').replace('hour', 'h')
+      .replace('days', 'd').replace('day', 'd')
+      .replace('months', 'mo').replace('month', 'mo')
+      .replace('years', 'y').replace('year', 'y')
+      .replace(/\s+/g, '')
+  } catch { return '' }
+}
 function leadName(lead) { if (lead?.name) return lead.name; return [lead?.first_name, lead?.last_name].filter(Boolean).join(' ').trim() || '—' }
 function leadInitials(lead) { const n = leadName(lead); if (n === '—' || !n) return '?'; const parts = n.trim().split(/\s+/).slice(0, 2); return parts.map(p => p[0]?.toUpperCase() || '').join('') || '?' }
 
+// Tall dial-ready pipeline card. Designed so an agent can scan the bucket
+// quickly: name, phone+Call, notes preview, comments chip, ZIP, time-in-stage.
 function PipelineCard({ lead, onDragStart, onDragEnd, onClick }) {
   const { getTag } = useApp()
   const stage = (typeof getTag === 'function' ? getTag(lead.stage || lead.status) : null) || { color: '#5A6A7A' }
   const sColor = stage?.color || '#5A6A7A'
+  const phoneVisible = displayPhone(lead.phone)
+  const time = localTimeFor(lead)
+  const hour = localHourFor(lead)
+  const offHours = hour != null && (hour < 8 || hour >= 21)
+
+  // "Xd in [stage]" — uses stage_changed_at if present, otherwise created_at
+  const inStageSince = lead.stage_changed_at || lead.created_at
+  const inStage = shortAge(inStageSince)
+
   return (
     <div
       draggable
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
       onClick={onClick}
-      className="p-3.5 rounded-xl border border-[#1A2130] hover:border-[#2A3547] cursor-pointer transition-all group hover:shadow-lg"
-      style={{ background: '#080B0F' }}>
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold"
+      className="p-3 rounded-xl border cursor-pointer transition-all group hover:shadow-lg"
+      style={{ background: '#080B0F', borderColor: sColor + '30' }}>
+      {/* Header: avatar, name, time-in-stage badge */}
+      <div className="flex items-start justify-between gap-2 mb-2">
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
             style={{ background: sColor + '25', color: sColor }}>
             {leadInitials(lead)}
           </div>
-          <p className="text-sm font-medium text-white group-hover:text-[#00E5C3] transition-colors">{leadName(lead)}</p>
+          <p className="text-sm font-medium text-white group-hover:text-[#00E5C3] transition-colors truncate">{leadName(lead)}</p>
         </div>
+        {inStage && (
+          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded flex-shrink-0"
+            style={{ background: sColor + '15', color: sColor, border: `1px solid ${sColor}40` }}
+            title={`In ${stage.label || 'stage'} for ${inStage}`}>
+            {inStage}
+          </span>
+        )}
       </div>
-      <p className="text-xs text-[#5A6A7A] font-mono mb-1">{lead.phone}</p>
-      <div className="flex items-center justify-between mt-2">
-        <span className="text-[10px] text-[#3A4A5A]">{[lead.state, lead.campaign || lead.source].filter(Boolean).join(' · ') || '—'}</span>
-        <span className="text-[10px] text-[#3A4A5A]">{safeRel(lead.last_activity || lead.created_at)}</span>
-      </div>
-      {lead.premium && (
-        <div className="mt-2 pt-2 border-t border-[#1A2130] flex items-center justify-between">
-          <span className="text-[10px] text-[#5A6A7A]">{lead.carrier}</span>
-          <span className="text-xs font-mono text-[#00E5C3]">${lead.premium}/mo</span>
+
+      {/* Phone + Call button row */}
+      {phoneVisible && (
+        <div className="flex items-center gap-2 mb-2">
+          <a href={`tel:${lead.phone}`}
+            onClick={(e) => e.stopPropagation()}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold text-black flex-shrink-0"
+            style={{ background: `linear-gradient(135deg, ${sColor}, ${sColor}AA)` }}
+            title="Call">
+            <Phone size={11} /> Call
+          </a>
+          <span className="text-xs font-mono text-[#8899AA] truncate">{phoneVisible}</span>
         </div>
       )}
+
+      {/* Notes preview — 2 lines truncated */}
+      {lead.notes && (
+        <p className="text-xs text-[#8899AA] mb-2 overflow-hidden"
+          style={{
+            display: '-webkit-box',
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: 'vertical',
+            lineHeight: 1.4,
+          }}>
+          {lead.notes}
+        </p>
+      )}
+
+      {/* Footer: comments chip, zip, local time */}
+      <div className="flex items-center gap-1.5 flex-wrap">
+        {lead.comments && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded font-mono max-w-[140px] truncate"
+            title={lead.comments}
+            style={{ background: '#F59E0B15', color: '#F59E0B', border: '1px solid #F59E0B30' }}>
+            {lead.comments}
+          </span>
+        )}
+        {(lead.campaign || lead.source) && !lead.comments && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded font-mono max-w-[140px] truncate"
+            style={{ background: sColor + '15', color: sColor }}>
+            {lead.campaign || lead.source}
+          </span>
+        )}
+        {lead.zip && <span className="text-[10px] text-[#5A6A7A] font-mono">{lead.zip}</span>}
+        {!lead.zip && lead.state && <span className="text-[10px] text-[#5A6A7A] font-mono">{lead.state}</span>}
+        {time && (
+          <span className="text-[10px] font-mono ml-auto"
+            style={{ color: offHours ? '#F59E0B' : '#3A4A5A' }}
+            title={offHours ? 'Outside 8a–9p local time' : 'Local time'}>
+            {time}
+          </span>
+        )}
+      </div>
     </div>
   )
 }
@@ -226,7 +305,7 @@ export default function Pipeline() {
       <div className="flex items-center justify-between px-6 py-4 border-b border-[#1A2130]">
         <div>
           <h1 className="text-xl font-display font-bold text-white">Pipeline</h1>
-          <p className="text-xs text-[#5A6A7A] mt-0.5">{safeLeads.length} leads · scroll wheel pans · drag column header to reorder</p>
+          <p className="text-xs text-[#5A6A7A] mt-0.5">{safeLeads.length} leads · click a card to work it · drag to move between buckets</p>
         </div>
         {totalValue > 0 && (
           <div className="text-right">
@@ -252,7 +331,7 @@ export default function Pipeline() {
               return (
                 <div key={stage.id}
                   data-kanban-col="1"
-                  className={clsx('flex flex-col rounded-xl border w-64 flex-shrink-0 transition-all',
+                  className={clsx('flex flex-col rounded-xl border w-80 flex-shrink-0 transition-all',
                     isCardDragOver ? 'border-opacity-100' : 'border-[#1A2130]',
                     isColTargetOver && 'ring-2 ring-[#00E5C3]'
                   )}

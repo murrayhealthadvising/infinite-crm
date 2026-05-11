@@ -10,7 +10,6 @@ import clsx from 'clsx'
 const NAV_FULL = [
   { to: '/dashboard',    icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/leads',        icon: Users,            label: 'Leads' },
-  { to: '/dial-bucket',  icon: Star,             label: 'Dial Bucket' },
   { to: '/pipeline',     icon: GitBranch,        label: 'Pipeline' },
   { to: '/appointments', icon: Calendar,         label: 'Appointments' },
   { to: '/follow-ups',   icon: Clock,            label: 'Follow-Ups' },
@@ -26,7 +25,6 @@ const NAV_FULL = [
 // Runner-mode nav: focus on the work, hide lead-acquisition + analytics surfaces
 const NAV_RUNNER = [
   { to: '/leads',       icon: Users,       label: 'Leads' },
-  { to: '/dial-bucket', icon: Star,        label: 'Dial Bucket' },
   { to: '/pipeline',    icon: GitBranch,   label: 'Pipeline' },
   { to: '/appointments',icon: Calendar,    label: 'Appointments' },
   { to: '/follow-ups',  icon: Clock,       label: 'Follow-Ups' },
