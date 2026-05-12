@@ -1,10 +1,29 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useApp } from '../context/AppContext'
 import { normalizePhone, displayPhone } from '../lib/phone'
-import { localTimeFor, localHourFor } from '../lib/timezone'
+import { localTimeFor, localHourFor, timezoneFor } from '../lib/timezone'
+
+// IANA timezone → short label used for the TZ filter pills
+const TZ_LABEL = {
+  'America/New_York': 'EST',
+  'America/Detroit': 'EST',
+  'America/Indiana/Indianapolis': 'EST',
+  'America/Chicago': 'CST',
+  'America/Denver': 'MST',
+  'America/Boise': 'MST',
+  'America/Phoenix': 'AZ',
+  'America/Los_Angeles': 'PST',
+  'America/Anchorage': 'AK',
+  'Pacific/Honolulu': 'HI',
+}
+function tzShortFor(lead) {
+  const tz = timezoneFor(lead)
+  if (!tz) return null
+  return TZ_LABEL[tz] || null
+}
 import StatusTag from '../components/StatusTag'
 import AddLeadModal from '../components/AddLeadModal'
 import {
@@ -234,16 +253,50 @@ const SUGGESTED_TAGS = [
 function TagChips({ tags = [], onChange, suggestions = [] }) {
   const [adding, setAdding] = useState(false)
   const [text, setText] = useState('')
+  const [pos, setPos] = useState({ top: 0, left: 0, openUp: false })
   const wrapRef = useRef(null)
+  const inputRef = useRef(null)
 
   // Hide the "starred" tag from the chip row — it has special meaning (Dial Bucket).
   const visible = (Array.isArray(tags) ? tags : []).filter(t => t && t !== 'starred')
 
+  // Reposition the portal dropdown relative to the input; flip up when there
+  // isn't enough room below. Recalculate on scroll/resize so it tracks the input.
+  const calcPos = () => {
+    const el = inputRef.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    const DROPDOWN_H = 280  // matches max-h below
+    const spaceBelow = window.innerHeight - rect.bottom
+    const openUp = spaceBelow < DROPDOWN_H + 16 && rect.top > spaceBelow
+    setPos({
+      left: rect.left,
+      top: openUp ? rect.top - 6 : rect.bottom + 6,
+      openUp,
+    })
+  }
+
   useEffect(() => {
     if (!adding) return
-    const handler = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) close() }
+    calcPos()
+    const onScroll = () => calcPos()
+    const onResize = () => calcPos()
+    const handler = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) {
+        // Allow clicks inside the portal dropdown
+        const portal = document.getElementById('tag-chips-portal')
+        if (portal && portal.contains(e.target)) return
+        close()
+      }
+    }
     document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
+    window.addEventListener('scroll', onScroll, true)
+    window.addEventListener('resize', onResize)
+    return () => {
+      document.removeEventListener('mousedown', handler)
+      window.removeEventListener('scroll', onScroll, true)
+      window.removeEventListener('resize', onResize)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [adding])
 
@@ -264,11 +317,55 @@ function TagChips({ tags = [], onChange, suggestions = [] }) {
     try { await onChange(next) } catch {}
   }
 
-  // Build the autocomplete pool: suggestions + defaults, minus already-used
+  // Autocomplete pool: every defaults + previously-used tag, minus already-on-this-lead.
+  // Search filters by .includes() on user text. No 8-item cap — scrollbar handles overflow.
+  const trimmed = text.trim().toLowerCase()
   const pool = Array.from(new Set([...SUGGESTED_TAGS, ...suggestions]))
     .filter(s => s && !visible.includes(s) && s !== 'starred')
-    .filter(s => !text || s.toLowerCase().includes(text.toLowerCase()))
-    .slice(0, 8)
+    .filter(s => !trimmed || s.toLowerCase().includes(trimmed))
+    .sort((a, b) => a.localeCompare(b))
+
+  // Show a "Create '#newtag'" affordance if the typed text isn't already an
+  // existing tag (and isn't blank). Makes the create flow discoverable.
+  const showCreate = trimmed && !pool.some(s => s.toLowerCase() === trimmed) && !visible.includes(trimmed)
+
+  const dropdown = adding ? (
+    <div id="tag-chips-portal"
+      style={{
+        position: 'fixed',
+        left: pos.left,
+        top: pos.top,
+        transform: pos.openUp ? 'translateY(-100%)' : undefined,
+        background: '#0A0E14',
+        border: '1px solid #1A2130',
+        borderRadius: '12px',
+        boxShadow: '0 20px 40px rgba(0,0,0,0.6)',
+        zIndex: 9999,
+        minWidth: 180,
+        maxHeight: '280px',
+        overflowY: 'auto',
+        overflowX: 'hidden',
+      }}>
+      {showCreate && (
+        <button onMouseDown={e => { e.preventDefault(); addTag(trimmed) }}
+          className="block w-full text-left px-2.5 py-2 text-[11px] font-mono text-[#00E5C3] hover:bg-[#1A2130] border-b border-[#1A2130]"
+          title="Press Enter">
+          + Create <span className="font-bold">#{trimmed}</span>
+        </button>
+      )}
+      {pool.map(s => (
+        <button key={s} onMouseDown={e => { e.preventDefault(); addTag(s) }}
+          className="block w-full text-left px-2.5 py-1.5 text-[11px] font-mono text-[#8899AA] hover:bg-[#1A2130]">
+          #{s}
+        </button>
+      ))}
+      {!showCreate && pool.length === 0 && (
+        <p className="px-2.5 py-2 text-[11px] text-[#5A6A7A]">
+          {trimmed ? 'No matches — type to create' : 'Type to add a tag'}
+        </p>
+      )}
+    </div>
+  ) : null
 
   return (
     <div className="flex flex-wrap items-center gap-1" onClick={e => e.stopPropagation()}>
@@ -286,26 +383,16 @@ function TagChips({ tags = [], onChange, suggestions = [] }) {
       ))}
       {adding ? (
         <div ref={wrapRef} className="relative">
-          <input autoFocus value={text}
+          <input ref={inputRef} autoFocus value={text}
             onChange={e => setText(e.target.value)}
             onKeyDown={e => {
               if (e.key === 'Enter') { e.preventDefault(); addTag(text) }
               if (e.key === 'Escape') close()
             }}
-            placeholder="add tag…"
-            className="text-[10px] px-1.5 py-0.5 rounded font-mono bg-[#080B0F] border outline-none w-28"
+            placeholder="search or create tag…"
+            className="text-[10px] px-1.5 py-0.5 rounded font-mono bg-[#080B0F] border outline-none w-40"
             style={{ color: '#8899AA', borderColor: '#2A3547' }} />
-          {pool.length > 0 && (
-            <div className="absolute top-full left-0 mt-1 z-50 rounded-lg overflow-hidden border max-h-56 overflow-y-auto"
-              style={{ background: '#0A0E14', borderColor: '#1A2130', boxShadow: '0 8px 20px rgba(0,0,0,0.5)', minWidth: 140 }}>
-              {pool.map(s => (
-                <button key={s} onMouseDown={e => { e.preventDefault(); addTag(s) }}
-                  className="block w-full text-left px-2.5 py-1.5 text-[11px] font-mono text-[#8899AA] hover:bg-[#1A2130]">
-                  #{s}
-                </button>
-              ))}
-            </div>
-          )}
+          {createPortal(dropdown, document.body)}
         </div>
       ) : (
         <button onClick={() => setAdding(true)}
@@ -728,6 +815,103 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
   )
 }
 
+// Side-tag filter pills — multi-select. Built dynamically from every distinct
+// tag in use across the user's leads.
+function TagFilterPills({ tagFilters, setTagFilters, leads }) {
+  const ref = useDragScroll()
+  const safeLeads = Array.isArray(leads) ? leads : []
+  const all = useMemo(() => {
+    const counts = new Map()
+    for (const l of safeLeads) {
+      for (const t of (Array.isArray(l.tags) ? l.tags : [])) {
+        if (!t || t === 'starred') continue
+        counts.set(t, (counts.get(t) || 0) + 1)
+      }
+    }
+    return Array.from(counts.entries()).sort((a, b) => b[1] - a[1])  // most-used first
+  }, [safeLeads])
+
+  if (all.length === 0) return null
+  const toggle = (t) => setTagFilters(prev => {
+    const n = new Set(prev); n.has(t) ? n.delete(t) : n.add(t); return n
+  })
+
+  return (
+    <div ref={ref} className="flex gap-2 px-6 pb-2 overflow-x-auto items-center"
+      style={{ scrollbarWidth: 'none', msOverflowStyle: 'none', cursor: 'grab', WebkitOverflowScrolling: 'touch' }}>
+      <span className="text-[10px] font-mono uppercase tracking-wider text-[#3A4A5A] flex-shrink-0 mr-1">Side tags</span>
+      {all.map(([t, count]) => {
+        const active = tagFilters.has(t)
+        return (
+          <button key={t} onClick={() => toggle(t)}
+            className="px-2.5 py-1 rounded-full text-xs whitespace-nowrap flex-shrink-0 transition-all font-mono"
+            style={active
+              ? { background: '#A78BFA15', color: '#A78BFA', border: '1px solid #A78BFA60' }
+              : { color: '#5A6A7A', border: '1px solid #1A2130' }}>
+            #{t} <span className="opacity-60">({count})</span>
+          </button>
+        )
+      })}
+      {tagFilters.size > 0 && (
+        <button onClick={() => setTagFilters(new Set())}
+          className="text-[10px] text-[#5A6A7A] hover:text-white px-2 flex-shrink-0">
+          clear
+        </button>
+      )}
+    </div>
+  )
+}
+
+// Time-zone filter pills — uses tzShortFor() to bucket every lead into a
+// short zone label (EST/CST/MST/PST/AZ/AK/HI). Multi-select.
+function TzFilterPills({ tzFilters, setTzFilters, leads }) {
+  const ref = useDragScroll()
+  const safeLeads = Array.isArray(leads) ? leads : []
+  const counts = useMemo(() => {
+    const m = new Map()
+    for (const l of safeLeads) {
+      const z = tzShortFor(l)
+      if (!z) continue
+      m.set(z, (m.get(z) || 0) + 1)
+    }
+    return m
+  }, [safeLeads])
+
+  // Stable order so the pills don't shuffle as leads come in
+  const ZONE_ORDER = ['EST','CST','MST','PST','AZ','AK','HI']
+  const zones = ZONE_ORDER.filter(z => counts.has(z))
+  if (zones.length === 0) return null
+
+  const toggle = (z) => setTzFilters(prev => {
+    const n = new Set(prev); n.has(z) ? n.delete(z) : n.add(z); return n
+  })
+
+  return (
+    <div ref={ref} className="flex gap-2 px-6 pb-2 overflow-x-auto items-center"
+      style={{ scrollbarWidth: 'none', msOverflowStyle: 'none', cursor: 'grab', WebkitOverflowScrolling: 'touch' }}>
+      <span className="text-[10px] font-mono uppercase tracking-wider text-[#3A4A5A] flex-shrink-0 mr-1">Time zones</span>
+      {zones.map(z => {
+        const active = tzFilters.has(z)
+        return (
+          <button key={z} onClick={() => toggle(z)}
+            className="px-2.5 py-1 rounded-full text-xs whitespace-nowrap flex-shrink-0 transition-all font-mono"
+            style={active
+              ? { background: '#22D3EE15', color: '#22D3EE', border: '1px solid #22D3EE60' }
+              : { color: '#5A6A7A', border: '1px solid #1A2130' }}>
+            {z} <span className="opacity-60">({counts.get(z)})</span>
+          </button>
+        )
+      })}
+      {tzFilters.size > 0 && (
+        <button onClick={() => setTzFilters(new Set())}
+          className="text-[10px] text-[#5A6A7A] hover:text-white px-2 flex-shrink-0">
+          clear
+        </button>
+      )}
+    </div>
+  )
+}
+
 // Filter pills
 function DragScrollPills({ stageFilter, setStageFilter, tags, leads }) {
   const ref = useDragScroll()
@@ -1062,6 +1246,8 @@ export default function Leads() {
   const [view, setView] = useState('list')
   const [search, setSearch] = useState('')
   const [stageFilter, setStageFilter] = useState('')
+  const [tagFilters, setTagFilters] = useState(() => new Set())  // multi-select side-tag filter
+  const [tzFilters, setTzFilters] = useState(() => new Set())    // multi-select TZ filter
   const [sortBy, setSortBy] = useState('created_desc')
   const [showAdd, setShowAdd] = useState(false)
   const [selected, setSelected] = useState(new Set())
@@ -1098,10 +1284,17 @@ export default function Leads() {
 
   const filtered = sortedLeads.filter(l => {
     const q = search.toLowerCase().trim()
-    const haystack = `${leadName(l)} ${l.phone || ''} ${l.email || ''} ${l.state || ''} ${l.zip || ''} ${l.city || ''}`.toLowerCase()
+    // Search across name, phone, email, location AND side tags + comments
+    const tagsStr = Array.isArray(l.tags) ? l.tags.join(' ') : ''
+    const haystack = `${leadName(l)} ${l.phone || ''} ${l.email || ''} ${l.state || ''} ${l.zip || ''} ${l.city || ''} ${l.comments || ''} ${tagsStr}`.toLowerCase()
     const matchSearch = !q || haystack.includes(q)
     const matchStage = !stageFilter || leadStageId(l, safeTags) === stageFilter
-    return matchSearch && matchStage
+    // Side-tag filter: lead must have EVERY selected tag (AND match)
+    const matchTags = tagFilters.size === 0 ||
+      (Array.isArray(l.tags) && Array.from(tagFilters).every(t => l.tags.includes(t)))
+    // TZ filter: lead's TZ must be one of the selected zones
+    const matchTz = tzFilters.size === 0 || tzFilters.has(tzShortFor(l))
+    return matchSearch && matchStage && matchTags && matchTz
   })
 
   const toggleSelect = (id) => setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
@@ -1474,6 +1667,8 @@ export default function Leads() {
           </select>
         </div>
         <DragScrollPills stageFilter={stageFilter} setStageFilter={setStageFilter} tags={safeTags} leads={safeLeads} />
+        <TagFilterPills tagFilters={tagFilters} setTagFilters={setTagFilters} leads={safeLeads} />
+        <TzFilterPills tzFilters={tzFilters} setTzFilters={setTzFilters} leads={safeLeads} />
       </div>
 
       {/* Content */}
