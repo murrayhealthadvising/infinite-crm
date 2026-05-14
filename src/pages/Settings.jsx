@@ -527,6 +527,101 @@ function SideTagsPanel() {
   )
 }
 
+// Cloudflare Worker URL — exposed via env so it can change without code edits.
+// Falls back to the known production URL for the infinite-crm-webhook worker.
+const WORKER_URL = (import.meta.env.VITE_CRM_WORKER_URL
+  || 'https://infinite-crm-webhook.murrayhealthadvising-4007s-projects.workers.dev').replace(/\/+$/, '')
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Integrations panel — currently houses the PitchPerfect bookmarklet. The
+// agent drags a snippet to their bookmarks bar; clicking it on a PitchPerfect
+// contact page scrapes the visible details and POSTs into their CRM.
+// ─────────────────────────────────────────────────────────────────────────────
+function IntegrationsPanel() {
+  const { user } = useApp()
+  const [showInstructions, setShowInstructions] = useState(false)
+  const [copyHit, setCopyHit] = useState(false)
+  const agentId = user?.id || ''
+  const appOrigin = typeof window !== 'undefined' ? window.location.origin : ''
+  // The bookmarklet itself is a small loader. It stashes the agent id + worker
+  // URL on `window`, then loads /bookmarklet.js (cache-busted) from the CRM,
+  // which does the scrape + overlay + POST.
+  const snippet = `javascript:(function(){window.__INFINITE_AGENT_ID=${JSON.stringify(agentId)};window.__INFINITE_WORKER=${JSON.stringify(WORKER_URL)};var s=document.createElement('script');s.src=${JSON.stringify(appOrigin + '/bookmarklet.js')}+'?'+Date.now();s.onerror=function(){alert('Could not load CRM bookmarklet — check internet connection.')};document.body.appendChild(s)})();`
+
+  const copySnippet = () => {
+    navigator.clipboard.writeText(snippet)
+    setCopyHit(true); setTimeout(() => setCopyHit(false), 1500)
+  }
+
+  return (
+    <div className="rounded-xl border border-[#1A2130] p-5" style={{ background: '#0D1117' }}>
+      <div className="mb-4">
+        <h2 className="text-xs font-mono uppercase tracking-wider text-[#5A6A7A] flex items-center gap-2">
+          <UsersIcon size={12} /> Integrations
+        </h2>
+        <p className="text-xs text-[#3A4A5A] mt-1">
+          Pull leads from your texting platform straight into the CRM with one click.
+        </p>
+      </div>
+
+      <div className="rounded-lg border border-[#A78BFA20] p-4" style={{ background: '#A78BFA08' }}>
+        <div className="flex items-start justify-between gap-3 mb-3">
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-white">PitchPerfect bookmarklet</p>
+            <p className="text-xs text-[#5A6A7A] mt-0.5">
+              Drag the <strong className="text-[#A78BFA]">Send to CRM</strong> button below to your browser's bookmarks bar.
+              Then on any PitchPerfect contact panel, click it and the lead lands in <strong className="text-[#10B981]">Interested</strong>.
+            </p>
+          </div>
+        </div>
+
+        {/* The actual draggable bookmarklet link */}
+        <div className="flex items-center gap-3 flex-wrap">
+          {/* eslint-disable-next-line jsx-a11y/anchor-is-valid */}
+          <a
+            href={snippet}
+            onClick={(e) => e.preventDefault()}
+            draggable={true}
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold text-black cursor-grab active:cursor-grabbing select-none"
+            style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}
+            title="Drag me to your bookmarks bar">
+            ⚡ Send to CRM
+          </a>
+          <button onClick={copySnippet}
+            className="text-xs px-3 py-2 rounded-lg border border-[#1A2130] text-[#8899AA] hover:text-white">
+            {copyHit ? <span className="inline-flex items-center gap-1 text-[#00E5C3]"><Check size={11} /> copied</span> : 'Copy snippet'}
+          </button>
+          <button onClick={() => setShowInstructions(v => !v)}
+            className="text-xs text-[#A78BFA] hover:underline">
+            {showInstructions ? 'Hide' : 'Show'} install steps
+          </button>
+        </div>
+
+        {showInstructions && (
+          <div className="mt-4 text-xs text-[#8899AA] leading-relaxed space-y-2">
+            <p><strong className="text-white">Install (once):</strong></p>
+            <ol className="list-decimal ml-5 space-y-1 text-[#8899AA]">
+              <li>If your browser doesn't show a bookmarks bar, enable it with <kbd className="px-1 py-0.5 rounded bg-[#1A2130] font-mono text-[10px]">⌘+Shift+B</kbd> (Mac) / <kbd className="px-1 py-0.5 rounded bg-[#1A2130] font-mono text-[10px]">Ctrl+Shift+B</kbd> (Windows).</li>
+              <li>Drag the teal <strong className="text-[#00E5C3]">⚡ Send to CRM</strong> button above onto the bookmarks bar.</li>
+              <li>Or, right-click the bookmarks bar → Add Page → Name "Send to CRM" → paste the snippet (Copy snippet button above) into the URL field.</li>
+            </ol>
+            <p className="mt-3"><strong className="text-white">Use:</strong></p>
+            <ol className="list-decimal ml-5 space-y-1 text-[#8899AA]">
+              <li>Open a PitchPerfect contact — click into one of the messages so the "Contact Details" panel is visible on the right.</li>
+              <li>Click the bookmarklet in your bar.</li>
+              <li>A small "Send to CRM" overlay appears with the contact prefilled. Verify, hit Send.</li>
+              <li>Lead lands in <strong className="text-[#10B981]">Interested</strong> on your Pipeline.</li>
+            </ol>
+            <p className="mt-3 text-[10px] text-[#5A6A7A]">
+              Personal to your account (agent id is baked into the snippet). Don't share with other agents — they'd want their own from their Settings page.
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export default function Settings() {
   const { user, profile, leads, tags, addTag, updateTag, deleteTag, reorderTags, isRunner, isAdmin, splitNotes, setSplitNotes } = useApp()
   const [dragId, setDragId] = useState(null)
@@ -653,6 +748,9 @@ export default function Settings() {
 
       {/* Runner Access — hidden for runners themselves (they only manage their own profile + password) */}
       {!isRunner && <RunnerAccessPanel />}
+
+      {/* Integrations — bookmarklets / webhooks for external tools */}
+      {!isRunner && <IntegrationsPanel />}
 
       {/* Preferences — per-user UI toggles */}
       <div className="rounded-xl border border-[#1A2130] p-5" style={{ background: '#0D1117' }}>

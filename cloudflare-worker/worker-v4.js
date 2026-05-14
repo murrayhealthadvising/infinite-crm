@@ -280,29 +280,88 @@ function isDuplicate(result) {
   try { return JSON.parse(result.body)?.code === '23505' } catch { return false }
 }
 
+// CORS headers — needed because the PitchPerfect bookmarklet runs from
+// app.pitchprfct.com (or wherever) and posts to this worker. Wide open since
+// the worker validates agent_id and is otherwise read-only.
+const CORS = {
+  'access-control-allow-origin': '*',
+  'access-control-allow-methods': 'POST, OPTIONS',
+  'access-control-allow-headers': 'content-type',
+  'access-control-max-age': '86400',
+}
+
+// Columns the worker is allowed to forward to Supabase. Anything else gets
+// silently dropped (prevents PGRST204 schema-cache errors when the bookmarklet
+// sends odd fields).
+const LEADS_COLUMNS = new Set([
+  'first_name','last_name','phone','email','city','state','zip','address','street_address',
+  'source','notes','notes_b','comments','dob','gender','age','age_range','smoker','spouse_age','num_children',
+  'income','household','external_id','agent','agent_id','campaign','price',
+  'premium','carrier','current_carrier','effective_date','plan_choice','monthly_budget','best_contact_time',
+  'tags','stage','is_sold','user_id','created_at','last_activity',
+  'runner','stage_changed_at','custom_fields',
+])
+
+function sanitizeForInsert(lead) {
+  const out = {}
+  for (const [k, v] of Object.entries(lead)) {
+    if (LEADS_COLUMNS.has(k) && v !== undefined && v !== null && v !== '') out[k] = v
+  }
+  return out
+}
+
 // ─── Worker entry points ───────────────────────────────────────────────────
 export default {
   async fetch(req, env) {
     const url = new URL(req.url)
+    // CORS preflight
+    if (req.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: CORS })
+    }
     if (req.method !== 'POST' || !url.pathname.startsWith('/leads')) {
-      return new Response('infinite-crm-webhook v4 — POST /leads?agent_id=UUID', { status: 200 })
+      return new Response('infinite-crm-webhook v4 — POST /leads?agent_id=UUID', {
+        status: 200, headers: { ...CORS },
+      })
     }
     const agentId = url.searchParams.get('agent_id')
-    if (!agentId) return new Response(JSON.stringify({ error: 'missing agent_id' }), { status: 400 })
+    if (!agentId) {
+      return new Response(JSON.stringify({ error: 'missing agent_id' }), {
+        status: 400, headers: { 'content-type': 'application/json', ...CORS },
+      })
+    }
     let body = {}
-    try { body = await req.json() } catch { return new Response('bad json', { status: 400 }) }
-    const lead = {
+    try { body = await req.json() } catch {
+      return new Response('bad json', { status: 400, headers: CORS })
+    }
+
+    // Normalize phone to +1XXXXXXXXXX if present
+    if (body.phone) {
+      const digits = String(body.phone).replace(/\D/g, '')
+      if (digits.length === 10) body.phone = `+1${digits}`
+      else if (digits.length === 11 && digits[0] === '1') body.phone = `+${digits}`
+    }
+
+    const lead = sanitizeForInsert({
       ...body,
       user_id: agentId,
       agent_id: agentId,
       stage: body.stage || DEFAULT_STAGE,
       created_at: new Date().toISOString(),
       last_activity: new Date().toISOString(),
-    }
+    })
+
     const result = await insertLead(env, lead)
+    // Treat 23505 unique-violation (lead already exists) as success — bump
+    // last_activity on the existing row instead so the agent sees it refresh.
+    if (!result.ok && isDuplicate(result) && lead.phone) {
+      const t = await touchLeadByPhone(env, agentId, lead.phone)
+      return new Response(JSON.stringify({ ok: true, duplicate: true, status: t.status }), {
+        status: 200, headers: { 'content-type': 'application/json', ...CORS },
+      })
+    }
     return new Response(JSON.stringify({ ok: result.ok, status: result.status, lead: result.body.slice(0, 1000) }), {
       status: result.ok ? 200 : 500,
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...CORS },
     })
   },
 
