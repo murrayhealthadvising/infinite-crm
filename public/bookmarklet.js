@@ -124,10 +124,11 @@
     margin: 'auto',
   })
 
-  // Block PitchPerfect's global keydown/click handlers from interfering.
-  // Stop propagation in CAPTURE phase so the page never sees our events.
+  // Block PitchPerfect's global handlers from seeing our events AFTER our
+  // buttons/inputs have processed them. BUBBLE phase only — capture-phase
+  // stopPropagation would prevent clicks from ever reaching our buttons.
   ;['mousedown','mouseup','click','keydown','keyup','keypress','input','change','pointerdown','pointerup','focus','focusin','focusout'].forEach(function (ev) {
-    dialog.addEventListener(ev, function (e) { e.stopPropagation() }, true)
+    dialog.addEventListener(ev, function (e) { e.stopPropagation() }, false)
   })
 
   dialog.appendChild(el('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}, [
