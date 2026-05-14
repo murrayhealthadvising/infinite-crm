@@ -1400,7 +1400,10 @@ export default function Leads() {
       toInsert.push({
         ...r,
         user_id: user.id,
-        source: r.source || 'Ringy Import',
+        // Only set a generic 'CSV Import' fallback if the row truly had no
+        // source — PitchPerfect/Ringy/whatever already populates `source` when
+        // it's in the export, and we preserve that verbatim.
+        source: r.source || 'CSV Import',
         // Use the row's parsed received-on date if mapRow extracted one
         // ("Received On" / "Date Added" / etc.), otherwise stamp now.
         created_at: r.created_at || now,
