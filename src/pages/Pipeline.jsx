@@ -41,13 +41,10 @@ function shortAge(d) {
 function leadName(lead) { if (lead?.name) return lead.name; return [lead?.first_name, lead?.last_name].filter(Boolean).join(' ').trim() || '—' }
 function leadInitials(lead) { const n = leadName(lead); if (n === '—' || !n) return '?'; const parts = n.trim().split(/\s+/).slice(0, 2); return parts.map(p => p[0]?.toUpperCase() || '').join('') || '?' }
 
-// Pipeline card — SKINNY by default for scannability + easy dragging.
-// Click toggles expanded; while expanded you see the rich dial-ready details
-// (Call button, notes preview, comments chip, ZIP, local time). Drag fires
-// naturally on mousedown+move and does NOT trigger the click expand handler.
-function PipelineCard({ lead, onDragStart, onDragEnd, onOpen }) {
+// Rich dial-ready lead card. Always shows the full info — name, Call button,
+// notes preview, comments chip, ZIP, time-in-stage, local time.
+function PipelineCard({ lead, onDragStart, onDragEnd, onClick }) {
   const { getTag } = useApp()
-  const [expanded, setExpanded] = useState(false)
   const stage = (typeof getTag === 'function' ? getTag(lead.stage || lead.status) : null) || { color: '#5A6A7A' }
   const sColor = stage?.color || '#5A6A7A'
   const phoneVisible = displayPhone(lead.phone)
@@ -57,28 +54,22 @@ function PipelineCard({ lead, onDragStart, onDragEnd, onOpen }) {
   const inStageSince = lead.stage_changed_at || lead.created_at
   const inStage = shortAge(inStageSince)
 
-  // Skinny header is always rendered. Click anywhere on the row toggles
-  // expand. Drag still works because HTML5 drag fires before click and
-  // click only fires when there's no movement.
   return (
     <div
       draggable
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
-      className="rounded-lg border transition-all"
-      style={{ background: '#080B0F', borderColor: sColor + (expanded ? '60' : '30') }}>
-      {/* Skinny clickable header */}
-      <button
-        type="button"
-        onClick={() => setExpanded(v => !v)}
-        className="w-full flex items-center gap-2 px-2.5 py-2 text-left group cursor-grab active:cursor-grabbing">
-        <div className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold flex-shrink-0"
-          style={{ background: sColor + '25', color: sColor }}>
-          {leadInitials(lead)}
+      onClick={onClick}
+      className="p-3 rounded-xl border cursor-pointer transition-all group hover:shadow-lg"
+      style={{ background: '#080B0F', borderColor: sColor + '30' }}>
+      <div className="flex items-start justify-between gap-2 mb-2">
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
+            style={{ background: sColor + '25', color: sColor }}>
+            {leadInitials(lead)}
+          </div>
+          <p className="text-sm font-medium text-white group-hover:text-[#00E5C3] transition-colors truncate">{leadName(lead)}</p>
         </div>
-        <span className="text-sm font-medium text-white truncate flex-1 group-hover:text-[#00E5C3] transition-colors">
-          {leadName(lead)}
-        </span>
         {inStage && (
           <span className="text-[10px] font-mono px-1.5 py-0.5 rounded flex-shrink-0"
             style={{ background: sColor + '15', color: sColor, border: `1px solid ${sColor}40` }}
@@ -86,65 +77,50 @@ function PipelineCard({ lead, onDragStart, onDragEnd, onOpen }) {
             {inStage}
           </span>
         )}
-      </button>
+      </div>
 
-      {/* Expanded detail — only renders when expanded */}
-      {expanded && (
-        <div className="px-2.5 pb-2.5 pt-1 space-y-2 border-t border-[#1A2130]"
-          onClick={(e) => e.stopPropagation()}>
-          {/* Call button + phone */}
-          {phoneVisible && (
-            <div className="flex items-center gap-2">
-              <a href={`tel:${lead.phone}`}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold text-black flex-shrink-0"
-                style={{ background: `linear-gradient(135deg, ${sColor}, ${sColor}AA)` }}>
-                <Phone size={11} /> Call
-              </a>
-              <span className="text-xs font-mono text-[#8899AA] truncate">{phoneVisible}</span>
-            </div>
-          )}
-
-          {/* Notes preview */}
-          {lead.notes && (
-            <p className="text-xs text-[#8899AA] overflow-hidden"
-              style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', lineHeight: 1.4 }}>
-              {lead.notes}
-            </p>
-          )}
-
-          {/* Comments / source / zip / TZ time */}
-          <div className="flex items-center gap-1.5 flex-wrap">
-            {lead.comments && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded font-mono max-w-[140px] truncate"
-                title={lead.comments}
-                style={{ background: '#F59E0B15', color: '#F59E0B', border: '1px solid #F59E0B30' }}>
-                {lead.comments}
-              </span>
-            )}
-            {(lead.campaign || lead.source) && !lead.comments && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded font-mono max-w-[140px] truncate"
-                style={{ background: sColor + '15', color: sColor }}>
-                {lead.campaign || lead.source}
-              </span>
-            )}
-            {lead.zip && <span className="text-[10px] text-[#5A6A7A] font-mono">{lead.zip}</span>}
-            {!lead.zip && lead.state && <span className="text-[10px] text-[#5A6A7A] font-mono">{lead.state}</span>}
-            {time && (
-              <span className="text-[10px] font-mono ml-auto"
-                style={{ color: offHours ? '#F59E0B' : '#3A4A5A' }}
-                title={offHours ? 'Outside 8a–9p local time' : 'Local time'}>
-                {time}
-              </span>
-            )}
-          </div>
-
-          {/* Open lead → focused dial view */}
-          <button onClick={onOpen}
-            className="w-full text-[11px] font-mono uppercase tracking-wider text-[#5A6A7A] hover:text-[#00E5C3] py-1.5 border-t border-[#1A2130]">
-            Open lead →
-          </button>
+      {phoneVisible && (
+        <div className="flex items-center gap-2 mb-2">
+          <a href={`tel:${lead.phone}`} onClick={(e) => e.stopPropagation()}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold text-black flex-shrink-0"
+            style={{ background: `linear-gradient(135deg, ${sColor}, ${sColor}AA)` }}>
+            <Phone size={11} /> Call
+          </a>
+          <span className="text-xs font-mono text-[#8899AA] truncate">{phoneVisible}</span>
         </div>
       )}
+
+      {lead.notes && (
+        <p className="text-xs text-[#8899AA] mb-2 overflow-hidden"
+          style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', lineHeight: 1.4 }}>
+          {lead.notes}
+        </p>
+      )}
+
+      <div className="flex items-center gap-1.5 flex-wrap">
+        {lead.comments && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded font-mono max-w-[140px] truncate"
+            title={lead.comments}
+            style={{ background: '#F59E0B15', color: '#F59E0B', border: '1px solid #F59E0B30' }}>
+            {lead.comments}
+          </span>
+        )}
+        {(lead.campaign || lead.source) && !lead.comments && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded font-mono max-w-[140px] truncate"
+            style={{ background: sColor + '15', color: sColor }}>
+            {lead.campaign || lead.source}
+          </span>
+        )}
+        {lead.zip && <span className="text-[10px] text-[#5A6A7A] font-mono">{lead.zip}</span>}
+        {!lead.zip && lead.state && <span className="text-[10px] text-[#5A6A7A] font-mono">{lead.state}</span>}
+        {time && (
+          <span className="text-[10px] font-mono ml-auto"
+            style={{ color: offHours ? '#F59E0B' : '#3A4A5A' }}
+            title={offHours ? 'Outside 8a–9p local time' : 'Local time'}>
+            {time}
+          </span>
+        )}
+      </div>
     </div>
   )
 }
@@ -167,6 +143,20 @@ export default function Pipeline() {
   const [tagFilters, setTagFilters] = useState(() => new Set())
   const [tzFilters, setTzFilters] = useState(() => new Set())
   const [showFilters, setShowFilters] = useState(false)
+
+  // Collapsed stage columns — skinny by default, click header to expand.
+  // Stored as a Set of stage IDs that are collapsed; drag-to-reorder still
+  // works without expanding because HTML5 drag suppresses the click.
+  const [collapsedStages, setCollapsedStages] = useState(() => new Set())
+  const toggleStageCollapse = (id) => setCollapsedStages(prev => {
+    const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n
+  })
+  const expandAll = () => setCollapsedStages(new Set())
+  const collapseAll = () => {
+    const sorted = [...(Array.isArray(tags) ? tags : [])]
+      .sort((a, b) => (a.sort_order ?? 999) - (b.sort_order ?? 999))
+    setCollapsedStages(new Set(sorted.map(t => t.id)))
+  }
 
   // Scroll affordances
   const [canScrollLeft, setCanScrollLeft] = useState(false)
@@ -388,6 +378,12 @@ export default function Pipeline() {
                 : { color: '#8899AA', borderColor: '#1A2130' }}>
               Filters{activeCount > 0 ? ` (${activeCount})` : ''}
             </button>
+            {/* Collapse/Expand all stages */}
+            <button onClick={() => collapsedStages.size === sortedTags.length ? expandAll() : collapseAll()}
+              className="px-2.5 py-1.5 rounded-lg text-xs border border-[#1A2130] text-[#8899AA] hover:text-white hover:border-[#2A3547] transition-colors"
+              title={collapsedStages.size === sortedTags.length ? 'Expand all stages' : 'Collapse all stages'}>
+              {collapsedStages.size === sortedTags.length ? 'Expand all' : 'Collapse all'}
+            </button>
             {totalValue > 0 && (
               <div className="text-right pl-3 border-l border-[#1A2130]">
                 <p className="text-[10px] text-[#5A6A7A] font-mono uppercase tracking-wider">Annual</p>
@@ -492,6 +488,60 @@ export default function Pipeline() {
                 })
               const isCardDragOver = dragOverStage === stage.id && !dragStageId
               const isColTargetOver = dragOverStageCol === stage.id
+              const isCollapsed = collapsedStages.has(stage.id)
+
+              // SKINNY: just a narrow strip showing the stage name + count.
+              // Click toggles expand. Drag still reorders (HTML5 drag fires
+              // on movement, click only on stationary mouseup).
+              if (isCollapsed) {
+                return (
+                  <div key={stage.id}
+                    data-kanban-col="1"
+                    draggable
+                    onDragStart={e => handleColumnDragStart(e, stage.id)}
+                    onDragEnd={() => { setDragStageId(null); setDragOverStageCol(null); stopAutoScroll() }}
+                    onDragOver={e => {
+                      e.preventDefault()
+                      if (dragStageId) handleColumnDragOver(e, stage.id)
+                      else if (dragLeadId) setDragOverStage(stage.id)
+                    }}
+                    onDragLeave={() => { setDragOverStage(null); setDragOverStageCol(null) }}
+                    onDrop={(e) => {
+                      if (dragStageId) handleColumnDrop(e, stage.id)
+                      else handleDrop(stage.id)
+                    }}
+                    className={clsx('flex flex-col rounded-xl border w-12 flex-shrink-0 transition-all overflow-hidden',
+                      isColTargetOver && 'ring-2 ring-[#00E5C3]'
+                    )}
+                    style={{
+                      background: isCardDragOver ? stage.color + '12' : '#0E1318',
+                      borderColor: isCardDragOver ? stage.color : '#1A2130',
+                      minHeight: '400px',
+                      cursor: 'grab',
+                    }}
+                    onClick={() => toggleStageCollapse(stage.id)}
+                    title={`${stage.label} · ${stageLeads.length} — click to expand`}>
+                    <div className="flex flex-col items-center gap-2 py-3 flex-1">
+                      <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: stage.color }} />
+                      <span className="text-xs font-mono text-white bg-[#1A2130] px-2 py-0.5 rounded-full flex-shrink-0">
+                        {stageLeads.length}
+                      </span>
+                      {/* Vertical stage label */}
+                      <span className="text-[10px] font-mono uppercase tracking-wider mt-1 select-none"
+                        style={{
+                          color: stage.color,
+                          writingMode: 'vertical-rl',
+                          transform: 'rotate(180deg)',
+                          letterSpacing: '0.15em',
+                        }}>
+                        {stage.label}
+                      </span>
+                    </div>
+                  </div>
+                )
+              }
+
+              // EXPANDED: full kanban column with cards
               return (
                 <div key={stage.id}
                   data-kanban-col="1"
@@ -510,13 +560,14 @@ export default function Pipeline() {
                     if (dragStageId) handleColumnDrop(e, stage.id)
                     else handleDrop(stage.id)
                   }}>
-                  {/* Column header — itself draggable for reorder */}
+                  {/* Column header — draggable for reorder, click to collapse */}
                   <div
                     draggable
                     onDragStart={e => handleColumnDragStart(e, stage.id)}
                     onDragEnd={() => { setDragStageId(null); setDragOverStageCol(null); stopAutoScroll() }}
+                    onClick={() => toggleStageCollapse(stage.id)}
                     className="flex items-center justify-between px-4 py-3.5 border-b border-[#1A2130] cursor-grab active:cursor-grabbing select-none"
-                    title="Drag to reorder this stage">
+                    title="Drag to reorder · click to collapse">
                     <div className="flex items-center gap-2">
                       <GripHorizontal size={12} className="text-[#3A4A5A] flex-shrink-0" />
                       <div className="w-2.5 h-2.5 rounded-full" style={{ background: stage.color }} />
@@ -530,7 +581,7 @@ export default function Pipeline() {
                       <PipelineCard key={lead.id} lead={lead}
                         onDragStart={e => { e.dataTransfer.setData('leadId', lead.id); e.dataTransfer.effectAllowed = 'move'; setDragLeadId(lead.id) }}
                         onDragEnd={handleDragEnd}
-                        onOpen={() => navigate(`/leads/${lead.id}`)} />
+                        onClick={() => navigate(`/leads/${lead.id}`)} />
                     ))}
                     {stageLeads.length === 0 && (
                       <div className={clsx('flex items-center justify-center h-16 border border-dashed rounded-lg transition-colors', isCardDragOver ? 'border-opacity-60' : 'border-[#1A2130]')}
