@@ -530,14 +530,19 @@ function NotesField({ value, onSave, placeholder }) {
 
   useEffect(() => { setText(value || ''); initialRef.current = value || '' }, [value])
 
-  // Auto-fit height to content within [min, max]. Past max, scrollbar engages.
-  // Re-run on every keystroke so growing content reveals itself smoothly.
+  // Auto-fit height to content within [min, max]. Beyond max, the user can
+  // still drag the resize handle to make it as big as they want — we ONLY
+  // grow auto-fit, never shrink, so manual resize sticks across re-renders.
   useEffect(() => {
     const el = ref.current
     if (!el) return
+    const currentH = el.offsetHeight
+    const probeH = el.style.height
     el.style.height = 'auto'
     const sh = el.scrollHeight
-    el.style.height = Math.min(NOTES_MAX_H, Math.max(NOTES_MIN_H, sh)) + 'px'
+    el.style.height = probeH || ''
+    const autoH = Math.min(NOTES_MAX_H, Math.max(NOTES_MIN_H, sh))
+    if (autoH > currentH) el.style.height = autoH + 'px'
   }, [text])
 
   const handleFocus = (e) => {
@@ -570,7 +575,7 @@ function NotesField({ value, onSave, placeholder }) {
           border: '1px solid #2F3A4A',
           boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.45)',
           minHeight: NOTES_MIN_H + 'px',
-          maxHeight: NOTES_MAX_H + 'px',
+          // No maxHeight — drag the corner as far as you want for huge notepad mode.
           resize: 'vertical',
           overflowY: 'auto',
           transition: 'border-color 120ms, background-color 120ms',

@@ -530,7 +530,7 @@ function SideTagsPanel() {
 // Cloudflare Worker URL — exposed via env so it can change without code edits.
 // Falls back to the known production URL for the infinite-crm-webhook worker.
 const WORKER_URL = (import.meta.env.VITE_CRM_WORKER_URL
-  || 'https://infinite-crm-webhook.murrayhealthadvising-4007s-projects.workers.dev').replace(/\/+$/, '')
+  || 'https://infinite-crm-webhook.murrayhealthadvising.workers.dev').replace(/\/+$/, '')
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Integrations panel — currently houses the PitchPerfect bookmarklet. The

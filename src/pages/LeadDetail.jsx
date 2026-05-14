@@ -46,7 +46,7 @@ function NotesEditor({ value, onSave }) {
         style={{
           height: '220px',
           minHeight: '160px',
-          maxHeight: '80vh',
+          // No maxHeight — drag the corner as big as you want for full notepad mode.
           resize: 'vertical',
           overflowY: 'auto',
         }} />
