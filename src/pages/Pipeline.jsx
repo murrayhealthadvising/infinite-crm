@@ -1,12 +1,25 @@
 import { useNavigate } from 'react-router-dom'
 import { useApp } from '../context/AppContext'
 import StatusTag from '../components/StatusTag'
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { formatDistanceToNow, formatDistanceToNowStrict } from 'date-fns'
-import { GripHorizontal, Phone } from 'lucide-react'
+import { GripHorizontal, Phone, Search, X } from 'lucide-react'
 import clsx from 'clsx'
 import { displayPhone } from '../lib/phone'
-import { localTimeFor, localHourFor } from '../lib/timezone'
+import { localTimeFor, localHourFor, timezoneFor } from '../lib/timezone'
+
+// IANA → short TZ label for the filter pills (same map used on /leads)
+const TZ_LABEL = {
+  'America/New_York': 'EST', 'America/Detroit': 'EST', 'America/Indiana/Indianapolis': 'EST',
+  'America/Chicago': 'CST',
+  'America/Denver': 'MST', 'America/Boise': 'MST',
+  'America/Phoenix': 'AZ',
+  'America/Los_Angeles': 'PST',
+  'America/Anchorage': 'AK',
+  'Pacific/Honolulu': 'HI',
+}
+function tzShortFor(lead) { const tz = timezoneFor(lead); return tz ? (TZ_LABEL[tz] || null) : null }
+const TZ_ORDER = ['EST','CST','MST','PST','AZ','AK','HI']
 
 function safeRel(d) { if (!d) return ''; const dt = new Date(d); if (isNaN(dt.getTime())) return ''; try { return formatDistanceToNow(dt, { addSuffix: true }) } catch { return '' } }
 // Strict "5d", "2h", "3mo" form for the time-in-stage badge
@@ -28,38 +41,44 @@ function shortAge(d) {
 function leadName(lead) { if (lead?.name) return lead.name; return [lead?.first_name, lead?.last_name].filter(Boolean).join(' ').trim() || '—' }
 function leadInitials(lead) { const n = leadName(lead); if (n === '—' || !n) return '?'; const parts = n.trim().split(/\s+/).slice(0, 2); return parts.map(p => p[0]?.toUpperCase() || '').join('') || '?' }
 
-// Tall dial-ready pipeline card. Designed so an agent can scan the bucket
-// quickly: name, phone+Call, notes preview, comments chip, ZIP, time-in-stage.
-function PipelineCard({ lead, onDragStart, onDragEnd, onClick }) {
+// Pipeline card — SKINNY by default for scannability + easy dragging.
+// Click toggles expanded; while expanded you see the rich dial-ready details
+// (Call button, notes preview, comments chip, ZIP, local time). Drag fires
+// naturally on mousedown+move and does NOT trigger the click expand handler.
+function PipelineCard({ lead, onDragStart, onDragEnd, onOpen }) {
   const { getTag } = useApp()
+  const [expanded, setExpanded] = useState(false)
   const stage = (typeof getTag === 'function' ? getTag(lead.stage || lead.status) : null) || { color: '#5A6A7A' }
   const sColor = stage?.color || '#5A6A7A'
   const phoneVisible = displayPhone(lead.phone)
   const time = localTimeFor(lead)
   const hour = localHourFor(lead)
   const offHours = hour != null && (hour < 8 || hour >= 21)
-
-  // "Xd in [stage]" — uses stage_changed_at if present, otherwise created_at
   const inStageSince = lead.stage_changed_at || lead.created_at
   const inStage = shortAge(inStageSince)
 
+  // Skinny header is always rendered. Click anywhere on the row toggles
+  // expand. Drag still works because HTML5 drag fires before click and
+  // click only fires when there's no movement.
   return (
     <div
       draggable
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
-      onClick={onClick}
-      className="p-3 rounded-xl border cursor-pointer transition-all group hover:shadow-lg"
-      style={{ background: '#080B0F', borderColor: sColor + '30' }}>
-      {/* Header: avatar, name, time-in-stage badge */}
-      <div className="flex items-start justify-between gap-2 mb-2">
-        <div className="flex items-center gap-2 min-w-0 flex-1">
-          <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
-            style={{ background: sColor + '25', color: sColor }}>
-            {leadInitials(lead)}
-          </div>
-          <p className="text-sm font-medium text-white group-hover:text-[#00E5C3] transition-colors truncate">{leadName(lead)}</p>
+      className="rounded-lg border transition-all"
+      style={{ background: '#080B0F', borderColor: sColor + (expanded ? '60' : '30') }}>
+      {/* Skinny clickable header */}
+      <button
+        type="button"
+        onClick={() => setExpanded(v => !v)}
+        className="w-full flex items-center gap-2 px-2.5 py-2 text-left group cursor-grab active:cursor-grabbing">
+        <div className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold flex-shrink-0"
+          style={{ background: sColor + '25', color: sColor }}>
+          {leadInitials(lead)}
         </div>
+        <span className="text-sm font-medium text-white truncate flex-1 group-hover:text-[#00E5C3] transition-colors">
+          {leadName(lead)}
+        </span>
         {inStage && (
           <span className="text-[10px] font-mono px-1.5 py-0.5 rounded flex-shrink-0"
             style={{ background: sColor + '15', color: sColor, border: `1px solid ${sColor}40` }}
@@ -67,60 +86,65 @@ function PipelineCard({ lead, onDragStart, onDragEnd, onClick }) {
             {inStage}
           </span>
         )}
-      </div>
+      </button>
 
-      {/* Phone + Call button row */}
-      {phoneVisible && (
-        <div className="flex items-center gap-2 mb-2">
-          <a href={`tel:${lead.phone}`}
-            onClick={(e) => e.stopPropagation()}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold text-black flex-shrink-0"
-            style={{ background: `linear-gradient(135deg, ${sColor}, ${sColor}AA)` }}
-            title="Call">
-            <Phone size={11} /> Call
-          </a>
-          <span className="text-xs font-mono text-[#8899AA] truncate">{phoneVisible}</span>
+      {/* Expanded detail — only renders when expanded */}
+      {expanded && (
+        <div className="px-2.5 pb-2.5 pt-1 space-y-2 border-t border-[#1A2130]"
+          onClick={(e) => e.stopPropagation()}>
+          {/* Call button + phone */}
+          {phoneVisible && (
+            <div className="flex items-center gap-2">
+              <a href={`tel:${lead.phone}`}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold text-black flex-shrink-0"
+                style={{ background: `linear-gradient(135deg, ${sColor}, ${sColor}AA)` }}>
+                <Phone size={11} /> Call
+              </a>
+              <span className="text-xs font-mono text-[#8899AA] truncate">{phoneVisible}</span>
+            </div>
+          )}
+
+          {/* Notes preview */}
+          {lead.notes && (
+            <p className="text-xs text-[#8899AA] overflow-hidden"
+              style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', lineHeight: 1.4 }}>
+              {lead.notes}
+            </p>
+          )}
+
+          {/* Comments / source / zip / TZ time */}
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {lead.comments && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded font-mono max-w-[140px] truncate"
+                title={lead.comments}
+                style={{ background: '#F59E0B15', color: '#F59E0B', border: '1px solid #F59E0B30' }}>
+                {lead.comments}
+              </span>
+            )}
+            {(lead.campaign || lead.source) && !lead.comments && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded font-mono max-w-[140px] truncate"
+                style={{ background: sColor + '15', color: sColor }}>
+                {lead.campaign || lead.source}
+              </span>
+            )}
+            {lead.zip && <span className="text-[10px] text-[#5A6A7A] font-mono">{lead.zip}</span>}
+            {!lead.zip && lead.state && <span className="text-[10px] text-[#5A6A7A] font-mono">{lead.state}</span>}
+            {time && (
+              <span className="text-[10px] font-mono ml-auto"
+                style={{ color: offHours ? '#F59E0B' : '#3A4A5A' }}
+                title={offHours ? 'Outside 8a–9p local time' : 'Local time'}>
+                {time}
+              </span>
+            )}
+          </div>
+
+          {/* Open lead → focused dial view */}
+          <button onClick={onOpen}
+            className="w-full text-[11px] font-mono uppercase tracking-wider text-[#5A6A7A] hover:text-[#00E5C3] py-1.5 border-t border-[#1A2130]">
+            Open lead →
+          </button>
         </div>
       )}
-
-      {/* Notes preview — 2 lines truncated */}
-      {lead.notes && (
-        <p className="text-xs text-[#8899AA] mb-2 overflow-hidden"
-          style={{
-            display: '-webkit-box',
-            WebkitLineClamp: 2,
-            WebkitBoxOrient: 'vertical',
-            lineHeight: 1.4,
-          }}>
-          {lead.notes}
-        </p>
-      )}
-
-      {/* Footer: comments chip, zip, local time */}
-      <div className="flex items-center gap-1.5 flex-wrap">
-        {lead.comments && (
-          <span className="text-[10px] px-1.5 py-0.5 rounded font-mono max-w-[140px] truncate"
-            title={lead.comments}
-            style={{ background: '#F59E0B15', color: '#F59E0B', border: '1px solid #F59E0B30' }}>
-            {lead.comments}
-          </span>
-        )}
-        {(lead.campaign || lead.source) && !lead.comments && (
-          <span className="text-[10px] px-1.5 py-0.5 rounded font-mono max-w-[140px] truncate"
-            style={{ background: sColor + '15', color: sColor }}>
-            {lead.campaign || lead.source}
-          </span>
-        )}
-        {lead.zip && <span className="text-[10px] text-[#5A6A7A] font-mono">{lead.zip}</span>}
-        {!lead.zip && lead.state && <span className="text-[10px] text-[#5A6A7A] font-mono">{lead.state}</span>}
-        {time && (
-          <span className="text-[10px] font-mono ml-auto"
-            style={{ color: offHours ? '#F59E0B' : '#3A4A5A' }}
-            title={offHours ? 'Outside 8a–9p local time' : 'Local time'}>
-            {time}
-          </span>
-        )}
-      </div>
     </div>
   )
 }
@@ -136,6 +160,13 @@ export default function Pipeline() {
   // Column-drag (reorder stages) state
   const [dragStageId, setDragStageId] = useState(null)
   const [dragOverStageCol, setDragOverStageCol] = useState(null)
+
+  // Sort + filter
+  const [sortBy, setSortBy] = useState('stage_newest')  // newest in stage first
+  const [search, setSearch] = useState('')
+  const [tagFilters, setTagFilters] = useState(() => new Set())
+  const [tzFilters, setTzFilters] = useState(() => new Set())
+  const [showFilters, setShowFilters] = useState(false)
 
   // Scroll affordances
   const [canScrollLeft, setCanScrollLeft] = useState(false)
@@ -302,18 +333,122 @@ export default function Pipeline() {
 
   return (
     <div className="flex flex-col h-full animate-fade-in">
-      <div className="flex items-center justify-between px-6 py-4 border-b border-[#1A2130]">
-        <div>
-          <h1 className="text-xl font-display font-bold text-white">Pipeline</h1>
-          <p className="text-xs text-[#5A6A7A] mt-0.5">{safeLeads.length} leads · click a card to work it · drag to move between buckets</p>
+      {(() => {
+        // Build the side-tag + TZ option lists once per render (depend on leads)
+        const tagCounts = (() => {
+          const m = new Map()
+          for (const l of safeLeads) for (const t of (Array.isArray(l.tags) ? l.tags : [])) {
+            if (!t || t === 'starred') continue
+            m.set(t, (m.get(t) || 0) + 1)
+          }
+          return Array.from(m.entries()).sort((a, b) => b[1] - a[1])
+        })()
+        const tzCounts = (() => {
+          const m = new Map()
+          for (const l of safeLeads) { const z = tzShortFor(l); if (z) m.set(z, (m.get(z) || 0) + 1) }
+          return m
+        })()
+        const tzVisible = TZ_ORDER.filter(z => tzCounts.has(z))
+        const activeCount = (search ? 1 : 0) + tagFilters.size + tzFilters.size
+        return (
+      <div className="border-b border-[#1A2130]">
+        <div className="flex items-center justify-between px-6 py-4 gap-4">
+          <div className="min-w-0">
+            <h1 className="text-xl font-display font-bold text-white">Pipeline</h1>
+            <p className="text-xs text-[#5A6A7A] mt-0.5 truncate">{safeLeads.length} leads · click a card to work it · drag to move between buckets</p>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {/* Search */}
+            <div className="relative">
+              <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[#5A6A7A]" />
+              <input value={search} onChange={e => setSearch(e.target.value)}
+                placeholder="Search name, phone, tag…"
+                className="bg-[#0E1318] border border-[#1A2130] rounded-lg pl-8 pr-7 py-1.5 text-xs text-white placeholder-[#3A4A5A] focus:outline-none focus:border-[#00E5C340] w-56" />
+              {search && (
+                <button onClick={() => setSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-[#5A6A7A] hover:text-white">
+                  <X size={11} />
+                </button>
+              )}
+            </div>
+            {/* Sort dropdown */}
+            <select value={sortBy} onChange={e => setSortBy(e.target.value)}
+              className="bg-[#0E1318] border border-[#1A2130] rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-[#00E5C340]">
+              <option value="stage_newest">Newest in stage</option>
+              <option value="stage_oldest">Oldest in stage</option>
+              <option value="created_newest">Newest lead</option>
+              <option value="created_oldest">Oldest lead</option>
+              <option value="name_asc">Name A→Z</option>
+              <option value="price_desc">Highest cost first</option>
+            </select>
+            {/* Filters toggle */}
+            <button onClick={() => setShowFilters(v => !v)}
+              className="px-2.5 py-1.5 rounded-lg text-xs border transition-colors"
+              style={activeCount > 0
+                ? { background: '#A78BFA15', color: '#A78BFA', borderColor: '#A78BFA60' }
+                : { color: '#8899AA', borderColor: '#1A2130' }}>
+              Filters{activeCount > 0 ? ` (${activeCount})` : ''}
+            </button>
+            {totalValue > 0 && (
+              <div className="text-right pl-3 border-l border-[#1A2130]">
+                <p className="text-[10px] text-[#5A6A7A] font-mono uppercase tracking-wider">Annual</p>
+                <p className="text-sm font-display font-bold text-[#00E5C3]">${totalValue.toLocaleString()}</p>
+              </div>
+            )}
+          </div>
         </div>
-        {totalValue > 0 && (
-          <div className="text-right">
-            <p className="text-xs text-[#5A6A7A] font-mono uppercase tracking-wider">Annual Value</p>
-            <p className="text-lg font-display font-bold text-[#00E5C3]">${totalValue.toLocaleString()}</p>
+
+        {/* Collapsible filter strip — side tags + time zones */}
+        {showFilters && (
+          <div className="px-6 pb-3 space-y-2">
+            {tagCounts.length > 0 && (
+              <div className="flex gap-2 items-center flex-wrap">
+                <span className="text-[10px] font-mono uppercase tracking-wider text-[#3A4A5A] mr-1">Side tags</span>
+                {tagCounts.map(([t, count]) => {
+                  const active = tagFilters.has(t)
+                  return (
+                    <button key={t}
+                      onClick={() => setTagFilters(prev => { const n = new Set(prev); n.has(t) ? n.delete(t) : n.add(t); return n })}
+                      className="px-2.5 py-1 rounded-full text-xs font-mono"
+                      style={active
+                        ? { background: '#A78BFA15', color: '#A78BFA', border: '1px solid #A78BFA60' }
+                        : { color: '#5A6A7A', border: '1px solid #1A2130' }}>
+                      #{t} <span className="opacity-60">({count})</span>
+                    </button>
+                  )
+                })}
+                {tagFilters.size > 0 && (
+                  <button onClick={() => setTagFilters(new Set())}
+                    className="text-[10px] text-[#5A6A7A] hover:text-white px-1">clear</button>
+                )}
+              </div>
+            )}
+            {tzVisible.length > 0 && (
+              <div className="flex gap-2 items-center flex-wrap">
+                <span className="text-[10px] font-mono uppercase tracking-wider text-[#3A4A5A] mr-1">Time zones</span>
+                {tzVisible.map(z => {
+                  const active = tzFilters.has(z)
+                  return (
+                    <button key={z}
+                      onClick={() => setTzFilters(prev => { const n = new Set(prev); n.has(z) ? n.delete(z) : n.add(z); return n })}
+                      className="px-2.5 py-1 rounded-full text-xs font-mono"
+                      style={active
+                        ? { background: '#22D3EE15', color: '#22D3EE', border: '1px solid #22D3EE60' }
+                        : { color: '#5A6A7A', border: '1px solid #1A2130' }}>
+                      {z} <span className="opacity-60">({tzCounts.get(z)})</span>
+                    </button>
+                  )
+                })}
+                {tzFilters.size > 0 && (
+                  <button onClick={() => setTzFilters(new Set())}
+                    className="text-[10px] text-[#5A6A7A] hover:text-white px-1">clear</button>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
+        )
+      })()}
 
       <div className="flex-1 relative overflow-hidden">
         <div
@@ -325,16 +460,35 @@ export default function Pipeline() {
         >
           <div className="flex gap-4 h-full" style={{ minWidth: 'max-content', minHeight: 'calc(100vh - 200px)' }}>
             {sortedTags.map(stage => {
-              // Sort each bucket's leads by how long they've been in this stage —
-              // OLDEST at the top so the agent works the stalest leads first and
-              // they cycle through. Falls back to created_at for leads predating
-              // the stage_changed_at column.
-              const stageLeads = safeLeads
-                .filter(l => l.stage === stage.id || (l.status && (l.status.toLowerCase() === (stage.label || '').toLowerCase())))
+              // Build this column: in-stage leads → search → tag/TZ filters → sort
+              const inStage = safeLeads.filter(l => l.stage === stage.id || (l.status && (l.status.toLowerCase() === (stage.label || '').toLowerCase())))
+              const q = search.trim().toLowerCase()
+              const stageLeads = inStage
+                .filter(l => {
+                  if (q) {
+                    const name = [l.first_name, l.last_name, l.name].filter(Boolean).join(' ')
+                    const haystack = `${name} ${l.phone || ''} ${l.email || ''} ${l.state || ''} ${l.zip || ''} ${l.city || ''} ${l.comments || ''} ${(l.tags || []).join(' ')}`.toLowerCase()
+                    if (!haystack.includes(q)) return false
+                  }
+                  if (tagFilters.size > 0) {
+                    if (!Array.isArray(l.tags) || !Array.from(tagFilters).every(t => l.tags.includes(t))) return false
+                  }
+                  if (tzFilters.size > 0 && !tzFilters.has(tzShortFor(l))) return false
+                  return true
+                })
                 .sort((a, b) => {
-                  const ta = new Date(a.stage_changed_at || a.created_at || 0).getTime() || 0
-                  const tb = new Date(b.stage_changed_at || b.created_at || 0).getTime() || 0
-                  return ta - tb  // ascending: oldest first
+                  const tin = (l) => new Date(l.stage_changed_at || l.created_at || 0).getTime() || 0
+                  const tcr = (l) => new Date(l.created_at || 0).getTime() || 0
+                  const nm  = (l) => [l.first_name, l.last_name, l.name].filter(Boolean).join(' ').toLowerCase()
+                  switch (sortBy) {
+                    case 'stage_oldest': return tin(a) - tin(b)
+                    case 'created_newest': return tcr(b) - tcr(a)
+                    case 'created_oldest': return tcr(a) - tcr(b)
+                    case 'name_asc': return nm(a).localeCompare(nm(b))
+                    case 'price_desc': return (Number(b.price) || 0) - (Number(a.price) || 0)
+                    case 'stage_newest':
+                    default: return tin(b) - tin(a)  // newest in stage first
+                  }
                 })
               const isCardDragOver = dragOverStage === stage.id && !dragStageId
               const isColTargetOver = dragOverStageCol === stage.id
@@ -376,7 +530,7 @@ export default function Pipeline() {
                       <PipelineCard key={lead.id} lead={lead}
                         onDragStart={e => { e.dataTransfer.setData('leadId', lead.id); e.dataTransfer.effectAllowed = 'move'; setDragLeadId(lead.id) }}
                         onDragEnd={handleDragEnd}
-                        onClick={() => navigate(`/leads/${lead.id}`)} />
+                        onOpen={() => navigate(`/leads/${lead.id}`)} />
                     ))}
                     {stageLeads.length === 0 && (
                       <div className={clsx('flex items-center justify-center h-16 border border-dashed rounded-lg transition-colors', isCardDragOver ? 'border-opacity-60' : 'border-[#1A2130]')}
