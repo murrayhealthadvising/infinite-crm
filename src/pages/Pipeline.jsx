@@ -325,7 +325,17 @@ export default function Pipeline() {
         >
           <div className="flex gap-4 h-full" style={{ minWidth: 'max-content', minHeight: 'calc(100vh - 200px)' }}>
             {sortedTags.map(stage => {
-              const stageLeads = safeLeads.filter(l => l.stage === stage.id || (l.status && (l.status.toLowerCase() === (stage.label || '').toLowerCase())))
+              // Sort each bucket's leads by how long they've been in this stage —
+              // OLDEST at the top so the agent works the stalest leads first and
+              // they cycle through. Falls back to created_at for leads predating
+              // the stage_changed_at column.
+              const stageLeads = safeLeads
+                .filter(l => l.stage === stage.id || (l.status && (l.status.toLowerCase() === (stage.label || '').toLowerCase())))
+                .sort((a, b) => {
+                  const ta = new Date(a.stage_changed_at || a.created_at || 0).getTime() || 0
+                  const tb = new Date(b.stage_changed_at || b.created_at || 0).getTime() || 0
+                  return ta - tb  // ascending: oldest first
+                })
               const isCardDragOver = dragOverStage === stage.id && !dragStageId
               const isColTargetOver = dragOverStageCol === stage.id
               return (
