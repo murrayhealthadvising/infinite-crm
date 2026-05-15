@@ -538,9 +538,10 @@ const WORKER_URL = (import.meta.env.VITE_CRM_WORKER_URL
 // contact page scrapes the visible details and POSTs into their CRM.
 // ─────────────────────────────────────────────────────────────────────────────
 function IntegrationsPanel() {
-  const { user } = useApp()
+  const { user, leadEmail } = useApp()
   const [showInstructions, setShowInstructions] = useState(false)
   const [copyHit, setCopyHit] = useState(false)
+  const [leadCopyHit, setLeadCopyHit] = useState(false)
   const agentId = user?.id || ''
   const appOrigin = typeof window !== 'undefined' ? window.location.origin : ''
   // The bookmarklet itself is a small loader. It stashes the agent id + worker
@@ -562,6 +563,30 @@ function IntegrationsPanel() {
         <p className="text-xs text-[#3A4A5A] mt-1">
           Pull leads from your texting platform straight into the CRM with one click.
         </p>
+      </div>
+
+      {/* Marketplace forwarding address — the email USHA Lead Arena / Ringy / etc.
+          should send leads to. Each agent has their own; show it prominently. */}
+      <div className="rounded-lg border border-[#00E5C320] p-4 mb-3" style={{ background: '#00E5C308' }}>
+        <p className="text-sm font-semibold text-white mb-1">Marketplace forwarding address</p>
+        <p className="text-xs text-[#5A6A7A] mb-3">
+          Give this to USHA Lead Arena (or whatever marketplace is sending you leads) as your destination email.
+          Anything sent here lands directly in your CRM as a new lead.
+        </p>
+        {leadEmail ? (
+          <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg border border-[#00E5C340]" style={{ background: '#080B0F' }}>
+            <code className="flex-1 text-sm text-[#00E5C3] font-mono truncate select-all">{leadEmail}</code>
+            <button onClick={() => { navigator.clipboard.writeText(leadEmail); setLeadCopyHit(true); setTimeout(() => setLeadCopyHit(false), 1500) }}
+              className="text-[#5A6A7A] hover:text-white p-1.5 rounded hover:bg-[#1A2130]"
+              title="Copy address">
+              {leadCopyHit ? <Check size={14} className="text-[#00E5C3]" /> : <Copy size={14} />}
+            </button>
+          </div>
+        ) : (
+          <div className="px-3 py-2.5 rounded-lg border border-dashed border-[#1A2130] text-xs text-[#8899AA]">
+            Not set up yet. Ask your admin to configure your marketplace address.
+          </div>
+        )}
       </div>
 
       <div className="rounded-lg border border-[#A78BFA20] p-4" style={{ background: '#A78BFA08' }}>

@@ -394,6 +394,10 @@ export function AppProvider({ children }) {
     agency: 'Murray Health Advising',
   } : null
 
+  // Marketplace forwarding address — set per agent so they know what to give
+  // USHA Lead Arena / Ringy / etc. Comes from profiles.lead_email.
+  const leadEmail = profile?.lead_email || null
+
   // Split-notes preference — boolean on profiles. Persisted per-user.
   const splitNotes = !!profile?.split_notes
   const setSplitNotes = async (next) => {
@@ -514,6 +518,7 @@ export function AppProvider({ children }) {
       // user preferences
       splitNotes, setSplitNotes,
       commissionPresets, saveCommissionPresets,
+      leadEmail,
       // reminders (Today page)
       reminders, refreshReminders, addReminder, completeReminder, uncompleteReminder, snoozeReminder, deleteReminder,
     }}>
