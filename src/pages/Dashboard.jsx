@@ -1,6 +1,7 @@
+import { useState } from 'react'
 import { useApp } from '../context/AppContext'
 import StatusTag from '../components/StatusTag'
-import { TrendingUp, Users, CheckCircle, Calendar, Clock, ArrowUpRight, Zap } from 'lucide-react'
+import { TrendingUp, Users, CheckCircle, Calendar, Clock, ArrowUpRight, Zap, Check, X, Rocket } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import { useNavigate } from 'react-router-dom'
 
@@ -19,6 +20,146 @@ function leadInitials(lead) {
   if (n === '—' || !n) return '?'
   const parts = n.trim().split(/\s+/).slice(0, 2)
   return parts.map(p => p[0]?.toUpperCase() || '').join('') || '?'
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Onboarding checklist — shown on Dashboard until each new agent finishes
+// setup. Each step is auto-detected; the bookmarklet is the only one the
+// agent has to manually confirm (no clean way to detect a browser bookmark).
+// Hides automatically once everything's done; also has a one-time Dismiss.
+// ─────────────────────────────────────────────────────────────────────────────
+function OnboardingChecklist() {
+  const { profile, leadEmail, commissionPresets, leads, reminders } = useApp()
+  const navigate = useNavigate()
+  const lsKey = (k) => 'infinite-crm:' + (profile?.user_id || 'anon') + ':' + k
+  const [bookmarkInstalled, setBookmarkInstalled] = useState(() =>
+    typeof localStorage !== 'undefined' && localStorage.getItem(lsKey('bookmarklet-installed')) === '1'
+  )
+  const [dismissed, setDismissed] = useState(() =>
+    typeof localStorage !== 'undefined' && localStorage.getItem(lsKey('onboarding-dismissed')) === '1'
+  )
+
+  const hasLeadEmail = !!leadEmail
+  const hasCommissionStructure = (() => {
+    const c = commissionPresets
+    if (Array.isArray(c)) return c.length > 0
+    if (c && typeof c === 'object') return Array.isArray(c.products) && c.products.length > 0
+    return false
+  })()
+  const safeLeads = Array.isArray(leads) ? leads : []
+  const safeReminders = Array.isArray(reminders) ? reminders : []
+  const hasFirstWork = safeLeads.length > 0 || safeReminders.length > 0
+
+  const steps = [
+    { id: 'account', label: 'Account created', done: true },
+    {
+      id: 'leadEmail',
+      label: hasLeadEmail
+        ? `Marketplace address: ${leadEmail}`
+        : 'Get your marketplace forwarding address from Murray',
+      done: hasLeadEmail,
+      hint: 'Murray (admin) sets this up — ask him in chat once.',
+      action: { label: 'Open Settings', go: () => navigate('/settings') },
+    },
+    {
+      id: 'commission',
+      label: 'Set up your commission structure (per-product % + advance months)',
+      done: hasCommissionStructure,
+      action: { label: 'Open Calculator', go: () => navigate('/calculator') },
+    },
+    {
+      id: 'bookmarklet',
+      label: 'Install the PitchPerfect bookmarklet',
+      done: bookmarkInstalled,
+      action: { label: 'Open Settings', go: () => navigate('/settings') },
+      manualConfirm: () => {
+        try { localStorage.setItem(lsKey('bookmarklet-installed'), '1') } catch {}
+        setBookmarkInstalled(true)
+      },
+    },
+    {
+      id: 'firstWork',
+      label: 'Work your first lead or set a reminder',
+      done: hasFirstWork,
+      action: { label: 'Open Today', go: () => navigate('/today') },
+    },
+  ]
+
+  const doneCount = steps.filter(s => s.done).length
+  const allDone = doneCount === steps.length
+
+  if (dismissed) return null
+  if (allDone) return null
+
+  const dismiss = () => {
+    try { localStorage.setItem(lsKey('onboarding-dismissed'), '1') } catch {}
+    setDismissed(true)
+  }
+
+  return (
+    <div className="rounded-xl border border-[#00E5C340] p-5 mb-6" style={{ background: '#00E5C308' }}>
+      <div className="flex items-start justify-between gap-3 mb-4">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0"
+            style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
+            <Rocket size={18} className="text-black" />
+          </div>
+          <div>
+            <h2 className="text-base font-display font-bold text-white">Welcome to Infinite</h2>
+            <p className="text-xs text-[#5A6A7A] mt-0.5">
+              {doneCount} of {steps.length} steps complete — let's get you running so leads start flowing.
+            </p>
+          </div>
+        </div>
+        <button onClick={dismiss}
+          className="text-xs text-[#5A6A7A] hover:text-white flex items-center gap-1 flex-shrink-0"
+          title="Hide this checklist">
+          <X size={12} /> Dismiss
+        </button>
+      </div>
+
+      <div className="space-y-2">
+        {steps.map(s => (
+          <div key={s.id}
+            className="flex items-center gap-3 px-3 py-2.5 rounded-lg border transition-colors"
+            style={{
+              background: s.done ? '#080B0F60' : '#080B0F',
+              borderColor: s.done ? '#1A2130' : '#2A3547',
+            }}>
+            <div className="w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0"
+              style={{
+                background: s.done ? '#00E5C320' : 'transparent',
+                border: '1px solid ' + (s.done ? '#00E5C3' : '#2A3547'),
+              }}>
+              {s.done && <Check size={11} className="text-[#00E5C3]" />}
+            </div>
+
+            <div className="flex-1 min-w-0">
+              <p className={'text-sm ' + (s.done ? 'text-[#5A6A7A]' : 'text-white')}>
+                {s.label}
+              </p>
+              {!s.done && s.hint && <p className="text-[10px] text-[#5A6A7A] mt-0.5">{s.hint}</p>}
+            </div>
+
+            {!s.done && s.action && (
+              <button onClick={s.action.go}
+                className="text-xs px-3 py-1.5 rounded-lg text-black font-semibold flex-shrink-0"
+                style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
+                {s.action.label}
+              </button>
+            )}
+            {!s.done && s.manualConfirm && (
+              <button onClick={s.manualConfirm}
+                className="text-[10px] text-[#5A6A7A] hover:text-white flex-shrink-0 px-2"
+                title="I've already installed it">
+                Mark done
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
 }
 
 const StatCard = ({ label, value, sub, color, icon: Icon }) => (
@@ -68,6 +209,9 @@ export default function Dashboard() {
         <h1 className="text-3xl font-display font-bold text-white">{greeting}, {user?.name?.split(' ')[0] || 'there'}.</h1>
         <p className="text-[#5A6A7A] mt-1">Here's what's happening with your pipeline today.</p>
       </div>
+
+      {/* Onboarding checklist — auto-hides once finished */}
+      <OnboardingChecklist />
 
       {/* Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
