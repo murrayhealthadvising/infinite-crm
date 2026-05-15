@@ -17,7 +17,6 @@ const NAV_FULL = [
   { to: '/gmail-leads',  icon: Mail,             label: 'Gmail Leads' },
   null, // divider
   { to: '/calculator',   icon: Calculator,       label: 'Calculator' },
-  { to: '/lead-roi',     icon: TrendingUp,       label: 'Lead ROI' },
   null,
   { to: '/settings',     icon: Settings,         label: 'Settings' },
 ]

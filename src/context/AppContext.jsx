@@ -403,6 +403,18 @@ export function AppProvider({ children }) {
     try { await supabase.from('profiles').update({ split_notes: !!next }).eq('user_id', uid) } catch {}
   }
 
+  // Commission product presets — per-agent JSONB on profiles. Each entry:
+  //   { name, comm_pct (0-100), advance_months (0-12) }
+  // Used by the Calculator page to autofill product rows.
+  const commissionPresets = Array.isArray(profile?.commission_presets) ? profile.commission_presets : []
+  const saveCommissionPresets = async (next) => {
+    const uid = session?.user?.id
+    if (!uid) return
+    const arr = Array.isArray(next) ? next : []
+    setProfile(p => p ? { ...p, commission_presets: arr } : p)
+    try { await supabase.from('profiles').update({ commission_presets: arr }).eq('user_id', uid) } catch {}
+  }
+
   // Permission helpers for the 'runner' role — they work UNDER a specific
   // lead agent and see/edit that agent's leads but can't delete or admin.
   const isRunner = profile?.role === 'runner'
@@ -451,6 +463,7 @@ export function AppProvider({ children }) {
       isAdmin, isRunner, isAgent, can, effectiveAgentId,
       // user preferences
       splitNotes, setSplitNotes,
+      commissionPresets, saveCommissionPresets,
     }}>
       {children}
     </AppContext.Provider>

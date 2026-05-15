@@ -11,7 +11,6 @@ import FollowUps from './pages/FollowUps'
 import Tasks from './pages/Tasks'
 import GmailLeads from './pages/Gmail'
 import Calculator from './pages/Calculator'
-import LeadROI from './pages/ROI'
 import Settings from './pages/Settings'
 import LeadDetail from './pages/LeadDetail'
 import Admin from './pages/Admin'
@@ -91,7 +90,6 @@ function AuthGate() {
             <Route path="tasks" element={<Tasks />} />
             <Route path="gmail-leads" element={<GmailLeads />} />
             <Route path="calculator" element={<Calculator />} />
-            <Route path="lead-roi" element={<LeadROI />} />
             <Route path="settings" element={<Settings />} />
             <Route path="admin" element={<Admin />} />
           </Route>
