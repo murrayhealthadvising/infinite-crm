@@ -1,19 +1,17 @@
 import { NavLink, useLocation } from 'react-router-dom'
 import {
-  LayoutDashboard, Shield, Users, GitBranch, Calendar, Clock,
-  CheckSquare, Mail, Calculator, TrendingUp, Settings, ChevronLeft,
-  ChevronRight, Menu, LogOut, Star,
+  LayoutDashboard, Shield, Users, GitBranch, Sun,
+  Mail, Calculator, Settings, ChevronLeft,
+  ChevronRight, Menu, LogOut,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import clsx from 'clsx'
 
 const NAV_FULL = [
   { to: '/dashboard',    icon: LayoutDashboard, label: 'Dashboard' },
+  { to: '/today',        icon: Sun,              label: 'Today' },
   { to: '/leads',        icon: Users,            label: 'Leads' },
   { to: '/pipeline',     icon: GitBranch,        label: 'Pipeline' },
-  { to: '/appointments', icon: Calendar,         label: 'Appointments' },
-  { to: '/follow-ups',   icon: Clock,            label: 'Follow-Ups' },
-  { to: '/tasks',        icon: CheckSquare,      label: 'Tasks' },
   { to: '/gmail-leads',  icon: Mail,             label: 'Gmail Leads' },
   null, // divider
   { to: '/calculator',   icon: Calculator,       label: 'Calculator' },
@@ -23,11 +21,9 @@ const NAV_FULL = [
 
 // Runner-mode nav: focus on the work, hide lead-acquisition + analytics surfaces
 const NAV_RUNNER = [
+  { to: '/today',       icon: Sun,         label: 'Today' },
   { to: '/leads',       icon: Users,       label: 'Leads' },
   { to: '/pipeline',    icon: GitBranch,   label: 'Pipeline' },
-  { to: '/appointments',icon: Calendar,    label: 'Appointments' },
-  { to: '/follow-ups',  icon: Clock,       label: 'Follow-Ups' },
-  { to: '/tasks',       icon: CheckSquare, label: 'Tasks' },
   null,
   { to: '/settings',    icon: Settings,    label: 'Settings' },
 ]

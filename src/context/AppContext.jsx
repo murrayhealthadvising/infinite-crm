@@ -415,6 +415,56 @@ export function AppProvider({ children }) {
     try { await supabase.from('profiles').update({ commission_presets: arr }).eq('user_id', uid) } catch {}
   }
 
+  // Lead reminders (Today page) — { id, user_id, lead_id, kind, due_at, note, done_at }
+  const [reminders, setReminders] = useState([])
+  const refreshReminders = async () => {
+    if (!session?.user) return
+    try {
+      const { data } = await supabase.from('lead_reminders').select('*').order('due_at', { ascending: true })
+      if (Array.isArray(data)) setReminders(data)
+    } catch {}
+  }
+  useEffect(() => {
+    if (!session?.user) { setReminders([]); return }
+    refreshReminders()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.user?.id, profile?.role, profile?.lead_agent_id])
+
+  const addReminder = async ({ lead_id, kind, due_at, note }) => {
+    const uid = (profile?.role === 'runner' && profile?.lead_agent_id) ? profile.lead_agent_id : session?.user?.id
+    if (!uid) return null
+    const row = {
+      user_id: uid,
+      lead_id: lead_id || null,
+      kind: kind || 'call',
+      due_at: due_at || null,
+      note: note || null,
+    }
+    try {
+      const { data } = await supabase.from('lead_reminders').insert([row]).select().single()
+      if (data) { setReminders(prev => [...prev, data].sort((a, b) => new Date(a.due_at || 0) - new Date(b.due_at || 0))); return data }
+    } catch (e) { console.error('addReminder failed:', e) }
+    return null
+  }
+
+  const completeReminder = async (id) => {
+    const now = new Date().toISOString()
+    setReminders(prev => prev.map(r => r.id === id ? { ...r, done_at: now } : r))
+    try { await supabase.from('lead_reminders').update({ done_at: now }).eq('id', id) } catch {}
+  }
+  const uncompleteReminder = async (id) => {
+    setReminders(prev => prev.map(r => r.id === id ? { ...r, done_at: null } : r))
+    try { await supabase.from('lead_reminders').update({ done_at: null }).eq('id', id) } catch {}
+  }
+  const snoozeReminder = async (id, due_at) => {
+    setReminders(prev => prev.map(r => r.id === id ? { ...r, due_at } : r))
+    try { await supabase.from('lead_reminders').update({ due_at }).eq('id', id) } catch {}
+  }
+  const deleteReminder = async (id) => {
+    setReminders(prev => prev.filter(r => r.id !== id))
+    try { await supabase.from('lead_reminders').delete().eq('id', id) } catch {}
+  }
+
   // Permission helpers for the 'runner' role — they work UNDER a specific
   // lead agent and see/edit that agent's leads but can't delete or admin.
   const isRunner = profile?.role === 'runner'
@@ -464,6 +514,8 @@ export function AppProvider({ children }) {
       // user preferences
       splitNotes, setSplitNotes,
       commissionPresets, saveCommissionPresets,
+      // reminders (Today page)
+      reminders, refreshReminders, addReminder, completeReminder, uncompleteReminder, snoozeReminder, deleteReminder,
     }}>
       {children}
     </AppContext.Provider>

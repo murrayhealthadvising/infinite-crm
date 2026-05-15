@@ -236,7 +236,8 @@ function AIAssistant({ lead }) {
 export default function LeadDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const { leads, tags, updateLead, updateLeadStage, addActivity, getLeadActivities, splitNotes } = useApp()
+  const { leads, tags, updateLead, updateLeadStage, addActivity, getLeadActivities, splitNotes, addReminder } = useApp()
+  const [showRemindMe, setShowRemindMe] = useState(false)
   const safeLeads = Array.isArray(leads) ? leads : []
   const lead = safeLeads.find(l => l.id === id)
   const [logType, setLogType] = useState('note')
@@ -360,6 +361,11 @@ export default function LeadDetail() {
               <PhoneCall size={14} /> Call {displayPhone(lead.phone)}
             </a>
           )}
+          <button onClick={() => setShowRemindMe(true)}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-[#1A2130] text-sm text-[#8899AA] hover:text-white hover:border-[#2A3547]"
+            title="Schedule a reminder for this lead">
+            <Calendar size={13} /> Remind me
+          </button>
           <div className="relative">
             <button onClick={() => setEditStage(!editStage)}
               className="flex items-center gap-2 px-3 py-2 rounded-lg border border-[#1A2130] text-sm text-[#8899AA] hover:border-[#2A3547] transition-colors">
@@ -485,6 +491,96 @@ export default function LeadDetail() {
             </div>
           )}
         </div>
+      </div>
+
+      {showRemindMe && (
+        <RemindMeModal lead={lead}
+          onClose={() => setShowRemindMe(false)}
+          onSubmit={async (data) => {
+            await addReminder({ ...data, lead_id: id })
+            setShowRemindMe(false)
+          }} />
+      )}
+    </div>
+  )
+}
+
+function RemindMeModal({ lead, onClose, onSubmit }) {
+  const [kind, setKind] = useState('call')
+  const [due, setDue] = useState(() => {
+    const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(9, 0, 0, 0)
+    const pad = n => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+  })
+  const [note, setNote] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const submit = async (e) => {
+    e.preventDefault()
+    setSaving(true)
+    try {
+      const due_at = due ? new Date(due).toISOString() : null
+      await onSubmit({ kind, due_at, note: note.trim() || null })
+    } finally { setSaving(false) }
+  }
+
+  const setBy = (fn) => {
+    const d = fn(new Date())
+    const pad = n => String(n).padStart(2, '0')
+    setDue(`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`)
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative w-full max-w-md rounded-2xl border border-[#1A2130] overflow-hidden" style={{ background: '#0E1318' }}>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-[#1A2130]">
+          <h3 className="text-base font-semibold text-white">Remind me about {lead.first_name || 'this lead'}</h3>
+          <button onClick={onClose} className="text-[#5A6A7A] hover:text-white"><X size={16} /></button>
+        </div>
+        <form onSubmit={submit} className="p-5 space-y-4">
+          <div className="flex gap-2">
+            {[['call','Call','#10B981'],['appt','Appt','#3B82F6'],['task','Task','#F59E0B']].map(([k, label, color]) => (
+              <button type="button" key={k} onClick={() => setKind(k)}
+                className="flex-1 px-3 py-2 rounded-lg text-xs border"
+                style={kind === k
+                  ? { background: color + '15', color, borderColor: color + '60' }
+                  : { color: '#5A6A7A', borderColor: '#1A2130' }}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <div>
+            <label className="text-xs font-mono uppercase tracking-wider text-[#5A6A7A] block mb-1">When</label>
+            <input type="datetime-local" value={due} onChange={e => setDue(e.target.value)}
+              className="w-full bg-[#080B0F] border border-[#1A2130] rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-[#00E5C340]" />
+            <div className="flex gap-1.5 mt-2 flex-wrap">
+              <button type="button" onClick={() => setBy(d => { d.setHours(d.getHours()+1); return d })}
+                className="text-[10px] px-2 py-0.5 rounded border border-[#1A2130] text-[#5A6A7A] hover:text-white">+ 1h</button>
+              <button type="button" onClick={() => setBy(d => { d.setHours(d.getHours()+3); return d })}
+                className="text-[10px] px-2 py-0.5 rounded border border-[#1A2130] text-[#5A6A7A] hover:text-white">+ 3h</button>
+              <button type="button" onClick={() => setBy(d => { d.setDate(d.getDate()+1); d.setHours(9,0,0,0); return d })}
+                className="text-[10px] px-2 py-0.5 rounded border border-[#1A2130] text-[#5A6A7A] hover:text-white">Tmrw 9am</button>
+              <button type="button" onClick={() => setBy(d => { d.setDate(d.getDate()+7); return d })}
+                className="text-[10px] px-2 py-0.5 rounded border border-[#1A2130] text-[#5A6A7A] hover:text-white">+ 1 wk</button>
+            </div>
+          </div>
+          <div>
+            <label className="text-xs font-mono uppercase tracking-wider text-[#5A6A7A] block mb-1">Note</label>
+            <textarea value={note} onChange={e => setNote(e.target.value)} rows={3}
+              placeholder="What about this lead needs your attention?"
+              className="w-full bg-[#080B0F] border border-[#1A2130] rounded-lg px-3 py-2 text-sm text-white placeholder-[#3A4A5A] focus:outline-none focus:border-[#00E5C340] resize-y" />
+          </div>
+          <div className="flex gap-2">
+            <button type="submit" disabled={saving}
+              className="flex-1 py-2.5 rounded-lg text-sm font-semibold text-black disabled:opacity-50"
+              style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
+              {saving ? 'Saving…' : 'Set reminder'}
+            </button>
+            <button type="button" onClick={onClose}
+              className="px-4 py-2.5 rounded-lg text-sm bg-[#1A2130] text-[#8899AA] hover:text-white">Cancel</button>
+          </div>
+        </form>
       </div>
     </div>
   )

@@ -6,9 +6,7 @@ import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Leads from './pages/Leads'
 import Pipeline from './pages/Pipeline'
-import Appointments from './pages/Appointments'
-import FollowUps from './pages/FollowUps'
-import Tasks from './pages/Tasks'
+import Today from './pages/Today'
 import GmailLeads from './pages/Gmail'
 import Calculator from './pages/Calculator'
 import Settings from './pages/Settings'
@@ -85,9 +83,11 @@ function AuthGate() {
             {/* Old /dial-bucket route redirects to /pipeline — buckets are stages now */}
             <Route path="dial-bucket" element={<Navigate to="/pipeline" replace />} />
             <Route path="pipeline" element={<Pipeline />} />
-            <Route path="appointments" element={<Appointments />} />
-            <Route path="follow-ups" element={<FollowUps />} />
-            <Route path="tasks" element={<Tasks />} />
+            <Route path="today" element={<Today />} />
+            {/* Old workflow routes redirect to the unified Today page */}
+            <Route path="appointments" element={<Navigate to="/today" replace />} />
+            <Route path="follow-ups"   element={<Navigate to="/today" replace />} />
+            <Route path="tasks"        element={<Navigate to="/today" replace />} />
             <Route path="gmail-leads" element={<GmailLeads />} />
             <Route path="calculator" element={<Calculator />} />
             <Route path="settings" element={<Settings />} />
