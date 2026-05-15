@@ -407,16 +407,17 @@ export function AppProvider({ children }) {
     try { await supabase.from('profiles').update({ split_notes: !!next }).eq('user_id', uid) } catch {}
   }
 
-  // Commission product presets — per-agent JSONB on profiles. Each entry:
-  //   { name, comm_pct (0-100), advance_months (0-12) }
-  // Used by the Calculator page to autofill product rows.
-  const commissionPresets = Array.isArray(profile?.commission_presets) ? profile.commission_presets : []
+  // Commission structure — per-agent JSONB on profiles. Stored shape:
+  //   { default_advance, products: [{ key, name, comm_pct, advance_months, half, association }] }
+  // For backwards compatibility, also accepts a legacy array of products.
+  const commissionPresets = profile?.commission_presets ?? null
   const saveCommissionPresets = async (next) => {
     const uid = session?.user?.id
     if (!uid) return
-    const arr = Array.isArray(next) ? next : []
-    setProfile(p => p ? { ...p, commission_presets: arr } : p)
-    try { await supabase.from('profiles').update({ commission_presets: arr }).eq('user_id', uid) } catch {}
+    // Accept either the structured object OR a legacy array — Supabase JSONB
+    // happily stores either; the Calculator handles both shapes on read.
+    setProfile(p => p ? { ...p, commission_presets: next } : p)
+    try { await supabase.from('profiles').update({ commission_presets: next }).eq('user_id', uid) } catch (e) { console.error('saveCommissionPresets failed:', e) }
   }
 
   // Lead reminders (Today page) — { id, user_id, lead_id, kind, due_at, note, done_at }
