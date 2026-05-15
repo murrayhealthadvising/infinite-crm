@@ -2,17 +2,29 @@ import { useState, useMemo } from 'react'
 import { useApp } from '../context/AppContext'
 import { Plus, Trash2, Save, Settings as SettingsIcon, X, RotateCcw } from 'lucide-react'
 
-// Default product structure for a new agent — used until they save their own.
-// HA + Wraps auto-get half the agent's default advance months.
+// USHA Association tiers — each has a monthly price (deducted from commissionable
+// premium since you don't earn comm on association) AND a quarterly residual
+// the agent earns directly. Numbers from the official benefit chart.
+const ASSOCIATION_TIERS = {
+  none:     { label: 'None',         monthly: 0,     residual_q: 0 },
+  ruby:     { label: 'Ruby',         monthly: 32.95, residual_q: 12.75 },
+  sapphire: { label: 'Sapphire',     monthly: 42.95, residual_q: 16.50 },
+  emerald:  { label: 'Emerald',      monthly: 52.95, residual_q: 27 },
+  diamond:  { label: 'Diamond',      monthly: 62.95, residual_q: 39 },
+  exec:     { label: 'Exec Diamond', monthly: 89.95, residual_q: 54 },
+}
+const TIER_KEYS = ['none','ruby','sapphire','emerald','diamond','exec']
+
+// Default product list for fresh agents. HA + Wraps auto-half advance.
 const DEFAULT_PRODUCTS = [
-  { key: 'med',    name: 'MED',    comm_pct: 75, advance_months: '', half: false, association: 50 },
-  { key: 'ap',     name: 'AP',     comm_pct: 55, advance_months: '', half: false, association: 0 },
-  { key: 'dental', name: 'Dental', comm_pct: 75, advance_months: '', half: false, association: 0 },
-  { key: 'vision', name: 'Vision', comm_pct: 75, advance_months: '', half: false, association: 0 },
-  { key: 'pa',     name: 'PA',     comm_pct: 75, advance_months: '', half: false, association: 0 },
-  { key: 'sa',     name: 'SA',     comm_pct: 75, advance_months: '', half: false, association: 0 },
-  { key: 'ha',     name: 'HA',     comm_pct: 75, advance_months: '', half: true,  association: 0 },
-  { key: 'wraps',  name: 'Wraps',  comm_pct: 75, advance_months: '', half: true,  association: 0 },
+  { key: 'med',    name: 'MED',    comm_pct: 75, advance_months: '', half: false, association_tier: 'diamond' },
+  { key: 'ap',     name: 'AP',     comm_pct: 55, advance_months: '', half: false, association_tier: 'none' },
+  { key: 'dental', name: 'Dental', comm_pct: 75, advance_months: '', half: false, association_tier: 'none' },
+  { key: 'vision', name: 'Vision', comm_pct: 75, advance_months: '', half: false, association_tier: 'none' },
+  { key: 'pa',     name: 'PA',     comm_pct: 75, advance_months: '', half: false, association_tier: 'none' },
+  { key: 'sa',     name: 'SA',     comm_pct: 75, advance_months: '', half: false, association_tier: 'none' },
+  { key: 'ha',     name: 'HA',     comm_pct: 75, advance_months: '', half: true,  association_tier: 'none' },
+  { key: 'wraps',  name: 'Wraps',  comm_pct: 75, advance_months: '', half: true,  association_tier: 'none' },
 ]
 
 function effectiveAdvance(p, defaultAdvance) {
@@ -21,28 +33,31 @@ function effectiveAdvance(p, defaultAdvance) {
   return isFinite(m) && m > 0 ? m : Number(defaultAdvance) || 0
 }
 
-// Math: agent enters total premium per product. We subtract the product's
-// configured association fee (set once in settings) and compute commission.
-function calcRow(premium, product, defaultAdvance) {
+function calcRow(premium, product, defaultAdvance, tierKeyOverride) {
   const p = Number(premium) || 0
-  const assoc = Number(product.association) || 0
-  const monthly = Math.max(0, p - assoc)
+  const tierKey = tierKeyOverride || product.association_tier || 'none'
+  const tier = ASSOCIATION_TIERS[tierKey] || ASSOCIATION_TIERS.none
+  const monthly = Math.max(0, p - tier.monthly)
   const annualized = monthly * 12
   const pct = Math.max(0, Math.min(100, Number(product.comm_pct) || 0))
   const total = annualized * (pct / 100)
   const months = Math.max(0, Math.min(12, effectiveAdvance(product, defaultAdvance)))
   const advance = total * (months / 12)
-  return { annualized, total, advance, reserve: total - advance, monthlyCommissionable: monthly }
+  return {
+    annualized, total, advance, reserve: total - advance,
+    tier, tierKey,
+    residual_q: tier.residual_q,
+    residual_y: tier.residual_q * 4,
+  }
 }
 
 const fmt = (n) => isFinite(n) ? '$' + Math.round(n).toLocaleString() : '$0'
+const fmt2 = (n) => isFinite(n) ? '$' + Number(n).toFixed(2) : '$0.00'
 
 export default function Calculator() {
   const { commissionPresets, saveCommissionPresets } = useApp()
   const [editingPresets, setEditingPresets] = useState(false)
 
-  // Read stored config in either the new {default_advance, products} shape
-  // or the legacy array shape. Show defaults if nothing saved yet.
   const config = useMemo(() => {
     const stored = commissionPresets
     if (Array.isArray(stored)) return { default_advance: 9, products: stored.length ? stored : DEFAULT_PRODUCTS }
@@ -55,26 +70,30 @@ export default function Calculator() {
     return { default_advance: 9, products: DEFAULT_PRODUCTS }
   }, [commissionPresets])
 
-  // Per-row premium input — { [productKey]: premium }
+  // Per-row inputs: { [key]: { premium, tier } } — tier overrides product default
   const [inputs, setInputs] = useState({})
-  const setPremium = (key, v) => setInputs(s => ({ ...s, [key]: v }))
+  const setRow = (key, patch) => setInputs(s => ({ ...s, [key]: { ...(s[key] || {}), ...patch } }))
   const reset = () => setInputs({})
 
   const rows = config.products.map(p => {
-    const premium = inputs[p.key] || ''
-    const c = calcRow(premium, p, config.default_advance)
-    return { ...p, premium, advance_effective: effectiveAdvance(p, config.default_advance), ...c }
+    const inp = inputs[p.key] || {}
+    const tierOverride = inp.tier || null
+    const c = calcRow(inp.premium, p, config.default_advance, tierOverride)
+    return { ...p, premium: inp.premium || '', advance_effective: effectiveAdvance(p, config.default_advance), ...c }
   })
+
   const totals = rows.reduce((a, r) => ({
-    total: a.total + r.total, advance: a.advance + r.advance, reserve: a.reserve + r.reserve,
-  }), { total: 0, advance: 0, reserve: 0 })
+    advance: a.advance + r.advance,
+    reserve: a.reserve + r.reserve,
+    residual_y: a.residual_y + (Number(r.premium) > 0 ? r.residual_y : 0),
+  }), { advance: 0, reserve: 0, residual_y: 0 })
 
   return (
     <div className="flex flex-col h-full overflow-hidden animate-fade-in">
       <div className="flex items-center justify-between px-6 py-4 border-b border-[#1A2130]">
         <div>
           <h1 className="text-xl font-display font-bold text-white">Commission Calculator</h1>
-          <p className="text-xs text-[#5A6A7A] mt-0.5">Enter premiums per product · advance check updates live</p>
+          <p className="text-xs text-[#5A6A7A] mt-0.5">Enter premium per product · advance + residual update live</p>
         </div>
         <div className="flex items-center gap-2">
           <button onClick={() => setEditingPresets(true)}
@@ -89,41 +108,47 @@ export default function Calculator() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-6 max-w-3xl mx-auto w-full space-y-4">
-        <div className="grid grid-cols-2 gap-3">
+      <div className="flex-1 overflow-y-auto p-6 max-w-4xl mx-auto w-full space-y-4">
+        <div className="grid grid-cols-3 gap-3">
           <TotalCard label="This week's advance check" value={fmt(totals.advance)} sub="paid up front" highlight />
           <TotalCard label="Reserve held" value={fmt(totals.reserve)} sub="vests as policy stays in force" />
+          <TotalCard label="Annual residual" value={fmt(totals.residual_y)} sub="from association — paid quarterly" residual />
         </div>
 
         <div className="rounded-xl border border-[#1A2130] overflow-hidden" style={{ background: '#0E1318' }}>
-          <div className="hidden lg:grid grid-cols-[1fr_1.4fr_auto_auto_auto] gap-3 px-4 py-2 border-b border-[#1A2130] text-[10px] font-mono uppercase tracking-wider text-[#5A6A7A]">
+          <div className="hidden lg:grid grid-cols-[100px_1fr_140px_auto] gap-3 px-4 py-2 border-b border-[#1A2130] text-[10px] font-mono uppercase tracking-wider text-[#5A6A7A]">
             <div>Product</div>
             <div>Premium /mo</div>
-            <div className="text-right w-20">Comm</div>
-            <div className="text-right w-16">Adv mo</div>
-            <div className="text-right w-28">Advance</div>
+            <div>Association tier</div>
+            <div className="text-right w-32">Advance</div>
           </div>
 
           {rows.map(r => (
-            <div key={r.key} className="grid grid-cols-2 lg:grid-cols-[1fr_1.4fr_auto_auto_auto] gap-3 px-4 py-2.5 border-b border-[#1A2130] last:border-0 items-center">
+            <div key={r.key} className="grid grid-cols-2 lg:grid-cols-[100px_1fr_140px_auto] gap-3 px-4 py-2.5 border-b border-[#1A2130] last:border-0 items-center">
               <div className="col-span-2 lg:col-span-1">
                 <span className="text-sm font-semibold text-white">{r.name}</span>
-                <div className="flex items-center gap-2 mt-0.5 text-[10px] font-mono text-[#5A6A7A]">
-                  <span>{r.comm_pct}%</span>
-                  {r.half && <span className="text-[#A78BFA]">half adv</span>}
-                  {Number(r.association) > 0 && <span>− ${r.association} assoc</span>}
+                <div className="text-[10px] font-mono text-[#5A6A7A] mt-0.5">
+                  {r.comm_pct}% · {r.advance_effective}mo {r.half && <span className="text-[#A78BFA]">½</span>}
                 </div>
               </div>
 
-              <CalcInput value={r.premium} onChange={v => setPremium(r.key, v)} placeholder="0" prefix="$" label="Premium" />
+              <CalcInput value={r.premium} onChange={v => setRow(r.key, { premium: v })} placeholder="0" prefix="$" label="Premium" />
 
-              <div className="text-right hidden lg:block w-20">
-                <p className="text-xs font-mono text-[#8899AA]">{fmt(r.total)}</p>
+              <div>
+                <select value={r.tierKey} onChange={e => setRow(r.key, { tier: e.target.value })}
+                  className="w-full bg-[#080B0F] border border-[#1A2130] rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-[#00E5C340]">
+                  {TIER_KEYS.map(k => (
+                    <option key={k} value={k}>
+                      {ASSOCIATION_TIERS[k].label}{ASSOCIATION_TIERS[k].monthly > 0 ? ` · $${ASSOCIATION_TIERS[k].monthly}` : ''}
+                    </option>
+                  ))}
+                </select>
+                {r.residual_q > 0 && Number(r.premium) > 0 && (
+                  <p className="text-[10px] font-mono text-[#A78BFA] mt-0.5">+ {fmt2(r.residual_q)}/qtr residual</p>
+                )}
               </div>
-              <div className="text-right hidden lg:block w-16">
-                <p className="text-xs font-mono text-[#5A6A7A]">{r.advance_effective}mo</p>
-              </div>
-              <div className="text-right w-28">
+
+              <div className="text-right w-32">
                 <p className="lg:hidden text-[10px] font-mono uppercase text-[#5A6A7A]">Advance</p>
                 <p className="text-sm font-mono" style={{ color: r.advance > 0 ? '#00E5C3' : '#3A4A5A' }}>{fmt(r.advance)}</p>
                 {r.reserve > 0 && <p className="text-[10px] font-mono text-[#5A6A7A]">res {fmt(r.reserve)}</p>}
@@ -133,7 +158,7 @@ export default function Calculator() {
         </div>
 
         <p className="text-[10px] text-[#3A4A5A] leading-relaxed">
-          <strong>How it works:</strong> Set your commission structure once (top-right). For each product you can set Commission %, Advance months, and the Association fee (premium portion that doesn't earn commission — like USHA's $50). On the deal, just type the full premium per product. Advance = total commission × (advance months / 12). HA and Wraps automatically use half your default advance months.
+          <strong>How it works:</strong> Pick the customer's association tier per product (defaults to whatever you set in Structure). The monthly cost (Ruby $32.95 → Exec Diamond $89.95) is auto-subtracted from the premium before commission. You also earn a separate quarterly residual on the association: Ruby $12.75, Sapphire $16.50, Emerald $27, Diamond $39, Exec Diamond $54. That's totaled annually in the "Annual residual" card. Advance = (Premium − Assoc) × 12 × Comm% × (advance months / 12). HA + Wraps auto-use half your default advance.
         </p>
       </div>
 
@@ -160,20 +185,21 @@ function CalcInput({ value, onChange, placeholder, prefix, label }) {
   )
 }
 
-function TotalCard({ label, value, sub, highlight }) {
+function TotalCard({ label, value, sub, highlight, residual }) {
+  const accent = highlight ? '#00E5C3' : residual ? '#A78BFA' : 'white'
+  const bg = highlight ? '#00E5C310' : residual ? '#A78BFA10' : '#0E1318'
+  const border = highlight ? '#00E5C360' : residual ? '#A78BFA40' : '#1A2130'
   return (
-    <div className="rounded-xl border p-5"
-      style={{ background: highlight ? '#00E5C310' : '#0E1318', borderColor: highlight ? '#00E5C360' : '#1A2130' }}>
+    <div className="rounded-xl border p-5" style={{ background: bg, borderColor: border }}>
       <p className="text-[10px] font-mono uppercase tracking-wider text-[#5A6A7A] mb-1">{label}</p>
-      <p className="text-3xl font-display font-bold" style={{ color: highlight ? '#00E5C3' : 'white' }}>{value}</p>
+      <p className="text-2xl lg:text-3xl font-display font-bold" style={{ color: accent }}>{value}</p>
       {sub && <p className="text-[10px] text-[#3A4A5A] mt-1">{sub}</p>}
     </div>
   )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Structure modal — per-agent product list with: name, comm %, advance months,
-// half-advance toggle, default association fee per product.
+// Structure modal — per-product: comm %, advance months, ½, default tier
 // ─────────────────────────────────────────────────────────────────────────────
 function StructureModal({ config, onClose, onSave }) {
   const [defaultAdvance, setDefaultAdvance] = useState(config.default_advance)
@@ -184,7 +210,7 @@ function StructureModal({ config, onClose, onSave }) {
   const setProduct = (i, patch) => setProducts(ps => ps.map((p, idx) => idx === i ? { ...p, ...patch } : p))
   const addProduct = () => setProducts(ps => [...ps, {
     key: 'p_' + Date.now(),
-    name: '', comm_pct: 75, advance_months: '', half: false, association: 0,
+    name: '', comm_pct: 75, advance_months: '', half: false, association_tier: 'none',
   }])
   const removeProduct = (i) => setProducts(ps => ps.filter((_, idx) => idx !== i))
 
@@ -198,7 +224,7 @@ function StructureModal({ config, onClose, onSave }) {
         comm_pct: Math.max(0, Math.min(100, Number(p.comm_pct) || 0)),
         advance_months: p.half ? '' : (Number(p.advance_months) || ''),
         half: !!p.half,
-        association: Number(p.association) || 0,
+        association_tier: TIER_KEYS.includes(p.association_tier) ? p.association_tier : 'none',
       }))
     try {
       await onSave({ default_advance: Number(defaultAdvance) || 0, products: cleaned })
@@ -232,8 +258,8 @@ function StructureModal({ config, onClose, onSave }) {
             <div className="grid grid-cols-12 gap-2 text-[10px] font-mono uppercase tracking-wider text-[#5A6A7A] px-2">
               <div className="col-span-3">Product</div>
               <div className="col-span-2">Comm %</div>
-              <div className="col-span-3">Advance mo</div>
-              <div className="col-span-2">Assoc $/mo</div>
+              <div className="col-span-2">Advance mo</div>
+              <div className="col-span-3">Default tier</div>
               <div className="col-span-1 text-center">½</div>
               <div className="col-span-1"></div>
             </div>
@@ -245,18 +271,21 @@ function StructureModal({ config, onClose, onSave }) {
                 <input value={p.comm_pct} onChange={e => setProduct(i, { comm_pct: e.target.value })}
                   placeholder="75" inputMode="decimal"
                   className="col-span-2 bg-[#0E1318] border border-[#1A2130] rounded-lg px-2 py-1 text-sm text-white focus:outline-none focus:border-[#00E5C340]" />
-                <div className="col-span-3">
+                <div className="col-span-2">
                   {p.half ? (
-                    <span className="text-xs text-[#A78BFA] block py-1">{Math.floor((Number(defaultAdvance) || 0) / 2)}mo auto</span>
+                    <span className="text-xs text-[#A78BFA] block py-1">½ auto</span>
                   ) : (
                     <input value={p.advance_months} onChange={e => setProduct(i, { advance_months: e.target.value })}
                       placeholder={String(defaultAdvance || 9)} inputMode="decimal"
                       className="w-full bg-[#0E1318] border border-[#1A2130] rounded-lg px-2 py-1 text-sm text-white focus:outline-none focus:border-[#00E5C340]" />
                   )}
                 </div>
-                <input value={p.association} onChange={e => setProduct(i, { association: e.target.value })}
-                  placeholder="0" inputMode="decimal"
-                  className="col-span-2 bg-[#0E1318] border border-[#1A2130] rounded-lg px-2 py-1 text-sm text-white focus:outline-none focus:border-[#00E5C340]" />
+                <select value={p.association_tier || 'none'} onChange={e => setProduct(i, { association_tier: e.target.value })}
+                  className="col-span-3 bg-[#0E1318] border border-[#1A2130] rounded-lg px-2 py-1 text-sm text-white focus:outline-none focus:border-[#00E5C340]">
+                  {TIER_KEYS.map(k => (
+                    <option key={k} value={k}>{ASSOCIATION_TIERS[k].label}</option>
+                  ))}
+                </select>
                 <label className="col-span-1 flex items-center justify-center cursor-pointer" title="Half of default advance">
                   <input type="checkbox" checked={!!p.half} onChange={e => setProduct(i, { half: e.target.checked })}
                     className="accent-[#A78BFA]" />
@@ -272,9 +301,24 @@ function StructureModal({ config, onClose, onSave }) {
             </button>
           </div>
 
-          <p className="text-[10px] text-[#3A4A5A]">
-            <strong>Assoc $/mo</strong> = the portion of the monthly premium that's NOT commissioned (USHA's association fee, etc.). Per product. Set it once and the calculator subtracts it automatically every time you enter a premium for that product.
-          </p>
+          <div className="rounded-lg border border-[#1A2130] p-3 text-[10px] text-[#5A6A7A] leading-relaxed" style={{ background: '#080B0F' }}>
+            <p className="text-[#8899AA] mb-1"><strong>Association tiers</strong> (USHA reference)</p>
+            <table className="w-full font-mono">
+              <thead className="text-[#3A4A5A]">
+                <tr><th className="text-left">Tier</th><th className="text-right">$/mo (cost)</th><th className="text-right">Qtr residual</th></tr>
+              </thead>
+              <tbody>
+                {TIER_KEYS.filter(k => k !== 'none').map(k => (
+                  <tr key={k} className="text-[#8899AA]">
+                    <td>{ASSOCIATION_TIERS[k].label}</td>
+                    <td className="text-right">${ASSOCIATION_TIERS[k].monthly}</td>
+                    <td className="text-right text-[#A78BFA]">${ASSOCIATION_TIERS[k].residual_q}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="mt-2">The tier you set here is the default — you can override per-deal on the calculator without touching settings.</p>
+          </div>
 
           {saveMsg && <p className="text-xs text-[#EF4444]">{saveMsg}</p>}
         </div>
