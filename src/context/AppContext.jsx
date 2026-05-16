@@ -420,6 +420,41 @@ export function AppProvider({ children }) {
     try { await supabase.from('profiles').update({ commission_presets: next }).eq('user_id', uid) } catch (e) { console.error('saveCommissionPresets failed:', e) }
   }
 
+  // Commission entries — each saved deal. { id, user_id, customer_name, sold_at, items, totals }
+  const [commissionEntries, setCommissionEntries] = useState([])
+  const refreshCommissionEntries = async () => {
+    if (!session?.user) return
+    try {
+      const { data } = await supabase.from('commission_entries').select('*').order('sold_at', { ascending: false })
+      if (Array.isArray(data)) setCommissionEntries(data)
+    } catch {}
+  }
+  useEffect(() => {
+    if (!session?.user) { setCommissionEntries([]); return }
+    refreshCommissionEntries()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.user?.id])
+  const addCommissionEntry = async (entry) => {
+    const uid = session?.user?.id
+    if (!uid) return null
+    const row = {
+      user_id: uid,
+      customer_name: entry.customer_name || null,
+      sold_at: entry.sold_at || new Date().toISOString(),
+      items: entry.items || [],
+      totals: entry.totals || {},
+    }
+    try {
+      const { data } = await supabase.from('commission_entries').insert([row]).select().single()
+      if (data) { setCommissionEntries(prev => [data, ...prev]); return data }
+    } catch (e) { console.error('addCommissionEntry failed:', e) }
+    return null
+  }
+  const deleteCommissionEntry = async (id) => {
+    setCommissionEntries(prev => prev.filter(e => e.id !== id))
+    try { await supabase.from('commission_entries').delete().eq('id', id) } catch {}
+  }
+
   // Lead reminders (Today page) — { id, user_id, lead_id, kind, due_at, note, done_at }
   const [reminders, setReminders] = useState([])
   const refreshReminders = async () => {
@@ -522,6 +557,8 @@ export function AppProvider({ children }) {
       leadEmail,
       // reminders (Today page)
       reminders, refreshReminders, addReminder, completeReminder, uncompleteReminder, snoozeReminder, deleteReminder,
+      // commission entries (Calculator weekly tracker)
+      commissionEntries, refreshCommissionEntries, addCommissionEntry, deleteCommissionEntry,
     }}>
       {children}
     </AppContext.Provider>
