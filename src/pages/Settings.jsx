@@ -648,7 +648,7 @@ function IntegrationsPanel() {
 }
 
 export default function Settings() {
-  const { user, profile, leads, tags, addTag, updateTag, deleteTag, reorderTags, isRunner, isAdmin, splitNotes, setSplitNotes } = useApp()
+  const { user, profile, leads, tags, addTag, updateTag, deleteTag, reorderTags, isRunner, isAdmin, splitNotes, setSplitNotes, pipelineCardFields, setPipelineCardFields } = useApp()
   const [dragId, setDragId] = useState(null)
   const [dragOverId, setDragOverId] = useState(null)
 
@@ -799,6 +799,43 @@ export default function Settings() {
             </p>
           </div>
         </label>
+      </div>
+
+      {/* Pipeline card details — per-agent toggles for what shows on each card */}
+      <div className="rounded-xl border border-[#1A2130] p-5" style={{ background: '#0D1117' }}>
+        <h2 className="text-xs font-mono uppercase tracking-wider text-[#5A6A7A] mb-1">Pipeline card details</h2>
+        <p className="text-xs text-[#3A4A5A] mb-4">
+          Pick which info shows on each lead card in the Pipeline. Helps keep cards compact OR pack in everything you need at a glance.
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {[
+            ['call', 'Call button'],
+            ['phone', 'Phone number'],
+            ['time_in_stage', 'Time-in-stage badge'],
+            ['local_time', 'Local time (lead\'s timezone)'],
+            ['zip', 'ZIP code'],
+            ['comments', 'Marketplace comments chip'],
+            ['notes_preview', 'Notes preview (2 lines)'],
+            ['source', 'Source / campaign chip'],
+            ['email', 'Email address'],
+          ].map(([key, label]) => {
+            const on = pipelineCardFields?.[key] !== false
+            return (
+              <label key={key} className="flex items-center gap-2 px-3 py-2 rounded-lg border border-[#1A2130] cursor-pointer hover:border-[#2A3547]"
+                style={{ background: '#080B0F' }}>
+                <button type="button"
+                  onClick={() => setPipelineCardFields({ [key]: !on })}
+                  role="switch" aria-checked={on}
+                  className="relative w-9 h-5 rounded-full flex-shrink-0 transition-colors"
+                  style={{ background: on ? '#00E5C3' : '#1A2130', border: `1px solid ${on ? '#00E5C3' : '#2A3547'}` }}>
+                  <span className="absolute top-0.5 w-3.5 h-3.5 rounded-full bg-white transition-all"
+                    style={{ left: on ? '18px' : '2px' }} />
+                </button>
+                <span className="text-sm text-white flex-1">{label}</span>
+              </label>
+            )
+          })}
+        </div>
       </div>
 
       {/* Side Tags — chip tags on lead cards, central rename/delete editor */}

@@ -398,6 +398,24 @@ export function AppProvider({ children }) {
   // USHA Lead Arena / Ringy / etc. Comes from profiles.lead_email.
   const leadEmail = profile?.lead_email || null
 
+  // Per-agent pipeline-card field toggles — picks which info shows on each
+  // pipeline card. Stored as { call, phone, time_in_stage, local_time, zip,
+  // comments, notes_preview, source, email } booleans on profile.pipeline_card_fields.
+  // null/missing = use defaults.
+  const PIPELINE_CARD_DEFAULTS = {
+    call: true, phone: true, time_in_stage: true, local_time: true,
+    zip: true, comments: true,
+    notes_preview: false, source: false, email: false,
+  }
+  const pipelineCardFields = { ...PIPELINE_CARD_DEFAULTS, ...(profile?.pipeline_card_fields || {}) }
+  const setPipelineCardFields = async (next) => {
+    const uid = session?.user?.id
+    if (!uid) return
+    const merged = { ...pipelineCardFields, ...next }
+    setProfile(p => p ? { ...p, pipeline_card_fields: merged } : p)
+    try { await supabase.from('profiles').update({ pipeline_card_fields: merged }).eq('user_id', uid) } catch (e) { console.error('setPipelineCardFields failed:', e) }
+  }
+
   // Split-notes preference — boolean on profiles. Persisted per-user.
   const splitNotes = !!profile?.split_notes
   const setSplitNotes = async (next) => {
@@ -555,6 +573,7 @@ export function AppProvider({ children }) {
       splitNotes, setSplitNotes,
       commissionPresets, saveCommissionPresets,
       leadEmail,
+      pipelineCardFields, setPipelineCardFields,
       // reminders (Today page)
       reminders, refreshReminders, addReminder, completeReminder, uncompleteReminder, snoozeReminder, deleteReminder,
       // commission entries (Calculator weekly tracker)

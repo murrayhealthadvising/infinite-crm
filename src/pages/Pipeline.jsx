@@ -1,9 +1,10 @@
 import { useNavigate } from 'react-router-dom'
 import { useApp } from '../context/AppContext'
 import StatusTag from '../components/StatusTag'
+import LeadDrawer from '../components/LeadDrawer'
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { formatDistanceToNow, formatDistanceToNowStrict } from 'date-fns'
-import { GripHorizontal, Phone, Search, X } from 'lucide-react'
+import { GripHorizontal, Phone, Search, X, RefreshCw } from 'lucide-react'
 import clsx from 'clsx'
 import { displayPhone } from '../lib/phone'
 import { localTimeFor, localHourFor, timezoneFor } from '../lib/timezone'
@@ -43,8 +44,10 @@ function leadInitials(lead) { const n = leadName(lead); if (n === '—' || !n) r
 
 // Rich dial-ready lead card. Always shows the full info — name, Call button,
 // notes preview, comments chip, ZIP, time-in-stage, local time.
+// Each agent toggles which fields appear via Settings → Pipeline cards.
 function PipelineCard({ lead, onDragStart, onDragEnd, onClick }) {
-  const { getTag } = useApp()
+  const { getTag, pipelineCardFields } = useApp()
+  const fields = pipelineCardFields || {}
   const stage = (typeof getTag === 'function' ? getTag(lead.stage || lead.status) : null) || { color: '#5A6A7A' }
   const sColor = stage?.color || '#5A6A7A'
   const phoneVisible = displayPhone(lead.phone)
@@ -70,7 +73,7 @@ function PipelineCard({ lead, onDragStart, onDragEnd, onClick }) {
           </div>
           <p className="text-sm font-medium text-white group-hover:text-[#00E5C3] transition-colors truncate">{leadName(lead)}</p>
         </div>
-        {inStage && (
+        {fields.time_in_stage !== false && inStage && (
           <span className="text-[10px] font-mono px-1.5 py-0.5 rounded flex-shrink-0"
             style={{ background: sColor + '15', color: sColor, border: `1px solid ${sColor}40` }}
             title={`In ${stage.label || 'stage'} for ${inStage}`}>
@@ -79,18 +82,24 @@ function PipelineCard({ lead, onDragStart, onDragEnd, onClick }) {
         )}
       </div>
 
-      {phoneVisible && (
+      {fields.phone !== false && phoneVisible && (
         <div className="flex items-center gap-2 mb-2">
-          <a href={`tel:${lead.phone}`} onClick={(e) => e.stopPropagation()}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold text-black flex-shrink-0"
-            style={{ background: `linear-gradient(135deg, ${sColor}, ${sColor}AA)` }}>
-            <Phone size={11} /> Call
-          </a>
+          {fields.call !== false && (
+            <a href={`tel:${lead.phone}`} onClick={(e) => e.stopPropagation()}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold text-black flex-shrink-0"
+              style={{ background: `linear-gradient(135deg, ${sColor}, ${sColor}AA)` }}>
+              <Phone size={11} /> Call
+            </a>
+          )}
           <span className="text-xs font-mono text-[#8899AA] truncate">{phoneVisible}</span>
         </div>
       )}
 
-      {lead.notes && (
+      {fields.email && lead.email && (
+        <p className="text-[11px] text-[#5A6A7A] truncate mb-1">{lead.email}</p>
+      )}
+
+      {fields.notes_preview && lead.notes && (
         <p className="text-xs text-[#8899AA] mb-2 overflow-hidden"
           style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', lineHeight: 1.4 }}>
           {lead.notes}
@@ -98,22 +107,22 @@ function PipelineCard({ lead, onDragStart, onDragEnd, onClick }) {
       )}
 
       <div className="flex items-center gap-1.5 flex-wrap">
-        {lead.comments && (
+        {fields.comments !== false && lead.comments && (
           <span className="text-[10px] px-1.5 py-0.5 rounded font-mono max-w-[140px] truncate"
             title={lead.comments}
             style={{ background: '#F59E0B15', color: '#F59E0B', border: '1px solid #F59E0B30' }}>
             {lead.comments}
           </span>
         )}
-        {(lead.campaign || lead.source) && !lead.comments && (
+        {fields.source && (lead.campaign || lead.source) && (
           <span className="text-[10px] px-1.5 py-0.5 rounded font-mono max-w-[140px] truncate"
             style={{ background: sColor + '15', color: sColor }}>
             {lead.campaign || lead.source}
           </span>
         )}
-        {lead.zip && <span className="text-[10px] text-[#5A6A7A] font-mono">{lead.zip}</span>}
-        {!lead.zip && lead.state && <span className="text-[10px] text-[#5A6A7A] font-mono">{lead.state}</span>}
-        {time && (
+        {fields.zip !== false && lead.zip && <span className="text-[10px] text-[#5A6A7A] font-mono">{lead.zip}</span>}
+        {fields.zip !== false && !lead.zip && lead.state && <span className="text-[10px] text-[#5A6A7A] font-mono">{lead.state}</span>}
+        {fields.local_time !== false && time && (
           <span className="text-[10px] font-mono ml-auto"
             style={{ color: offHours ? '#F59E0B' : '#3A4A5A' }}
             title={offHours ? 'Outside 8a–9p local time' : 'Local time'}>
@@ -126,8 +135,16 @@ function PipelineCard({ lead, onDragStart, onDragEnd, onClick }) {
 }
 
 export default function Pipeline() {
-  const { leads, tags, updateLeadStage, updateTag } = useApp()
+  const { leads, tags, updateLeadStage, updateTag, refreshLeads, user } = useApp()
   const navigate = useNavigate()
+  const [drawerLeadId, setDrawerLeadId] = useState(null)
+  const [refreshing, setRefreshing] = useState(false)
+  const doRefresh = async () => {
+    if (refreshing) return
+    setRefreshing(true)
+    try { await refreshLeads?.() } catch {}
+    setTimeout(() => setRefreshing(false), 400)
+  }
 
   // Card-drag (lead → another stage) state
   const [dragLeadId, setDragLeadId] = useState(null)
@@ -144,10 +161,19 @@ export default function Pipeline() {
   const [tzFilters, setTzFilters] = useState(() => new Set())
   const [showFilters, setShowFilters] = useState(false)
 
-  // Collapsed stage columns — skinny by default, click header to expand.
-  // Stored as a Set of stage IDs that are collapsed; drag-to-reorder still
-  // works without expanding because HTML5 drag suppresses the click.
-  const [collapsedStages, setCollapsedStages] = useState(() => new Set())
+  // Collapsed stage columns — persisted per-agent in localStorage so the
+  // pipeline remembers which buckets you had compacted between sessions.
+  const lsKey = 'pipeline:collapsed-stages:' + (user?.id || 'anon')
+  const [collapsedStages, setCollapsedStages] = useState(() => {
+    try {
+      const raw = typeof localStorage !== 'undefined' && localStorage.getItem(lsKey)
+      if (raw) return new Set(JSON.parse(raw))
+    } catch {}
+    return new Set()
+  })
+  useEffect(() => {
+    try { localStorage.setItem(lsKey, JSON.stringify(Array.from(collapsedStages))) } catch {}
+  }, [collapsedStages, lsKey])
   const toggleStageCollapse = (id) => setCollapsedStages(prev => {
     const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n
   })
@@ -384,6 +410,13 @@ export default function Pipeline() {
               title={collapsedStages.size === sortedTags.length ? 'Expand all stages' : 'Collapse all stages'}>
               {collapsedStages.size === sortedTags.length ? 'Expand all' : 'Collapse all'}
             </button>
+            {/* Refresh — pulls latest leads without reloading the page */}
+            <button onClick={doRefresh}
+              disabled={refreshing}
+              className="p-1.5 rounded-lg border border-[#1A2130] text-[#8899AA] hover:text-white hover:border-[#2A3547] transition-colors disabled:opacity-50"
+              title="Refresh leads">
+              <RefreshCw size={13} className={refreshing ? 'animate-spin' : ''} />
+            </button>
             {totalValue > 0 && (
               <div className="text-right pl-3 border-l border-[#1A2130]">
                 <p className="text-[10px] text-[#5A6A7A] font-mono uppercase tracking-wider">Annual</p>
@@ -581,7 +614,7 @@ export default function Pipeline() {
                       <PipelineCard key={lead.id} lead={lead}
                         onDragStart={e => { e.dataTransfer.setData('leadId', lead.id); e.dataTransfer.effectAllowed = 'move'; setDragLeadId(lead.id) }}
                         onDragEnd={handleDragEnd}
-                        onClick={() => navigate(`/leads/${lead.id}`)} />
+                        onClick={() => setDrawerLeadId(lead.id)} />
                     ))}
                     {stageLeads.length === 0 && (
                       <div className={clsx('flex items-center justify-center h-16 border border-dashed rounded-lg transition-colors', isCardDragOver ? 'border-opacity-60' : 'border-[#1A2130]')}
@@ -620,6 +653,11 @@ export default function Pipeline() {
             title="Scroll right">›</button>
         )}
       </div>
+
+      {/* Right-side drawer for working a lead without leaving the pipeline */}
+      {drawerLeadId && (
+        <LeadDrawer leadId={drawerLeadId} onClose={() => setDrawerLeadId(null)} />
+      )}
     </div>
   )
 }
