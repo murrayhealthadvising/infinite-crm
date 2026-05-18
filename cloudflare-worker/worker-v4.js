@@ -16,6 +16,7 @@ const AGENT_ROUTING = {
   'palma-leads@infinite-crm.net':    '3c1b5bcc-1682-46c1-9298-5c0667bfc9bb',
   'dylan-leads@infinite-crm.net':    'f262eda2-f2bd-421e-bffa-4c7ea0b668db',
   'katerina-leads@infinite-crm.net': '2e01afc5-5afe-48f6-b618-3b94afe0f5fc',
+  'andres-leads@infinite-crm.net':   '76faad76-bb01-4722-aa7b-5cae665cdb57',
 }
 
 const DEFAULT_STAGE = 'not-started'
