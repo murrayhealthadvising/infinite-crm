@@ -451,6 +451,14 @@ function TagChips({ tags = [], onChange, suggestions = [] }) {
   const { sideTagStyles } = useApp()
   const styles = sideTagStyles || {}
   const styleFor = (t) => styles[t] || {}
+  // Sort chips/suggestions by the user's library order; fall back to alpha
+  // for anything missing an explicit order.
+  const orderedSort = (a, b) => {
+    const oa = typeof styles[a]?.order === 'number' ? styles[a].order : 9999
+    const ob = typeof styles[b]?.order === 'number' ? styles[b].order : 9999
+    if (oa !== ob) return oa - ob
+    return String(a).localeCompare(String(b))
+  }
   const [adding, setAdding] = useState(false)
   const [text, setText] = useState('')
   const [pos, setPos] = useState({ top: 0, left: 0, openUp: false })
@@ -458,8 +466,11 @@ function TagChips({ tags = [], onChange, suggestions = [] }) {
   const inputRef = useRef(null)
 
   // Hide the "starred" tag (legacy Dial Bucket marker) AND any tag the user
-  // has flagged as hidden in their personal side-tag library.
-  const visible = (Array.isArray(tags) ? tags : []).filter(t => t && t !== 'starred' && !styleFor(t).hidden)
+  // has flagged as hidden in their personal side-tag library. Sort by saved
+  // library order so chips on the card mirror what's in Settings.
+  const visible = (Array.isArray(tags) ? tags : [])
+    .filter(t => t && t !== 'starred' && !styleFor(t).hidden)
+    .sort(orderedSort)
 
   // Reposition the portal dropdown relative to the input; flip up when there
   // isn't enough room below. Recalculate on scroll/resize so it tracks the input.
@@ -519,12 +530,12 @@ function TagChips({ tags = [], onChange, suggestions = [] }) {
   }
 
   // Autocomplete pool: every defaults + previously-used tag, minus already-on-this-lead.
-  // Search filters by .includes() on user text. No 8-item cap — scrollbar handles overflow.
+  // Search filters by .includes() on user text. Sorted by user's library order.
   const trimmed = text.trim().toLowerCase()
   const pool = Array.from(new Set([...SUGGESTED_TAGS, ...suggestions]))
-    .filter(s => s && !visible.includes(s) && s !== 'starred')
+    .filter(s => s && !visible.includes(s) && s !== 'starred' && !styleFor(s).hidden)
     .filter(s => !trimmed || s.toLowerCase().includes(trimmed))
-    .sort((a, b) => a.localeCompare(b))
+    .sort(orderedSort)
 
   // Show a "Create '#newtag'" affordance if the typed text isn't already an
   // existing tag (and isn't blank). Makes the create flow discoverable.

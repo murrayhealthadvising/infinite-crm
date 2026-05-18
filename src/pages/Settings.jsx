@@ -422,10 +422,45 @@ function SideTagsPanel() {
     return c
   }, [safeLeads, styles])
 
-  const sorted = useMemo(
-    () => Array.from(tagCounts.entries()).sort((a, b) => a[0].localeCompare(b[0])),
-    [tagCounts]
-  )
+  // Sort: library entries first in their saved `order`, then any extras
+  // (tags used on leads but not yet in the library) at the bottom, alpha.
+  const sorted = useMemo(() => {
+    const entries = Array.from(tagCounts.entries())
+    const orderOf = (name) => {
+      const o = styles[name]?.order
+      return typeof o === 'number' ? o : 9999  // un-ordered → bottom
+    }
+    return entries.sort((a, b) => {
+      const oa = orderOf(a[0]), ob = orderOf(b[0])
+      if (oa !== ob) return oa - ob
+      return a[0].localeCompare(b[0])
+    })
+  }, [tagCounts, styles])
+
+  // Drag-reorder
+  const [dragName, setDragName] = useState(null)
+  const reorder = async (fromIdx, toIdx) => {
+    if (fromIdx === toIdx || toIdx < 0 || toIdx >= sorted.length) return
+    const next = sorted.map(([n]) => n)
+    const [item] = next.splice(fromIdx, 1)
+    next.splice(toIdx, 0, item)
+    // Write the new order to every tag's style entry (including ones that
+    // weren't in the library yet — promote them so they stick).
+    const nextStyles = { ...styles }
+    next.forEach((name, i) => {
+      nextStyles[name] = { ...(nextStyles[name] || {}), order: i }
+    })
+    await setSideTagStyles(nextStyles)
+  }
+  const onDragStart = (name) => setDragName(name)
+  const onDragOver = (e) => e.preventDefault()
+  const onDrop = (e, targetName) => {
+    e.preventDefault()
+    if (!dragName || dragName === targetName) { setDragName(null); return }
+    const ids = sorted.map(([n]) => n)
+    reorder(ids.indexOf(dragName), ids.indexOf(targetName))
+    setDragName(null)
+  }
 
   // Style helpers
   const PALETTE = ['#A78BFA','#3B82F6','#10B981','#F59E0B','#EF4444','#EC4899','#22D3EE','#F97316','#84CC16','#FB7185','#06B6D4']
@@ -522,7 +557,7 @@ function SideTagsPanel() {
         </div>
       ) : (
         <div className="border border-[#1A2130] rounded-lg overflow-hidden divide-y divide-[#1A2130]">
-          {sorted.map(([name, count]) => {
+          {sorted.map(([name, count], i) => {
             const s = styles[name] || {}
             const hidden = !!s.hidden
             const color = s.color || null
@@ -530,7 +565,14 @@ function SideTagsPanel() {
               ? { background: color + '15', color, border: `1px solid ${color}60` }
               : { background: '#1A2130', color: '#8899AA', border: '1px solid #2A3547' }
             return (
-              <div key={name} className={'flex items-center gap-2 px-3 py-2.5 flex-wrap ' + (hidden ? 'opacity-50' : '')}>
+              <div key={name}
+                draggable={renaming !== name}
+                onDragStart={() => onDragStart(name)}
+                onDragOver={onDragOver}
+                onDrop={(e) => onDrop(e, name)}
+                className={'flex items-center gap-2 px-3 py-2.5 flex-wrap ' + (hidden ? 'opacity-50 ' : '') + (dragName === name ? 'opacity-40 ' : '')}
+                style={{ cursor: renaming === name ? 'default' : 'grab' }}>
+                {renaming !== name && <GripVertical size={12} className="text-[#3A4A5A] flex-shrink-0" />}
                 {renaming === name ? (
                   <>
                     <input autoFocus value={renameText}
