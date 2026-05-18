@@ -197,7 +197,8 @@ export default function AddLeadModal({ onClose }) {
   const [form, setForm] = useState({
     full_name: '', phone: '', email: '',
     street_address: '', city: '', state: '', zip: '',
-    age: '', dob: '', stage: 'not-started', tags: [], notes: '',
+    age: '', dob: '', income: '', household: '', gender: '',
+    stage: 'not-started', tags: [], notes: '',
     campaign: '', received: nowLocal(),
   })
   const [zipTouched, setZipTouched] = useState(false)
@@ -236,6 +237,9 @@ export default function AddLeadModal({ onClose }) {
       zip: form.zip || null,
       age: form.age ? parseInt(form.age) : null,
       dob: form.dob || null,
+      income: form.income || null,  // TEXT column — preserves ranges like "50k-75k"
+      household: form.household ? parseInt(form.household) : null,
+      gender: form.gender || null,
       stage: form.stage || 'not-started',
       tags: Array.isArray(form.tags) && form.tags.length ? form.tags : [],
       notes: form.notes || null,
@@ -285,6 +289,14 @@ export default function AddLeadModal({ onClose }) {
               <div className="grid grid-cols-2 gap-3">
                 <Field label="City" value={form.city} onChange={set('city')} />
                 <Field label="Age" type="number" value={form.age} onChange={set('age')} placeholder="42" />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="DOB" type="date" value={form.dob} onChange={set('dob')} />
+                <Field label="Income" value={form.income} onChange={set('income')} placeholder="65000 or 50k-75k" />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Household" type="number" value={form.household} onChange={set('household')} placeholder="2" />
+                <Field label="Gender" value={form.gender} onChange={set('gender')} placeholder="M / F" />
               </div>
             </div>
 
