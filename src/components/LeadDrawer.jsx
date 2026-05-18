@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useApp } from '../context/AppContext'
 import StatusTag from './StatusTag'
-import { X, Phone, PhoneCall, ChevronDown, ExternalLink, Check, Calendar, MapPin } from 'lucide-react'
+import { X, Phone, PhoneCall, ChevronDown, ChevronRight, ExternalLink, Check, Calendar, MapPin, Pencil } from 'lucide-react'
 import { format, formatDistanceToNow } from 'date-fns'
 import clsx from 'clsx'
 import { displayPhone } from '../lib/phone'
@@ -60,7 +60,7 @@ function NotesField({ value, onSave, placeholder }) {
 export default function LeadDrawer({ leadId, onClose }) {
   const { leads, tags, updateLead, updateLeadStage, addActivity, addReminder, splitNotes } = useApp()
   const [stageOpen, setStageOpen] = useState(false)
-  const [editContact, setEditContact] = useState(false)
+  const [showEmpty, setShowEmpty] = useState(false)
   const lastCallRef = useRef(0)
 
   // Esc closes
@@ -121,10 +121,6 @@ export default function LeadDrawer({ leadId, onClose }) {
             </div>
           </div>
           <div className="flex items-center gap-1 flex-shrink-0">
-            <a href={`/leads/${leadId}`} target="_blank" rel="noopener" title="Open full detail"
-              className="p-2 rounded-lg text-[#5A6A7A] hover:text-white hover:bg-[#1A2130]">
-              <ExternalLink size={14} />
-            </a>
             <button onClick={onClose} className="p-2 rounded-lg text-[#5A6A7A] hover:text-white hover:bg-[#1A2130]" title="Close (esc)">
               <X size={16} />
             </button>
@@ -164,17 +160,7 @@ export default function LeadDrawer({ leadId, onClose }) {
         {/* Body */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
 
-          {/* Quick contact strip */}
-          <div className="flex flex-wrap gap-2 text-xs">
-            {lead.email && <span className="px-2 py-1 rounded bg-[#080B0F] border border-[#1A2130] text-[#8899AA] truncate max-w-full">{lead.email}</span>}
-            {lead.zip && <span className="px-2 py-1 rounded bg-[#080B0F] border border-[#1A2130] text-[#8899AA] font-mono">{[lead.state, lead.zip].filter(Boolean).join(' ')}</span>}
-            {lead.age && <span className="px-2 py-1 rounded bg-[#080B0F] border border-[#1A2130] text-[#8899AA]">Age {lead.age}</span>}
-            {(lead.source || lead.campaign) && (
-              <span className="px-2 py-1 rounded bg-[#080B0F] border border-[#1A2130] text-[#8899AA]">{lead.campaign || lead.source}</span>
-            )}
-          </div>
-
-          {/* Notes */}
+          {/* Notes (top — main surface for working a lead) */}
           {splitNotes ? (
             <div className="grid grid-cols-2 gap-2">
               <NotesField value={lead.notes} onSave={(v) => updateLead(leadId, { notes: v })} />
@@ -188,7 +174,7 @@ export default function LeadDrawer({ leadId, onClose }) {
           {lead.comments && (
             <div className="p-3 rounded-lg border border-[#F59E0B20]" style={{ background: '#F59E0B08' }}>
               <p className="text-[10px] font-mono uppercase tracking-wider text-[#F59E0B] mb-1">Marketplace comments</p>
-              <p className="text-xs text-[#C0D0E0]">{lead.comments}</p>
+              <p className="text-xs text-[#C0D0E0] whitespace-pre-wrap">{lead.comments}</p>
             </div>
           )}
 
@@ -200,41 +186,130 @@ export default function LeadDrawer({ leadId, onClose }) {
             </div>
           )}
 
-          {/* Quick contact details edit */}
-          <div className="rounded-xl border border-[#1A2130]" style={{ background: '#080B0F' }}>
-            <button onClick={() => setEditContact(v => !v)}
-              className="w-full flex items-center justify-between px-3 py-2 text-left text-xs font-mono uppercase tracking-wider text-[#5A6A7A]">
-              Edit contact details
-              <ChevronDown size={12} className={clsx('transition-transform', editContact && 'rotate-180')} />
-            </button>
-            {editContact && (
-              <div className="p-3 grid grid-cols-2 gap-2 text-xs">
-                <ContactInput label="First" value={lead.first_name} onSave={(v) => updateLead(leadId, { first_name: v })} />
-                <ContactInput label="Last" value={lead.last_name} onSave={(v) => updateLead(leadId, { last_name: v })} />
-                <ContactInput label="Phone" value={displayPhone(lead.phone)} onSave={(v) => updateLead(leadId, { phone: v })} />
-                <ContactInput label="Email" value={lead.email} onSave={(v) => updateLead(leadId, { email: v })} />
-                <ContactInput label="State" value={lead.state} onSave={(v) => updateLead(leadId, { state: v })} />
-                <ContactInput label="Zip" value={lead.zip} onSave={(v) => updateLead(leadId, { zip: v })} />
-                <ContactInput label="Age" value={lead.age} onSave={(v) => updateLead(leadId, { age: v })} />
-                <ContactInput label="Source" value={lead.source} onSave={(v) => updateLead(leadId, { source: v })} />
-              </div>
-            )}
-          </div>
+          {/* ALL info — every standard field + custom_fields, inline editable */}
+          <AllInfoPanel lead={lead} leadId={leadId} updateLead={updateLead}
+            showEmpty={showEmpty} setShowEmpty={setShowEmpty} />
         </div>
       </aside>
     </>
   )
 }
 
-function ContactInput({ label, value, onSave }) {
+function ContactInput({ label, value, onSave, type = 'text' }) {
   const [val, setVal] = useState(value || '')
   useEffect(() => setVal(value || ''), [value])
   return (
     <div>
       <p className="text-[9px] font-mono uppercase tracking-wider text-[#5A6A7A] mb-0.5">{label}</p>
-      <input value={val} onChange={e => setVal(e.target.value)}
+      <input type={type} value={val} onChange={e => setVal(e.target.value)}
         onBlur={() => { if (val !== (value || '')) onSave(val) }}
         className="w-full bg-[#0E1318] border border-[#1A2130] rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-[#00E5C340]" />
+    </div>
+  )
+}
+
+// Every standard lead field shown inline + custom_fields. Defaults to hiding
+// empty rows so the drawer stays compact during a call. Toggle to reveal all.
+function AllInfoPanel({ lead, leadId, updateLead, showEmpty, setShowEmpty }) {
+  const FIELDS = [
+    ['first_name', 'First name'],
+    ['last_name', 'Last name'],
+    ['phone', 'Phone', { type: 'tel', display: (v) => displayPhone(v) }],
+    ['email', 'Email', { type: 'email' }],
+    ['address', 'Street address'],
+    ['city', 'City'],
+    ['state', 'State'],
+    ['zip', 'ZIP'],
+    ['age', 'Age', { type: 'number' }],
+    ['dob', 'DOB', { type: 'date' }],
+    ['gender', 'Gender'],
+    ['income', 'Income'],
+    ['household', 'Household', { type: 'number' }],
+    ['source', 'Source'],
+    ['campaign', 'Campaign'],
+    ['current_carrier', 'Current carrier'],
+    ['carrier', 'Carrier (sold)'],
+    ['premium', 'Premium', { type: 'number' }],
+    ['effective_date', 'Effective date', { type: 'date' }],
+    ['best_contact_time', 'Best contact time'],
+    ['agent', 'Agent'],
+    ['runner', 'Runner'],
+    ['price', 'Lead cost', { type: 'number' }],
+    ['external_id', 'Vendor ID'],
+  ]
+
+  const filled = FIELDS.filter(([k]) => {
+    const v = lead[k]
+    return v !== null && v !== undefined && v !== ''
+  })
+  const empty = FIELDS.filter(([k]) => {
+    const v = lead[k]
+    return v === null || v === undefined || v === ''
+  })
+  const customFields = (lead.custom_fields && typeof lead.custom_fields === 'object') ? lead.custom_fields : {}
+  const customKeys = Object.keys(customFields)
+
+  const Row = ([key, label, opts]) => {
+    const display = opts?.display ? opts.display(lead[key]) : lead[key]
+    return (
+      <ContactInput key={key} label={label} value={display ?? ''} type={opts?.type || 'text'}
+        onSave={(v) => {
+          // Phone needs E.164 normalization on save
+          if (key === 'phone') {
+            const digits = String(v || '').replace(/\D/g, '')
+            const next = digits.length === 10 ? `+1${digits}` : digits.length === 11 && digits[0] === '1' ? `+${digits}` : v
+            updateLead(leadId, { phone: next })
+            return
+          }
+          updateLead(leadId, { [key]: v || null })
+        }} />
+    )
+  }
+
+  return (
+    <div className="rounded-xl border border-[#1A2130]" style={{ background: '#080B0F' }}>
+      <div className="flex items-center justify-between px-3 py-2 border-b border-[#1A2130]">
+        <span className="text-xs font-mono uppercase tracking-wider text-[#5A6A7A]">
+          Details ({filled.length}{customKeys.length ? ` + ${customKeys.length}` : ''})
+        </span>
+        <button onClick={() => setShowEmpty(v => !v)}
+          className="text-[10px] font-mono text-[#5A6A7A] hover:text-white">
+          {showEmpty ? 'Hide empty' : `Show empty (${empty.length})`}
+        </button>
+      </div>
+
+      <div className="p-3 grid grid-cols-2 gap-2">
+        {filled.length === 0 && !showEmpty && (
+          <p className="col-span-2 text-xs text-[#5A6A7A]">No info yet — click "Show empty" to fill out fields.</p>
+        )}
+        {filled.map(Row)}
+        {showEmpty && empty.map(Row)}
+      </div>
+
+      {/* Custom fields */}
+      {customKeys.length > 0 && (
+        <div className="px-3 pb-3">
+          <div className="text-[10px] font-mono uppercase tracking-wider text-[#A78BFA] mb-1.5 pt-2 border-t border-[#1A2130]">
+            Custom fields
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            {customKeys.map(k => (
+              <ContactInput key={k} label={k} value={customFields[k] || ''}
+                onSave={(v) => {
+                  const next = { ...customFields, [k]: v }
+                  updateLead(leadId, { custom_fields: next })
+                }} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Show created/received timestamp at the bottom (read-only-ish; edit via /leads/:id if needed) */}
+      {lead.created_at && (
+        <div className="px-3 pb-2 text-[10px] font-mono text-[#3A4A5A]">
+          Received {format(new Date(lead.created_at), 'MMM d, yyyy · h:mm a')}
+        </div>
+      )}
     </div>
   )
 }
