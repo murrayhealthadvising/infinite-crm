@@ -623,6 +623,99 @@ const WORKER_URL = (import.meta.env.VITE_CRM_WORKER_URL
 // agent drags a snippet to their bookmarks bar; clicking it on a PitchPerfect
 // contact page scrapes the visible details and POSTs into their CRM.
 // ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Campaigns panel — manage the saved campaign list (drag-reorder + delete +
+// inline add). The campaign pill dropdown on lead cards reads from here.
+// ─────────────────────────────────────────────────────────────────────────────
+function CampaignsPanel() {
+  const { campaigns, saveCampaigns } = useApp()
+  const [adding, setAdding] = useState('')
+  const [dragId, setDragId] = useState(null)
+  const safe = Array.isArray(campaigns) ? campaigns : []
+
+  const add = async () => {
+    const v = String(adding || '').trim()
+    if (!v) return
+    if (safe.includes(v)) { setAdding(''); return }
+    await saveCampaigns([...safe, v])
+    setAdding('')
+  }
+  const remove = async (c) => {
+    if (!confirm(`Remove "${c}" from your campaign list? (Leads with this campaign keep the label.)`)) return
+    await saveCampaigns(safe.filter(x => x !== c))
+  }
+  const move = async (fromIdx, toIdx) => {
+    if (fromIdx === toIdx || toIdx < 0 || toIdx >= safe.length) return
+    const next = [...safe]
+    const [item] = next.splice(fromIdx, 1)
+    next.splice(toIdx, 0, item)
+    await saveCampaigns(next)
+  }
+  const onDragStart = (c) => setDragId(c)
+  const onDragOver = (e) => e.preventDefault()
+  const onDrop = (e, targetC) => {
+    e.preventDefault()
+    if (!dragId || dragId === targetC) { setDragId(null); return }
+    move(safe.indexOf(dragId), safe.indexOf(targetC))
+    setDragId(null)
+  }
+
+  return (
+    <div className="rounded-xl border border-[#1A2130] p-5" style={{ background: '#0D1117' }}>
+      <div className="mb-4">
+        <h2 className="text-xs font-mono uppercase tracking-wider text-[#5A6A7A] flex items-center gap-2">
+          <TagsIcon size={12} /> Campaigns
+        </h2>
+        <p className="text-xs text-[#3A4A5A] mt-1">
+          Pick list for the campaign pill on lead cards. Drag to reorder · click ➕ to add · ✕ to remove. Removing a campaign here doesn't change leads that already have that label.
+        </p>
+      </div>
+
+      <div className="flex items-center gap-2 mb-3">
+        <input value={adding}
+          onChange={e => setAdding(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') add() }}
+          placeholder="Add a new campaign (e.g. GoldBar, Quote Yeti)…"
+          className="flex-1 px-3 py-2 rounded-lg text-sm text-white bg-[#080B0F] border border-[#1A2130] focus:outline-none focus:border-[#00E5C340] font-mono" />
+        <button onClick={add} disabled={!adding.trim()}
+          className="px-3 py-2 rounded-lg text-xs font-semibold text-black disabled:opacity-40"
+          style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
+          <Plus size={12} className="inline -mt-0.5" /> Add
+        </button>
+      </div>
+
+      {safe.length === 0 ? (
+        <div className="border border-dashed border-[#1A2130] rounded-lg py-6 text-center text-sm text-[#5A6A7A]">
+          No campaigns yet — add one above.
+        </div>
+      ) : (
+        <div className="border border-[#1A2130] rounded-lg overflow-hidden divide-y divide-[#1A2130]">
+          {safe.map((c, i) => (
+            <div key={c}
+              draggable
+              onDragStart={() => onDragStart(c)}
+              onDragOver={onDragOver}
+              onDrop={(e) => onDrop(e, c)}
+              className={'flex items-center gap-3 px-3 py-2.5 cursor-grab active:cursor-grabbing ' + (dragId === c ? 'opacity-40' : '')}>
+              <GripVertical size={13} className="text-[#3A4A5A] flex-shrink-0" />
+              <span className="text-sm text-white flex-1 font-mono">{c}</span>
+              <span className="text-[10px] text-[#3A4A5A] font-mono">#{i + 1}</span>
+              <button onClick={() => move(i, i - 1)} disabled={i === 0}
+                className="text-[#3A4A5A] hover:text-white disabled:opacity-20" title="Move up">↑</button>
+              <button onClick={() => move(i, i + 1)} disabled={i === safe.length - 1}
+                className="text-[#3A4A5A] hover:text-white disabled:opacity-20" title="Move down">↓</button>
+              <button onClick={() => remove(c)}
+                className="p-1.5 rounded text-[#3A4A5A] hover:text-[#EF4444] hover:bg-[#EF444415]">
+                <Trash2 size={13} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function IntegrationsPanel() {
   const { user, leadEmail } = useApp()
   const [showInstructions, setShowInstructions] = useState(false)
@@ -927,6 +1020,9 @@ export default function Settings() {
 
       {/* Side Tags — chip tags on lead cards, central rename/delete editor */}
       <SideTagsPanel />
+
+      {/* Campaigns — pick-list for the campaign pill */}
+      <CampaignsPanel />
 
       {/* Pipeline stages / tags — runners don't get to edit stages */}
       {!isRunner && (

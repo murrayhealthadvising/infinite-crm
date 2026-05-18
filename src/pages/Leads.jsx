@@ -226,6 +226,35 @@ function TagPill({ stage, tags, onChange }) {
   )
 }
 
+// Match a free-form campaign value (e.g. 'DY', 'GoldBar', 'GB ') to one of
+// the agent's saved campaigns. Tries exact (case-insensitive) → initials
+// (DY = Dynasty) → prefix (Gold = GoldBar) → contains (Star = NorthStar).
+// Returns the saved name when a single confident match exists; otherwise null.
+function matchSavedCampaign(input, savedList) {
+  if (!input) return null
+  const v = String(input).trim()
+  if (!v) return null
+  const list = Array.isArray(savedList) ? savedList : []
+  if (list.length === 0) return null
+  const lower = v.toLowerCase()
+  // 1. exact (case-insensitive)
+  const exact = list.find(c => c.toLowerCase() === lower)
+  if (exact) return exact
+  // 2. initials → "GB" matches "GoldBar" because G+B = uppercase letters
+  if (v.length <= 4) {
+    const inits = (c) => c.replace(/[^A-Z]/g, '').toLowerCase()
+    const initialsHits = list.filter(c => inits(c).startsWith(lower))
+    if (initialsHits.length === 1) return initialsHits[0]
+  }
+  // 3. starts-with
+  const prefixHits = list.filter(c => c.toLowerCase().startsWith(lower))
+  if (prefixHits.length === 1) return prefixHits[0]
+  // 4. contains
+  const containsHits = list.filter(c => c.toLowerCase().includes(lower))
+  if (containsHits.length === 1) return containsHits[0]
+  return null
+}
+
 // Campaign pill — single-select dropdown of the user's saved campaigns,
 // plus inline "+ Create new" when typed text doesn't match any. Adding a new
 // campaign saves it to profile.campaigns so it shows up everywhere going
@@ -299,7 +328,11 @@ function CampaignPill({ value, color, onSave }) {
   const exactExists = (campaigns || []).some(c => c.toLowerCase() === q)
   const showCreate = q && !exactExists
 
-  const display = value && String(value).trim() ? value : '—'
+  // Auto-normalize: if the stored value matches one of the saved campaigns by
+  // initials/prefix/contains, show the saved name instead. Doesn't rewrite
+  // the DB until the agent explicitly picks from the dropdown.
+  const matched = matchSavedCampaign(value, campaigns)
+  const display = value && String(value).trim() ? (matched || value) : '—'
 
   const dropdown = open ? (
     <div id="campaign-portal"
@@ -1468,7 +1501,7 @@ function exportCSV(leads) {
 // MAIN
 // ───────────────────────────────────────────────────────────────────────────
 export default function Leads() {
-  const { user, leads, tags, updateLeadStage, updateLead, refreshLeads, deleteLead, deleteLeads, deleteAllLeadsForUser, isRunner, can } = useApp()
+  const { user, leads, tags, updateLeadStage, updateLead, refreshLeads, deleteLead, deleteLeads, deleteAllLeadsForUser, isRunner, can, sideTagStyles } = useApp()
   const navigate = useNavigate()
   const [view, setView] = useState('list')
   const [search, setSearch] = useState('')
@@ -1729,9 +1762,14 @@ export default function Leads() {
   )).sort((a, b) => a.localeCompare(b))
 
   // Distinct secondary tags already used (minus 'starred', which is internal)
-  const tagSuggestions = Array.from(new Set(
-    safeLeads.flatMap(l => Array.isArray(l.tags) ? l.tags : []).filter(t => t && t !== 'starred')
-  )).sort((a, b) => a.localeCompare(b))
+  // Union of: every distinct tag used on a lead + every library entry from
+  // Settings → Side Tags. So tags pre-created in Settings show up in the
+  // picker before they're applied to any lead.
+  const libraryTagKeys = Object.keys(sideTagStyles || {}).filter(k => !sideTagStyles[k]?.hidden)
+  const tagSuggestions = Array.from(new Set([
+    ...safeLeads.flatMap(l => Array.isArray(l.tags) ? l.tags : []).filter(t => t && t !== 'starred'),
+    ...libraryTagKeys,
+  ])).sort((a, b) => a.localeCompare(b))
 
   const handleDeleteOne = async (id) => {
     if (typeof deleteLead !== 'function') return
