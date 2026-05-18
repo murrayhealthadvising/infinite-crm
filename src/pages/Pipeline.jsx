@@ -345,7 +345,12 @@ export default function Pipeline() {
     await Promise.all(ordered.map((t, i) => (t.sort_order !== i ? updateTag(t.id, { sort_order: i }) : Promise.resolve())))
   }
 
-  const totalValue = safeLeads.filter(l => l.premium).reduce((sum, l) => sum + (Number(l.premium) || 0) * 12, 0)
+  // Annualized book = sum of premium × 12 for SOLD leads only. Hides for new
+  // agents who haven't closed yet, and stops counting unsold pipeline as if
+  // it were income.
+  const totalValue = safeLeads
+    .filter(l => l.stage === 'sold' && l.premium)
+    .reduce((sum, l) => sum + (Number(l.premium) || 0) * 12, 0)
 
   return (
     <div className="flex flex-col h-full animate-fade-in">
@@ -419,8 +424,8 @@ export default function Pipeline() {
               <RefreshCw size={13} className={refreshing ? 'animate-spin' : ''} />
             </button>
             {totalValue > 0 && (
-              <div className="text-right pl-3 border-l border-[#1A2130]">
-                <p className="text-[10px] text-[#5A6A7A] font-mono uppercase tracking-wider">Annual</p>
+              <div className="text-right pl-3 border-l border-[#1A2130]" title="Annualized premium of your sold leads">
+                <p className="text-[10px] text-[#5A6A7A] font-mono uppercase tracking-wider">Sold annual</p>
                 <p className="text-sm font-display font-bold text-[#00E5C3]">${totalValue.toLocaleString()}</p>
               </div>
             )}
