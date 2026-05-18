@@ -73,7 +73,7 @@ export default function AddLeadModal({ onClose }) {
   const [form, setForm] = useState({
     full_name: '', phone: '', email: '',
     street_address: '', city: '', state: '', zip: '',
-    age: '', stage: 'not-started', tags: [], notes: '',
+    age: '', dob: '', stage: 'not-started', tags: [], notes: '',
   })
   const set = (field) => (val) => setForm(prev => ({ ...prev, [field]: val }))
 
@@ -94,6 +94,7 @@ export default function AddLeadModal({ onClose }) {
       state: form.state || null,
       zip: form.zip || null,
       age: form.age ? parseInt(form.age) : null,
+      dob: form.dob || null,
       stage: form.stage || 'not-started',
       tags: Array.isArray(form.tags) && form.tags.length ? form.tags : [],
       notes: form.notes || null,

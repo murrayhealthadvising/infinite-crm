@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useApp } from '../context/AppContext'
 import StatusTag from '../components/StatusTag'
-import { Phone, Mail, MapPin, Calendar, ArrowLeft, MessageSquare, PhoneCall, AtSign, StickyNote, ChevronDown, Zap, Send, User, Home, DollarSign, Heart, Pencil, Check, X } from 'lucide-react'
+import { Phone, Mail, MapPin, Calendar, ArrowLeft, MessageSquare, PhoneCall, AtSign, StickyNote, ChevronDown, Zap, Send, User, Users, Home, DollarSign, Heart, Pencil, Check, X, Clock } from 'lucide-react'
 import { normalizePhone, displayPhone } from '../lib/phone'
 import { localTimeFor, localHourFor } from '../lib/timezone'
 import { format, formatDistanceToNow } from 'date-fns'
@@ -450,10 +450,31 @@ export default function LeadDetail() {
               <EditableField label="Last Name" value={lead.last_name} icon={User} onSave={field('last_name')} />
               <EditableField label="Phone" value={displayPhone(lead.phone)} icon={Phone} onSave={field('phone')} />
               <EditableField label="Email" value={lead.email} icon={Mail} onSave={field('email')} type="email" />
+              <EditableField label="Address" value={lead.address} icon={Home} onSave={field('address')} />
+              <EditableField label="City" value={lead.city} icon={MapPin} onSave={field('city')} />
               <EditableField label="State" value={lead.state} icon={MapPin} onSave={field('state')} />
               <EditableField label="Zip" value={lead.zip} icon={MapPin} onSave={field('zip')} />
-              <EditableField label="Source" value={lead.source} icon={AtSign} onSave={field('source')} />
               <EditableField label="Age" value={lead.age} icon={Heart} onSave={field('age')} type="number" />
+              <EditableField label="DOB" value={lead.dob} icon={Heart} onSave={field('dob')} type="date" />
+              <EditableField label="Gender" value={lead.gender} icon={User} onSave={field('gender')} />
+              <EditableField label="Source" value={lead.source} icon={AtSign} onSave={field('source')} />
+              <EditableField label="Campaign" value={lead.campaign} icon={AtSign} onSave={field('campaign')} />
+              <EditableField label="Income" value={lead.income} icon={DollarSign} onSave={field('income')} />
+              <EditableField label="Household" value={lead.household} icon={Users} onSave={field('household')} type="number" />
+              <EditableField label="Current carrier" value={lead.current_carrier} icon={AtSign} onSave={field('current_carrier')} />
+              <EditableField label="Carrier (sold)" value={lead.carrier} icon={AtSign} onSave={field('carrier')} />
+              <EditableField label="Premium" value={lead.premium} icon={DollarSign} onSave={field('premium')} type="number" />
+              <EditableField label="Effective date" value={lead.effective_date} icon={Calendar} onSave={field('effective_date')} type="date" />
+              <EditableField label="Best contact time" value={lead.best_contact_time} icon={Clock} onSave={field('best_contact_time')} />
+              <EditableField label="Agent" value={lead.agent} icon={User} onSave={field('agent')} />
+              <EditableField label="Runner" value={lead.runner} icon={Users} onSave={field('runner')} />
+              <EditableField label="Date received" value={lead.created_at ? new Date(lead.created_at).toISOString().slice(0, 16) : ''} icon={Calendar}
+                onSave={(val) => {
+                  // datetime-local string → ISO. Also bump last_activity so cards re-sort properly.
+                  if (!val) return
+                  const iso = new Date(val).toISOString()
+                  if (typeof updateLead === 'function') updateLead(id, { created_at: iso })
+                }} type="datetime-local" />
 
               {/* User-defined custom fields */}
               {Object.entries(lead.custom_fields || {}).map(([key, value]) => (

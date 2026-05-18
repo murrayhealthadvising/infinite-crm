@@ -29,7 +29,7 @@ import AddLeadModal from '../components/AddLeadModal'
 import {
   Search, Plus, LayoutList, Columns, Phone, Copy, Home, DollarSign, Calendar,
   ExternalLink, ChevronDown, ChevronUp, X, Users, Check, Download, Upload,
-  Square, CheckSquare, AlertCircle, CheckCircle, Trash2, AlertTriangle,
+  Square, CheckSquare, AlertCircle, CheckCircle, Trash2, AlertTriangle, RefreshCw,
 } from 'lucide-react'
 import { format, formatDistanceToNow, differenceInYears, parseISO } from 'date-fns'
 import clsx from 'clsx'
@@ -111,6 +111,25 @@ function LocalTime({ lead }) {
       title={offHours ? "Outside typical 8a–9p window" : "Local time at this lead"}>
       · {t}
     </span>
+  )
+}
+
+// Refresh button — re-pulls leads without a full page reload.
+function RefreshButton() {
+  const { refreshLeads } = useApp()
+  const [spinning, setSpinning] = useState(false)
+  const click = async () => {
+    if (spinning) return
+    setSpinning(true)
+    try { await refreshLeads?.() } catch {}
+    setTimeout(() => setSpinning(false), 400)
+  }
+  return (
+    <button onClick={click} disabled={spinning}
+      className="p-2 rounded-lg border border-[#1A2130] text-[#8899AA] hover:text-white hover:border-[#2A3547] transition-colors disabled:opacity-50"
+      title="Refresh leads">
+      <RefreshCw size={15} className={spinning ? 'animate-spin' : ''} />
+    </button>
   )
 }
 
@@ -251,14 +270,18 @@ const SUGGESTED_TAGS = [
   'texted', 'emailed', 'follow-up', 'quoted', 'objection', 'spouse',
 ]
 function TagChips({ tags = [], onChange, suggestions = [] }) {
+  const { sideTagStyles } = useApp()
+  const styles = sideTagStyles || {}
+  const styleFor = (t) => styles[t] || {}
   const [adding, setAdding] = useState(false)
   const [text, setText] = useState('')
   const [pos, setPos] = useState({ top: 0, left: 0, openUp: false })
   const wrapRef = useRef(null)
   const inputRef = useRef(null)
 
-  // Hide the "starred" tag from the chip row — it has special meaning (Dial Bucket).
-  const visible = (Array.isArray(tags) ? tags : []).filter(t => t && t !== 'starred')
+  // Hide the "starred" tag (legacy Dial Bucket marker) AND any tag the user
+  // has flagged as hidden in their personal side-tag library.
+  const visible = (Array.isArray(tags) ? tags : []).filter(t => t && t !== 'starred' && !styleFor(t).hidden)
 
   // Reposition the portal dropdown relative to the input; flip up when there
   // isn't enough room below. Recalculate on scroll/resize so it tracks the input.
@@ -369,18 +392,24 @@ function TagChips({ tags = [], onChange, suggestions = [] }) {
 
   return (
     <div className="flex flex-wrap items-center gap-1" onClick={e => e.stopPropagation()}>
-      {visible.map(t => (
-        <span key={t}
-          className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded font-mono"
-          style={{ background: '#1A2130', color: '#8899AA', border: '1px solid #2A3547' }}>
-          #{t}
-          <button onClick={() => removeTag(t)}
-            className="text-[#5A6A7A] hover:text-[#EF4444] transition-colors leading-none"
-            title="Remove tag">
-            <X size={9} />
-          </button>
-        </span>
-      ))}
+      {visible.map(t => {
+        const c = styleFor(t).color
+        const chipStyle = c
+          ? { background: c + '15', color: c, border: `1px solid ${c}40` }
+          : { background: '#1A2130', color: '#8899AA', border: '1px solid #2A3547' }
+        return (
+          <span key={t}
+            className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded font-mono"
+            style={chipStyle}>
+            #{t}
+            <button onClick={() => removeTag(t)}
+              className="opacity-60 hover:opacity-100 transition-opacity leading-none"
+              title="Remove tag">
+              <X size={9} />
+            </button>
+          </span>
+        )
+      })}
       {adding ? (
         <div ref={wrapRef} className="relative">
           <input ref={inputRef} autoFocus value={text}
@@ -1573,6 +1602,8 @@ export default function Leads() {
             </button>
           )}
 
+          {/* Refresh — pulls latest leads without reloading the page */}
+          <RefreshButton />
           <div className="flex rounded-lg border border-[#1A2130] overflow-hidden" style={{ background: '#0A0E14' }}>
             <button onClick={() => setView('list')} className={clsx('px-3 py-1.5 transition-colors', view === 'list' ? 'bg-[#1A2130] text-white' : 'text-[#5A6A7A] hover:text-white')}>
               <LayoutList size={15} />

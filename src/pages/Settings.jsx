@@ -395,17 +395,18 @@ function RunnerAccessPanel() {
 // Rename/delete here propagates across every lead that uses that tag.
 // ─────────────────────────────────────────────────────────────────────────────
 function SideTagsPanel() {
-  const { leads, updateLead } = useApp()
+  const { leads, updateLead, sideTagStyles, setSideTagStyles } = useApp()
   const [renaming, setRenaming] = useState(null)
   const [renameText, setRenameText] = useState('')
   const [working, setWorking] = useState(null)
   const [msg, setMsg] = useState(null)
+  const [addingTag, setAddingTag] = useState('')
 
-  // Add-tag (creates a placeholder by attaching to no lead — we just track the
-  // user's library so it shows up in autocomplete). To make it visible without
-  // touching any lead, we keep a local-only set; real persistence happens the
-  // moment a tag lands on its first lead.
   const safeLeads = Array.isArray(leads) ? leads : []
+  const styles = sideTagStyles || {}
+
+  // Build the union: every tag actually used on a lead AND every tag in the
+  // user's library (so they can pre-create tags before applying to any lead).
   const tagCounts = useMemo(() => {
     const c = new Map()
     for (const l of safeLeads) {
@@ -414,13 +415,36 @@ function SideTagsPanel() {
         c.set(t, (c.get(t) || 0) + 1)
       }
     }
+    // Library entries with count 0 if not used anywhere yet
+    for (const t of Object.keys(styles)) {
+      if (!c.has(t)) c.set(t, 0)
+    }
     return c
-  }, [safeLeads])
+  }, [safeLeads, styles])
 
   const sorted = useMemo(
     () => Array.from(tagCounts.entries()).sort((a, b) => a[0].localeCompare(b[0])),
     [tagCounts]
   )
+
+  // Style helpers
+  const PALETTE = ['#A78BFA','#3B82F6','#10B981','#F59E0B','#EF4444','#EC4899','#22D3EE','#F97316','#84CC16','#FB7185','#06B6D4']
+  const updateStyle = async (name, patch) => {
+    const next = { ...styles, [name]: { ...(styles[name] || {}), ...patch } }
+    await setSideTagStyles(next)
+  }
+  const clearColor = async (name) => {
+    const next = { ...styles, [name]: { ...(styles[name] || {}), color: null } }
+    await setSideTagStyles(next)
+  }
+  const handleAddNew = async () => {
+    const v = String(addingTag || '').trim().toLowerCase()
+    if (!v) return
+    if (tagCounts.has(v)) { setAddingTag(''); return }
+    const next = { ...styles, [v]: { color: PALETTE[Object.keys(styles).length % PALETTE.length] } }
+    await setSideTagStyles(next)
+    setAddingTag('')
+  }
 
   const handleRename = async (oldName) => {
     const next = renameText.trim().toLowerCase()
@@ -444,6 +468,12 @@ function SideTagsPanel() {
     for (const l of affected) {
       const next = l.tags.filter(t => t !== name)
       try { await updateLead(l.id, { tags: next }) } catch {}
+    }
+    // Also remove from the library/styles map so it stops showing on this page.
+    if (styles[name]) {
+      const nextStyles = { ...styles }
+      delete nextStyles[name]
+      try { await setSideTagStyles(nextStyles) } catch {}
     }
     setMsg({ type: 'success', text: `Removed "${name}" from ${affected.length} lead${affected.length === 1 ? '' : 's'}` })
     setTimeout(() => setMsg(null), 4000)
@@ -471,56 +501,112 @@ function SideTagsPanel() {
         </div>
       )}
 
+      {/* Add new */}
+      <div className="flex items-center gap-2 mb-3">
+        <input value={addingTag}
+          onChange={e => setAddingTag(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') handleAddNew() }}
+          placeholder="Add a new side tag (e.g. pitched, callback)…"
+          className="flex-1 px-3 py-2 rounded-lg text-sm text-white bg-[#080B0F] border border-[#1A2130] focus:outline-none focus:border-[#00E5C340] font-mono" />
+        <button onClick={handleAddNew} disabled={!addingTag.trim()}
+          className="px-3 py-2 rounded-lg text-xs font-semibold text-black disabled:opacity-40"
+          style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
+          <Plus size={12} className="inline -mt-0.5" /> Add
+        </button>
+      </div>
+
       {sorted.length === 0 ? (
         <div className="border border-dashed border-[#1A2130] rounded-lg py-6 text-center">
           <p className="text-sm text-[#5A6A7A]">No side tags yet.</p>
-          <p className="text-xs text-[#3A4A5A] mt-1">Add chips on a lead card and they'll show up here.</p>
+          <p className="text-xs text-[#3A4A5A] mt-1">Add one above or add chips on a lead card.</p>
         </div>
       ) : (
         <div className="border border-[#1A2130] rounded-lg overflow-hidden divide-y divide-[#1A2130]">
-          {sorted.map(([name, count]) => (
-            <div key={name} className="flex items-center gap-2 px-3 py-2.5">
-              {renaming === name ? (
-                <>
-                  <input autoFocus value={renameText}
-                    onChange={e => setRenameText(e.target.value)}
-                    onKeyDown={e => {
-                      if (e.key === 'Enter') handleRename(name)
-                      if (e.key === 'Escape') { setRenaming(null); setRenameText('') }
-                    }}
-                    className="flex-1 px-2 py-1 rounded text-sm text-white bg-[#080B0F] border border-[#1A2130] focus:outline-none focus:border-[#00E5C340] font-mono" />
-                  <button onClick={() => handleRename(name)}
-                    disabled={!renameText.trim() || working === name}
-                    className="px-2 py-1 rounded text-xs font-medium text-black disabled:opacity-50"
-                    style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
-                    {working === name ? 'Saving…' : 'Save'}
-                  </button>
-                  <button onClick={() => { setRenaming(null); setRenameText('') }}
-                    className="px-2 py-1 rounded text-xs text-[#5A6A7A] hover:text-white">
-                    Cancel
-                  </button>
-                </>
-              ) : (
-                <>
-                  <span className="text-[11px] px-1.5 py-0.5 rounded font-mono"
-                    style={{ background: '#1A2130', color: '#8899AA', border: '1px solid #2A3547' }}>
-                    #{name}
-                  </span>
-                  <span className="text-xs text-[#5A6A7A]">{count} lead{count === 1 ? '' : 's'}</span>
-                  <div className="flex-1" />
-                  <button onClick={() => { setRenaming(name); setRenameText(name) }}
-                    className="text-xs px-2 py-1 rounded border border-[#1A2130] text-[#5A6A7A] hover:text-white hover:border-[#2A3547]">
-                    Rename
-                  </button>
-                  <button onClick={() => handleDelete(name)}
-                    disabled={working === name}
-                    className="p-1.5 rounded text-[#3A4A5A] hover:text-[#EF4444] hover:bg-[#EF444415] disabled:opacity-30">
-                    <Trash2 size={13} />
-                  </button>
-                </>
-              )}
-            </div>
-          ))}
+          {sorted.map(([name, count]) => {
+            const s = styles[name] || {}
+            const hidden = !!s.hidden
+            const color = s.color || null
+            const chipStyle = color
+              ? { background: color + '15', color, border: `1px solid ${color}60` }
+              : { background: '#1A2130', color: '#8899AA', border: '1px solid #2A3547' }
+            return (
+              <div key={name} className={'flex items-center gap-2 px-3 py-2.5 flex-wrap ' + (hidden ? 'opacity-50' : '')}>
+                {renaming === name ? (
+                  <>
+                    <input autoFocus value={renameText}
+                      onChange={e => setRenameText(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') handleRename(name)
+                        if (e.key === 'Escape') { setRenaming(null); setRenameText('') }
+                      }}
+                      className="flex-1 px-2 py-1 rounded text-sm text-white bg-[#080B0F] border border-[#1A2130] focus:outline-none focus:border-[#00E5C340] font-mono" />
+                    <button onClick={() => handleRename(name)}
+                      disabled={!renameText.trim() || working === name}
+                      className="px-2 py-1 rounded text-xs font-medium text-black disabled:opacity-50"
+                      style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
+                      {working === name ? 'Saving…' : 'Save'}
+                    </button>
+                    <button onClick={() => { setRenaming(null); setRenameText('') }}
+                      className="px-2 py-1 rounded text-xs text-[#5A6A7A] hover:text-white">
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-[11px] px-1.5 py-0.5 rounded font-mono" style={chipStyle}>
+                      #{name}
+                    </span>
+                    <span className="text-xs text-[#5A6A7A]">{count} lead{count === 1 ? '' : 's'}</span>
+
+                    {/* Color swatches */}
+                    <div className="flex items-center gap-0.5 ml-2">
+                      {PALETTE.map(c => (
+                        <button key={c} onClick={() => updateStyle(name, { color: c })}
+                          className="w-4 h-4 rounded-full border"
+                          style={{ background: c, borderColor: color === c ? '#fff' : 'transparent' }}
+                          title={c} />
+                      ))}
+                      <label className="relative w-4 h-4 rounded-full border border-[#2A3547] cursor-pointer overflow-hidden ml-0.5"
+                        style={{ background: color || '#1A2130' }}
+                        title="Custom color">
+                        <input type="color" value={color || '#A78BFA'}
+                          onChange={e => updateStyle(name, { color: e.target.value })}
+                          className="absolute inset-0 opacity-0 cursor-pointer" />
+                      </label>
+                      {color && (
+                        <button onClick={() => clearColor(name)}
+                          className="ml-1 text-[10px] text-[#5A6A7A] hover:text-white"
+                          title="Reset to default gray">
+                          ×
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="flex-1" />
+
+                    {/* Hide toggle */}
+                    <label className="flex items-center gap-1 text-[10px] text-[#5A6A7A] cursor-pointer mr-1" title="Hidden tags stay on leads but don't show on cards">
+                      <input type="checkbox" checked={hidden}
+                        onChange={e => updateStyle(name, { hidden: e.target.checked })}
+                        className="accent-[#A78BFA]" />
+                      hide
+                    </label>
+
+                    <button onClick={() => { setRenaming(name); setRenameText(name) }}
+                      className="text-xs px-2 py-1 rounded border border-[#1A2130] text-[#5A6A7A] hover:text-white hover:border-[#2A3547]">
+                      Rename
+                    </button>
+                    <button onClick={() => handleDelete(name)}
+                      disabled={working === name}
+                      className="p-1.5 rounded text-[#3A4A5A] hover:text-[#EF4444] hover:bg-[#EF444415] disabled:opacity-30"
+                      title="Remove from all leads + library">
+                      <Trash2 size={13} />
+                    </button>
+                  </>
+                )}
+              </div>
+            )
+          })}
         </div>
       )}
     </div>

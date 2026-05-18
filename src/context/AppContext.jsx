@@ -398,6 +398,16 @@ export function AppProvider({ children }) {
   // USHA Lead Arena / Ringy / etc. Comes from profiles.lead_email.
   const leadEmail = profile?.lead_email || null
 
+  // Per-agent side-tag library — { tagName: { color, hidden } }. Drives the
+  // color of chips on lead cards + lets the agent hide tags from the picker.
+  const sideTagStyles = (profile?.side_tag_styles && typeof profile.side_tag_styles === 'object') ? profile.side_tag_styles : {}
+  const setSideTagStyles = async (next) => {
+    const uid = session?.user?.id
+    if (!uid) return
+    setProfile(p => p ? { ...p, side_tag_styles: next } : p)
+    try { await supabase.from('profiles').update({ side_tag_styles: next }).eq('user_id', uid) } catch (e) { console.error('setSideTagStyles failed:', e) }
+  }
+
   // Per-agent pipeline-card field toggles — picks which info shows on each
   // pipeline card. Stored as { call, phone, time_in_stage, local_time, zip,
   // comments, notes_preview, source, email } booleans on profile.pipeline_card_fields.
@@ -574,6 +584,7 @@ export function AppProvider({ children }) {
       commissionPresets, saveCommissionPresets,
       leadEmail,
       pipelineCardFields, setPipelineCardFields,
+      sideTagStyles, setSideTagStyles,
       // reminders (Today page)
       reminders, refreshReminders, addReminder, completeReminder, uncompleteReminder, snoozeReminder, deleteReminder,
       // commission entries (Calculator weekly tracker)
