@@ -395,6 +395,7 @@ export default function Pipeline() {
               <option value="created_oldest">Oldest lead</option>
               <option value="name_asc">Name A→Z</option>
               <option value="price_desc">Highest cost first</option>
+              <option value="campaign_asc">Campaign A→Z</option>
             </select>
             {/* Filters toggle */}
             <button onClick={() => setShowFilters(v => !v)}
@@ -515,6 +516,7 @@ export default function Pipeline() {
                     case 'created_oldest': return tcr(a) - tcr(b)
                     case 'name_asc': return nm(a).localeCompare(nm(b))
                     case 'price_desc': return (Number(b.price) || 0) - (Number(a.price) || 0)
+                    case 'campaign_asc': return String(a.campaign || a.source || '').toLowerCase().localeCompare(String(b.campaign || b.source || '').toLowerCase())
                     case 'stage_newest':
                     default: return tin(b) - tin(a)  // newest in stage first
                   }
