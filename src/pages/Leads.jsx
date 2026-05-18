@@ -226,6 +226,151 @@ function TagPill({ stage, tags, onChange }) {
   )
 }
 
+// Campaign pill — single-select dropdown of the user's saved campaigns,
+// plus inline "+ Create new" when typed text doesn't match any. Adding a new
+// campaign saves it to profile.campaigns so it shows up everywhere going
+// forward. Click the chip to open. Portal-based so cards don't clip it.
+function CampaignPill({ value, color, onSave }) {
+  const { campaigns, saveCampaigns } = useApp()
+  const [open, setOpen] = useState(false)
+  const [filter, setFilter] = useState('')
+  const [pos, setPos] = useState({ left: 0, top: 0, openUp: false })
+  const wrapRef = useRef(null)
+  const btnRef = useRef(null)
+
+  const calcPos = () => {
+    const el = btnRef.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    const DROPDOWN_H = 280
+    const spaceBelow = window.innerHeight - rect.bottom
+    const openUp = spaceBelow < DROPDOWN_H + 16 && rect.top > spaceBelow
+    setPos({
+      left: rect.left,
+      top: openUp ? rect.top - 6 : rect.bottom + 6,
+      openUp,
+    })
+  }
+
+  useEffect(() => {
+    if (!open) return
+    calcPos()
+    const onScroll = () => calcPos()
+    const handler = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) {
+        const portal = document.getElementById('campaign-portal')
+        if (portal && portal.contains(e.target)) return
+        close()
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    window.addEventListener('scroll', onScroll, true)
+    window.addEventListener('resize', onScroll)
+    return () => {
+      document.removeEventListener('mousedown', handler)
+      window.removeEventListener('scroll', onScroll, true)
+      window.removeEventListener('resize', onScroll)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
+
+  const close = () => { setOpen(false); setFilter('') }
+
+  const pick = async (v) => {
+    try { await onSave(v || null) } catch {}
+    close()
+  }
+  const createAndPick = async (raw) => {
+    const v = String(raw || '').trim()
+    if (!v) return
+    if (!campaigns.includes(v)) {
+      try { await saveCampaigns([...campaigns, v]) } catch {}
+    }
+    await pick(v)
+  }
+  const removeFromLibrary = async (e, name) => {
+    e.stopPropagation()
+    if (!confirm(`Remove "${name}" from your campaign list? (Existing leads keep the label.)`)) return
+    try { await saveCampaigns(campaigns.filter(c => c !== name)) } catch {}
+  }
+
+  const q = filter.trim().toLowerCase()
+  const filtered = (campaigns || []).filter(c => !q || c.toLowerCase().includes(q))
+  const exactExists = (campaigns || []).some(c => c.toLowerCase() === q)
+  const showCreate = q && !exactExists
+
+  const display = value && String(value).trim() ? value : '—'
+
+  const dropdown = open ? (
+    <div id="campaign-portal"
+      style={{
+        position: 'fixed',
+        left: pos.left, top: pos.top,
+        transform: pos.openUp ? 'translateY(-100%)' : undefined,
+        width: '220px',
+        background: '#0A0E14', border: '1px solid #1A2130', borderRadius: '12px',
+        boxShadow: '0 20px 40px rgba(0,0,0,0.6)', zIndex: 9999, overflow: 'hidden',
+      }}>
+      <div className="p-2 border-b border-[#1A2130]">
+        <input autoFocus value={filter}
+          onChange={e => setFilter(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === 'Enter') { e.preventDefault(); showCreate ? createAndPick(filter) : (filtered[0] && pick(filtered[0])) }
+            if (e.key === 'Escape') close()
+          }}
+          placeholder="Search or create campaign…"
+          className="w-full bg-[#080B0F] border border-[#1A2130] rounded px-2 py-1 text-xs text-white placeholder-[#3A4A5A] focus:outline-none focus:border-[#00E5C340]" />
+      </div>
+      <div className="max-h-56 overflow-y-auto">
+        {value && (
+          <button onMouseDown={e => { e.preventDefault(); pick(null) }}
+            className="block w-full text-left px-2.5 py-1.5 text-[10px] uppercase tracking-wider font-mono text-[#5A6A7A] hover:bg-[#1A2130]">
+            ← clear campaign
+          </button>
+        )}
+        {filtered.map(c => (
+          <div key={c} className="group flex items-center hover:bg-[#1A2130]">
+            <button onMouseDown={e => { e.preventDefault(); pick(c) }}
+              className="flex-1 text-left px-2.5 py-1.5 text-xs font-mono"
+              style={{ color: value === c ? '#00E5C3' : '#8899AA' }}>
+              {c}
+              {value === c && <span className="ml-1 text-[#00E5C3]">✓</span>}
+            </button>
+            <button onClick={(e) => removeFromLibrary(e, c)}
+              className="px-2 py-1.5 text-[10px] text-[#3A4A5A] hover:text-[#EF4444] opacity-0 group-hover:opacity-100"
+              title="Remove from list">
+              ×
+            </button>
+          </div>
+        ))}
+        {showCreate && (
+          <button onMouseDown={e => { e.preventDefault(); createAndPick(filter) }}
+            className="block w-full text-left px-2.5 py-1.5 text-xs font-mono text-[#00E5C3] hover:bg-[#1A2130] border-t border-[#1A2130]">
+            + Create <strong>{filter.trim()}</strong>
+          </button>
+        )}
+        {!showCreate && filtered.length === 0 && (
+          <p className="px-2.5 py-2 text-[11px] text-[#5A6A7A]">No campaigns. Type to create.</p>
+        )}
+      </div>
+    </div>
+  ) : null
+
+  return (
+    <div ref={wrapRef} className="inline-block" onClick={e => e.stopPropagation()}>
+      <button ref={btnRef}
+        onClick={() => setOpen(v => !v)}
+        className="text-[10px] px-1.5 py-0.5 rounded font-mono cursor-pointer hover:opacity-80 max-w-[140px] truncate inline-flex items-center gap-1"
+        title="Click to pick a campaign"
+        style={{ background: color + '15', color }}>
+        {display}
+        <span className="opacity-60">▾</span>
+      </button>
+      {open && createPortal(dropdown, document.body)}
+    </div>
+  )
+}
+
 // Inline-editable text pill (campaign name)
 function TextPill({ value, color, onSave, placeholder = 'campaign', maxLen = 24 }) {
   const [editing, setEditing] = useState(false)
@@ -708,7 +853,7 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
           <div className="flex items-center gap-1.5 mt-1 flex-wrap">
             <span className="text-xs text-[#5A6A7A]">{[lead.state, lead.zip].filter(Boolean).join(' ')}</span>
             <LocalTime lead={lead} />
-            <TextPill value={lead.campaign || lead.source} color={safeColor} onSave={(v) => onCampaignChange(lead.id, v)} placeholder="campaign" />
+            <CampaignPill value={lead.campaign || lead.source} color={safeColor} onSave={(v) => onCampaignChange(lead.id, v)} />
             <PricePill value={lead.price} color={safeColor} onSave={(v) => onPriceChange(lead.id, v)} />
             <RunnerPill value={lead.runner} color={safeColor} onSave={(v) => onRunnerChange(lead.id, v)} suggestions={runnerSuggestions} />
             {lead.comments && (

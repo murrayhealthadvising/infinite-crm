@@ -398,6 +398,20 @@ export function AppProvider({ children }) {
   // USHA Lead Arena / Ringy / etc. Comes from profiles.lead_email.
   const leadEmail = profile?.lead_email || null
 
+  // Per-agent campaign library — string array. Falls back to a sensible set
+  // of defaults (the most common lead vendors) until the agent customizes.
+  const DEFAULT_CAMPAIGNS = ['GoldBar', 'RedMedia', 'Dynasty', 'Exclusive', 'Performance']
+  const campaigns = Array.isArray(profile?.campaigns) && profile.campaigns.length
+    ? profile.campaigns
+    : DEFAULT_CAMPAIGNS
+  const saveCampaigns = async (next) => {
+    const uid = session?.user?.id
+    if (!uid) return
+    const arr = Array.from(new Set((next || []).map(c => String(c).trim()).filter(Boolean)))
+    setProfile(p => p ? { ...p, campaigns: arr } : p)
+    try { await supabase.from('profiles').update({ campaigns: arr }).eq('user_id', uid) } catch (e) { console.error('saveCampaigns failed:', e) }
+  }
+
   // Per-agent side-tag library — { tagName: { color, hidden } }. Drives the
   // color of chips on lead cards + lets the agent hide tags from the picker.
   const sideTagStyles = (profile?.side_tag_styles && typeof profile.side_tag_styles === 'object') ? profile.side_tag_styles : {}
@@ -585,6 +599,7 @@ export function AppProvider({ children }) {
       leadEmail,
       pipelineCardFields, setPipelineCardFields,
       sideTagStyles, setSideTagStyles,
+      campaigns, saveCampaigns,
       // reminders (Today page)
       reminders, refreshReminders, addReminder, completeReminder, uncompleteReminder, snoozeReminder, deleteReminder,
       // commission entries (Calculator weekly tracker)
