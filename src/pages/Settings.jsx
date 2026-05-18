@@ -901,6 +901,7 @@ export default function Settings() {
             ['local_time', 'Local time (lead\'s timezone)'],
             ['zip', 'ZIP code'],
             ['comments', 'Marketplace comments chip'],
+            ['runner', 'Runner pill (who worked the lead)'],
             ['notes_preview', 'Notes preview (2 lines)'],
             ['source', 'Source / campaign chip'],
             ['email', 'Email address'],

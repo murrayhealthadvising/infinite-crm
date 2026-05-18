@@ -428,7 +428,7 @@ export function AppProvider({ children }) {
   // null/missing = use defaults.
   const PIPELINE_CARD_DEFAULTS = {
     call: true, phone: true, time_in_stage: true, local_time: true,
-    zip: true, comments: true,
+    zip: true, comments: true, runner: true,
     notes_preview: false, source: false, email: false,
   }
   const pipelineCardFields = { ...PIPELINE_CARD_DEFAULTS, ...(profile?.pipeline_card_fields || {}) }

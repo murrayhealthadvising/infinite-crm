@@ -770,7 +770,8 @@ function NotesField({ value, onSave, placeholder }) {
 // Lead card
 // ───────────────────────────────────────────────────────────────────────────
 function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNoteBChange, onNavigate, onDelete, onPriceChange, onCampaignChange, onRunnerChange, onTagsChange, runnerSuggestions, tagSuggestions, canDelete = true }) {
-  const { tags, getTag, splitNotes } = useApp()
+  const { tags, getTag, splitNotes, pipelineCardFields } = useApp()
+  const showRunner = pipelineCardFields?.runner !== false
   const [copied, setCopied] = useState(false)
   const [nameCopied, setNameCopied] = useState(false)
   const [emailCopied, setEmailCopied] = useState(false)
@@ -855,7 +856,7 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
             <LocalTime lead={lead} />
             <CampaignPill value={lead.campaign || lead.source} color={safeColor} onSave={(v) => onCampaignChange(lead.id, v)} />
             <PricePill value={lead.price} color={safeColor} onSave={(v) => onPriceChange(lead.id, v)} />
-            <RunnerPill value={lead.runner} color={safeColor} onSave={(v) => onRunnerChange(lead.id, v)} suggestions={runnerSuggestions} />
+            {showRunner && <RunnerPill value={lead.runner} color={safeColor} onSave={(v) => onRunnerChange(lead.id, v)} suggestions={runnerSuggestions} />}
             {lead.comments && (
               <span className="text-[10px] px-1.5 py-0.5 rounded font-mono max-w-[180px] truncate"
                 title={lead.comments}
@@ -1033,6 +1034,53 @@ function TagFilterPills({ tagFilters, setTagFilters, leads }) {
       })}
       {tagFilters.size > 0 && (
         <button onClick={() => setTagFilters(new Set())}
+          className="text-[10px] text-[#5A6A7A] hover:text-white px-2 flex-shrink-0">
+          clear
+        </button>
+      )}
+    </div>
+  )
+}
+
+// Campaign filter pills — buckets every lead by its campaign (or source as
+// fallback). Multi-select. Includes a '(none)' bucket for leads with no
+// campaign so they're still selectable.
+function CampaignFilterPills({ campaignFilters, setCampaignFilters, leads }) {
+  const ref = useDragScroll()
+  const safeLeads = Array.isArray(leads) ? leads : []
+  const counts = useMemo(() => {
+    const m = new Map()
+    for (const l of safeLeads) {
+      const c = (l.campaign && String(l.campaign).trim()) || (l.source && String(l.source).trim()) || '(none)'
+      m.set(c, (m.get(c) || 0) + 1)
+    }
+    return m
+  }, [safeLeads])
+  const entries = Array.from(counts.entries()).sort((a, b) => b[1] - a[1])  // most-used first
+  if (entries.length === 0) return null
+
+  const toggle = (c) => setCampaignFilters(prev => {
+    const n = new Set(prev); n.has(c) ? n.delete(c) : n.add(c); return n
+  })
+
+  return (
+    <div ref={ref} className="flex gap-2 px-6 pb-2 overflow-x-auto items-center"
+      style={{ scrollbarWidth: 'none', msOverflowStyle: 'none', cursor: 'grab', WebkitOverflowScrolling: 'touch' }}>
+      <span className="text-[10px] font-mono uppercase tracking-wider text-[#3A4A5A] flex-shrink-0 mr-1">Campaigns</span>
+      {entries.map(([c, count]) => {
+        const active = campaignFilters.has(c)
+        return (
+          <button key={c} onClick={() => toggle(c)}
+            className="px-2.5 py-1 rounded-full text-xs font-mono whitespace-nowrap flex-shrink-0"
+            style={active
+              ? { background: '#10B98115', color: '#10B981', border: '1px solid #10B98160' }
+              : { color: '#5A6A7A', border: '1px solid #1A2130' }}>
+            {c} <span className="opacity-60">({count})</span>
+          </button>
+        )
+      })}
+      {campaignFilters.size > 0 && (
+        <button onClick={() => setCampaignFilters(new Set())}
           className="text-[10px] text-[#5A6A7A] hover:text-white px-2 flex-shrink-0">
           clear
         </button>
@@ -1427,6 +1475,7 @@ export default function Leads() {
   const [stageFilter, setStageFilter] = useState('')
   const [tagFilters, setTagFilters] = useState(() => new Set())  // multi-select side-tag filter
   const [tzFilters, setTzFilters] = useState(() => new Set())    // multi-select TZ filter
+  const [campaignFilters, setCampaignFilters] = useState(() => new Set())  // multi-select campaign filter
   const [sortBy, setSortBy] = useState('created_desc')
   const [showAdd, setShowAdd] = useState(false)
   const [selected, setSelected] = useState(new Set())
@@ -1456,6 +1505,7 @@ export default function Leads() {
       case 'created_asc':   return ts(a, 'created_at') - ts(b, 'created_at')
       case 'name_asc':      return nameOf(a).localeCompare(nameOf(b))
       case 'price_desc':    return (Number(b.price) || 0) - (Number(a.price) || 0)
+      case 'campaign_asc':  return String(a.campaign || a.source || '').toLowerCase().localeCompare(String(b.campaign || b.source || '').toLowerCase())
       case 'created_desc':
       default:              return ts(b, 'created_at') - ts(a, 'created_at')
     }
@@ -1473,7 +1523,10 @@ export default function Leads() {
       (Array.isArray(l.tags) && Array.from(tagFilters).every(t => l.tags.includes(t)))
     // TZ filter: lead's TZ must be one of the selected zones
     const matchTz = tzFilters.size === 0 || tzFilters.has(tzShortFor(l))
-    return matchSearch && matchStage && matchTags && matchTz
+    // Campaign filter (or empty-campaign bucket)
+    const matchCampaign = campaignFilters.size === 0 ||
+      campaignFilters.has(l.campaign || l.source || '(none)')
+    return matchSearch && matchStage && matchTags && matchTz && matchCampaign
   })
 
   const toggleSelect = (id) => setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
@@ -1848,10 +1901,12 @@ export default function Leads() {
             <option value="activity_asc">Stale (no recent activity)</option>
             <option value="name_asc">Name A→Z</option>
             <option value="price_desc">Highest cost first</option>
+            <option value="campaign_asc">Campaign A→Z</option>
           </select>
         </div>
         <DragScrollPills stageFilter={stageFilter} setStageFilter={setStageFilter} tags={safeTags} leads={safeLeads} />
         <TagFilterPills tagFilters={tagFilters} setTagFilters={setTagFilters} leads={safeLeads} />
+        <CampaignFilterPills campaignFilters={campaignFilters} setCampaignFilters={setCampaignFilters} leads={safeLeads} />
         <TzFilterPills tzFilters={tzFilters} setTzFilters={setTzFilters} leads={safeLeads} />
       </div>
 
