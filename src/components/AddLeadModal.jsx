@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { useApp } from '../context/AppContext'
 import { X } from 'lucide-react'
 import { normalizePhone } from '../lib/phone'
-import { stateFromZip } from '../lib/zip'
+import { stateFromZip, ageFromDob } from '../lib/zip'
 
 // Plain field — nothing required
 const Field = ({ label, type = 'text', value, onChange, placeholder }) => (
@@ -202,6 +202,7 @@ export default function AddLeadModal({ onClose }) {
     campaign: '', received: nowLocal(),
   })
   const [zipTouched, setZipTouched] = useState(false)
+  const [dobTouched, setDobTouched] = useState(false)
   const set = (field) => (val) => setForm(prev => ({ ...prev, [field]: val }))
 
   // Auto-populate state from ZIP — only fills if state is empty so we don't
@@ -212,6 +213,15 @@ export default function AddLeadModal({ onClose }) {
     if (guess && !form.state) setForm(prev => ({ ...prev, state: guess }))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.zip, zipTouched])
+
+  // Auto-compute Age from DOB. Doesn't overwrite a manual age entry — only
+  // fills if age is empty. Updates whenever DOB changes.
+  useEffect(() => {
+    if (!dobTouched) return
+    const a = ageFromDob(form.dob)
+    if (a != null && !form.age) setForm(prev => ({ ...prev, age: String(a) }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.dob, dobTouched])
 
   // Pool of side-tag suggestions = library entries + tags already in use across leads
   const safeLeads = Array.isArray(leads) ? leads : []
@@ -291,7 +301,15 @@ export default function AddLeadModal({ onClose }) {
                 <Field label="Age" type="number" value={form.age} onChange={set('age')} placeholder="42" />
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <Field label="DOB" type="date" value={form.dob} onChange={set('dob')} />
+                <div>
+                  <label className="text-xs font-mono uppercase tracking-wider text-[#5A6A7A] mb-1.5 block">DOB</label>
+                  <input type="date" value={form.dob}
+                    onChange={e => { set('dob')(e.target.value); setDobTouched(true) }}
+                    className="w-full bg-[#080B0F] border border-[#1A2130] rounded-lg px-3 py-2.5 text-sm text-white placeholder-[#3A4A5A] focus:outline-none focus:border-[#00E5C340]" />
+                  {form.dob && ageFromDob(form.dob) != null && (
+                    <p className="text-[10px] text-[#00E5C3] mt-0.5">→ age {ageFromDob(form.dob)}</p>
+                  )}
+                </div>
                 <Field label="Income" value={form.income} onChange={set('income')} placeholder="65000 or 50k-75k" />
               </div>
               <div className="grid grid-cols-2 gap-3">

@@ -429,7 +429,7 @@ export function AppProvider({ children }) {
   const PIPELINE_CARD_DEFAULTS = {
     call: true, phone: true, time_in_stage: true, local_time: true,
     zip: true, comments: true, runner: true,
-    notes_preview: false, source: false, email: false,
+    notes_preview: false, source: false, email: false, received_date: false,
   }
   const pipelineCardFields = { ...PIPELINE_CARD_DEFAULTS, ...(profile?.pipeline_card_fields || {}) }
   const setPipelineCardFields = async (next) => {

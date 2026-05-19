@@ -207,10 +207,22 @@ function RunnerAccessPanel() {
   }
 
   const handleDeactivate = async (r) => {
-    if (!confirm(`Revoke runner access for ${r.email}? They will no longer see your leads.`)) return
+    if (!confirm(`Revoke runner access for ${r.email}? They'll no longer see your leads, but their account stays so you can re-activate later.`)) return
     const { error } = await supabase.rpc('deactivate_runner', { rid: r.id })
     if (error) { setMsg({ type: 'error', text: error.message }); return }
     setMsg({ type: 'success', text: `${r.email} deactivated.` })
+    refresh()
+    setTimeout(() => setMsg(null), 4000)
+  }
+
+  const handleDelete = async (r) => {
+    if (!confirm(`PERMANENTLY delete ${r.email}? Their account is wiped — they can never log in again with this email. This cannot be undone.`)) return
+    if (!confirm(`Really delete? Type their email in the next prompt if you're sure.`)) return
+    const conf = window.prompt(`Type "${r.email}" to confirm full deletion:`)
+    if (conf !== r.email) { setMsg({ type: 'error', text: 'Email did not match — cancelled.' }); return }
+    const { error } = await supabase.rpc('delete_runner', { rid: r.id })
+    if (error) { setMsg({ type: 'error', text: error.message }); return }
+    setMsg({ type: 'success', text: `${r.email} permanently deleted.` })
     refresh()
     setTimeout(() => setMsg(null), 4000)
   }
@@ -277,8 +289,13 @@ function RunnerAccessPanel() {
                 runner
               </span>
               <button onClick={() => handleDeactivate(r)}
+                className="text-xs px-2 py-1 rounded border border-[#1A2130] text-[#5A6A7A] hover:text-white hover:border-[#2A3547]"
+                title="Revoke runner access (keeps account)">
+                Deactivate
+              </button>
+              <button onClick={() => handleDelete(r)}
                 className="p-1.5 rounded-lg text-[#5A6A7A] hover:text-[#EF4444] hover:bg-[#EF444415]"
-                title="Revoke access">
+                title="Permanently delete this runner account">
                 <Trash2 size={13} />
               </button>
             </div>
@@ -1040,6 +1057,7 @@ export default function Settings() {
             ['notes_preview', 'Notes preview (2 lines)'],
             ['source', 'Source / campaign chip'],
             ['email', 'Email address'],
+            ['received_date', 'Received date'],
           ].map(([key, label]) => {
             const on = pipelineCardFields?.[key] !== false
             return (

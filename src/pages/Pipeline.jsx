@@ -82,6 +82,10 @@ function PipelineCard({ lead, onDragStart, onDragEnd, onClick }) {
         )}
       </div>
 
+      {fields.email && lead.email && (
+        <p className="text-[11px] text-[#5A6A7A] truncate mb-1.5">{lead.email}</p>
+      )}
+
       {fields.phone !== false && phoneVisible && (
         <div className="flex items-center gap-2 mb-2">
           {fields.call !== false && (
@@ -93,10 +97,6 @@ function PipelineCard({ lead, onDragStart, onDragEnd, onClick }) {
           )}
           <span className="text-xs font-mono text-[#8899AA] truncate">{phoneVisible}</span>
         </div>
-      )}
-
-      {fields.email && lead.email && (
-        <p className="text-[11px] text-[#5A6A7A] truncate mb-1">{lead.email}</p>
       )}
 
       {fields.notes_preview && lead.notes && (
@@ -122,6 +122,11 @@ function PipelineCard({ lead, onDragStart, onDragEnd, onClick }) {
         )}
         {fields.zip !== false && lead.zip && <span className="text-[10px] text-[#5A6A7A] font-mono">{lead.zip}</span>}
         {fields.zip !== false && !lead.zip && lead.state && <span className="text-[10px] text-[#5A6A7A] font-mono">{lead.state}</span>}
+        {fields.received_date && lead.created_at && (
+          <span className="text-[10px] text-[#5A6A7A] font-mono" title="Received date">
+            {(() => { try { return formatDistanceToNowStrict(new Date(lead.created_at), { addSuffix: false }) + ' ago' } catch { return '' } })()}
+          </span>
+        )}
         {fields.local_time !== false && time && (
           <span className="text-[10px] font-mono ml-auto"
             style={{ color: offHours ? '#F59E0B' : '#3A4A5A' }}

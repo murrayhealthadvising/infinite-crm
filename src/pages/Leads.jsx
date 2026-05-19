@@ -1535,6 +1535,7 @@ export default function Leads() {
   const [showDeleteAll, setShowDeleteAll] = useState(false)
   const [deleteAllInput, setDeleteAllInput] = useState('')
   const [deletingAll, setDeletingAll] = useState(false)
+  const [filtersExpanded, setFiltersExpanded] = useState(false)
 
   const safeTags = Array.isArray(tags) ? tags : []
   const safeLeads = Array.isArray(leads) ? leads : []
@@ -1931,17 +1932,16 @@ export default function Leads() {
         </div>
       )}
 
-      {/* Filters */}
+      {/* Filters — compact top row + collapsible secondary filter strip */}
       <div className="flex-shrink-0 border-b border-[#1A2130]" style={{ background: '#080B0F' }}>
-        <div className="flex items-center gap-3 px-6 py-2">
-          <div className="relative flex-1 max-w-sm">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#5A6A7A]" />
+        <div className="flex items-center gap-2 px-6 py-2">
+          <div className="relative flex-1 max-w-xs">
+            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[#5A6A7A]" />
             <input value={search} onChange={e => setSearch(e.target.value)}
               placeholder="Search name, phone, email, zip…"
-              className="w-full bg-[#0E1318] border border-[#1A2130] rounded-lg pl-9 pr-4 py-2 text-sm text-white placeholder-[#3A4A5A] focus:outline-none focus:border-[#00E5C340]" />
-            {search && <button onClick={() => setSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-[#5A6A7A] hover:text-white"><X size={13} /></button>}
+              className="w-full bg-[#0E1318] border border-[#1A2130] rounded-lg pl-8 pr-7 py-1.5 text-xs text-white placeholder-[#3A4A5A] focus:outline-none focus:border-[#00E5C340]" />
+            {search && <button onClick={() => setSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-[#5A6A7A] hover:text-white"><X size={12} /></button>}
           </div>
-          <label className="text-[10px] font-mono uppercase tracking-wider text-[#5A6A7A]">Sort</label>
           <select value={sortBy} onChange={e => setSortBy(e.target.value)}
             className="bg-[#0E1318] border border-[#1A2130] rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-[#00E5C340]">
             <option value="created_desc">Newest first</option>
@@ -1952,11 +1952,33 @@ export default function Leads() {
             <option value="price_desc">Highest cost first</option>
             <option value="campaign_asc">Campaign A→Z</option>
           </select>
+          {(() => {
+            const activeCount = (stageFilter ? 1 : 0) + tagFilters.size + tzFilters.size + campaignFilters.size
+            return (
+              <button onClick={() => setFiltersExpanded(v => !v)}
+                className="px-2.5 py-1.5 rounded-lg text-xs border transition-colors"
+                style={activeCount > 0
+                  ? { background: '#A78BFA15', color: '#A78BFA', borderColor: '#A78BFA60' }
+                  : { color: '#8899AA', borderColor: '#1A2130' }}>
+                Filters{activeCount > 0 ? ` (${activeCount})` : ''} <ChevronDown size={11} className={clsx('inline ml-0.5 transition-transform', filtersExpanded && 'rotate-180')} />
+              </button>
+            )
+          })()}
+          {(stageFilter || tagFilters.size || tzFilters.size || campaignFilters.size) && (
+            <button onClick={() => { setStageFilter(''); setTagFilters(new Set()); setTzFilters(new Set()); setCampaignFilters(new Set()) }}
+              className="text-[10px] text-[#5A6A7A] hover:text-white">
+              clear
+            </button>
+          )}
         </div>
-        <DragScrollPills stageFilter={stageFilter} setStageFilter={setStageFilter} tags={safeTags} leads={safeLeads} />
-        <TagFilterPills tagFilters={tagFilters} setTagFilters={setTagFilters} leads={safeLeads} />
-        <CampaignFilterPills campaignFilters={campaignFilters} setCampaignFilters={setCampaignFilters} leads={safeLeads} />
-        <TzFilterPills tzFilters={tzFilters} setTzFilters={setTzFilters} leads={safeLeads} />
+        {filtersExpanded && (
+          <div className="border-t border-[#1A2130] py-1">
+            <DragScrollPills stageFilter={stageFilter} setStageFilter={setStageFilter} tags={safeTags} leads={safeLeads} />
+            <TagFilterPills tagFilters={tagFilters} setTagFilters={setTagFilters} leads={safeLeads} />
+            <CampaignFilterPills campaignFilters={campaignFilters} setCampaignFilters={setCampaignFilters} leads={safeLeads} />
+            <TzFilterPills tzFilters={tzFilters} setTzFilters={setTzFilters} leads={safeLeads} />
+          </div>
+        )}
       </div>
 
       {/* Content */}

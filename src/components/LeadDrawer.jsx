@@ -7,6 +7,7 @@ import { format, formatDistanceToNow } from 'date-fns'
 import clsx from 'clsx'
 import { displayPhone } from '../lib/phone'
 import { localTimeFor, localHourFor, tzLabelFor } from '../lib/timezone'
+import { googleCalendarUrl } from '../lib/gcal'
 
 // Slim notes editor — auto-grows to content within [6 lines, 15 lines], grows
 // upward only so manual resize sticks across re-renders.
@@ -59,12 +60,39 @@ function NotesField({ value, onSave, placeholder }) {
 }
 
 export default function LeadDrawer({ leadId, onClose, bucket = [], onNavigate }) {
-  const { leads, tags, updateLead, updateLeadStage, addActivity, addReminder, splitNotes, sideTagStyles } = useApp()
+  const { leads, tags, updateLead, updateLeadStage, addActivity, getLeadActivities, addReminder, splitNotes, sideTagStyles } = useApp()
   const navigate = useNavigate()
   const [stageOpen, setStageOpen] = useState(false)
   const [showEmpty, setShowEmpty] = useState(false)
   const [reminderOpen, setReminderOpen] = useState(false)
+  const [activities, setActivities] = useState([])
+  const [actionText, setActionText] = useState('')
+  const [actionKind, setActionKind] = useState('note')
   const lastCallRef = useRef(0)
+
+  // Reload the activity history whenever we hop to a different lead
+  useEffect(() => {
+    if (!leadId || typeof getLeadActivities !== 'function') return
+    let cancelled = false
+    try {
+      const result = getLeadActivities(leadId)
+      if (result && typeof result.then === 'function') {
+        result.then(acts => { if (!cancelled) setActivities(acts || []) }).catch(() => setActivities([]))
+      } else if (Array.isArray(result)) {
+        setActivities(result)
+      } else { setActivities([]) }
+    } catch { setActivities([]) }
+    return () => { cancelled = true }
+  }, [leadId, getLeadActivities])
+
+  const logAction = async (kind, text) => {
+    if (!text || !text.trim()) return
+    if (typeof addActivity !== 'function') return
+    try {
+      const entry = await addActivity(leadId, kind, text.trim())
+      if (entry) setActivities(prev => [entry, ...prev])
+    } catch {}
+  }
 
   // Bucket navigation — pipeline passes the current column's lead IDs in
   // order. Arrow Up/Down hops to prev/next without closing the drawer.
@@ -105,9 +133,11 @@ export default function LeadDrawer({ leadId, onClose, bucket = [], onNavigate })
     const now = Date.now()
     if (now - lastCallRef.current < 15 * 60 * 1000) return
     lastCallRef.current = now
-    if (typeof addActivity === 'function') {
-      try { await addActivity(leadId, 'call', `Called ${displayPhone(lead.phone) || lead.phone || ''}`.trim()) } catch {}
-    }
+    if (typeof addActivity !== 'function') return
+    try {
+      const entry = await addActivity(leadId, 'call', `Called ${displayPhone(lead.phone) || lead.phone || ''}`.trim())
+      if (entry) setActivities(prev => [entry, ...prev])
+    } catch {}
   }
 
   return (
@@ -208,6 +238,7 @@ export default function LeadDrawer({ leadId, onClose, bucket = [], onNavigate })
         {/* Inline reminder form (toggleable) */}
         {reminderOpen && (
           <ReminderInlineForm leadId={leadId}
+            lead={lead}
             onSubmit={async (data) => { await addReminder({ ...data, lead_id: leadId }); setReminderOpen(false) }}
             onClose={() => setReminderOpen(false)} />
         )}
@@ -247,12 +278,91 @@ export default function LeadDrawer({ leadId, onClose, bucket = [], onNavigate })
             styles={sideTagStyles}
             onChange={(next) => updateLead(leadId, { tags: next })} />
 
+          {/* Discreet action log — auto Call timestamps + add-your-own */}
+          <ActionLog activities={activities}
+            actionText={actionText} setActionText={setActionText}
+            actionKind={actionKind} setActionKind={setActionKind}
+            onLog={logAction} />
+
           {/* ALL info — every standard field + custom_fields, inline editable */}
           <AllInfoPanel lead={lead} leadId={leadId} updateLead={updateLead}
             showEmpty={showEmpty} setShowEmpty={setShowEmpty} />
         </div>
       </aside>
     </>
+  )
+}
+
+// Discreet action log — collapsed by default. Auto-records Call clicks +
+// stage changes via addActivity. Has a small "+ Add" input so the agent can
+// log things like "emailed today" or "left voicemail" inline.
+function ActionLog({ activities, actionText, setActionText, actionKind, setActionKind, onLog }) {
+  const [open, setOpen] = useState(false)
+  const list = Array.isArray(activities) ? activities : []
+  const recent = list.slice(0, 8)
+  const lastCall = list.find(a => a?.type === 'call')
+  const KINDS = [
+    ['call',  'Call',  '#10B981'],
+    ['text',  'Text',  '#3B82F6'],
+    ['email', 'Email', '#8B5CF6'],
+    ['note',  'Note',  '#F59E0B'],
+  ]
+  return (
+    <div className="rounded-xl border border-[#1A2130]" style={{ background: '#080B0F' }}>
+      <button onClick={() => setOpen(v => !v)}
+        className="w-full flex items-center justify-between gap-2 px-3 py-2 text-xs font-mono uppercase tracking-wider text-[#5A6A7A] hover:text-white">
+        <span>Action log {list.length > 0 && <span className="text-[#3A4A5A]">· {list.length}</span>}</span>
+        {lastCall && !open && (
+          <span className="text-[10px] font-mono normal-case tracking-normal text-[#10B981]">
+            last call {(() => { try { return formatDistanceToNow(new Date(lastCall.created_at), { addSuffix: true }) } catch { return '' } })()}
+          </span>
+        )}
+        <ChevronDown size={12} className={clsx('transition-transform flex-shrink-0', open && 'rotate-180')} />
+      </button>
+      {open && (
+        <div className="px-3 pb-3 space-y-2">
+          {/* Quick add */}
+          <div className="flex items-center gap-1.5">
+            <select value={actionKind} onChange={e => setActionKind(e.target.value)}
+              className="bg-[#0E1318] border border-[#1A2130] rounded px-1.5 py-1 text-[10px] text-white focus:outline-none focus:border-[#00E5C340]">
+              {KINDS.map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+            </select>
+            <input value={actionText} onChange={e => setActionText(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); onLog(actionKind, actionText); setActionText('') } }}
+              placeholder='e.g. "Emailed proposal", "Left voicemail"'
+              className="flex-1 bg-[#0E1318] border border-[#1A2130] rounded px-2 py-1 text-xs text-white placeholder-[#3A4A5A] focus:outline-none focus:border-[#00E5C340]" />
+            <button onClick={() => { onLog(actionKind, actionText); setActionText('') }}
+              disabled={!actionText.trim()}
+              className="px-2 py-1 rounded text-[10px] font-semibold text-black disabled:opacity-40"
+              style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
+              Add
+            </button>
+          </div>
+          {/* Recent entries */}
+          {recent.length === 0 ? (
+            <p className="text-[11px] text-[#5A6A7A]">No actions yet. Every Call click + stage change gets logged here automatically.</p>
+          ) : (
+            <div className="space-y-1">
+              {recent.map(a => {
+                const c = (KINDS.find(([k]) => k === a.type) || [])[2] || '#5A6A7A'
+                let when = ''
+                try { when = formatDistanceToNow(new Date(a.created_at), { addSuffix: true }) } catch {}
+                return (
+                  <div key={a.id} className="flex items-start gap-2 px-2 py-1 rounded hover:bg-[#0E1318]">
+                    <span className="text-[10px] font-mono uppercase mt-0.5 flex-shrink-0" style={{ color: c }}>{a.type}</span>
+                    <p className="text-[11px] text-[#C0D0E0] flex-1 leading-tight">{a.note}</p>
+                    <span className="text-[10px] text-[#3A4A5A] font-mono flex-shrink-0">{when}</span>
+                  </div>
+                )
+              })}
+              {list.length > recent.length && (
+                <p className="text-[10px] text-[#3A4A5A] text-center pt-1">… and {list.length - recent.length} older</p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -341,7 +451,7 @@ function SideTagsEditor({ tags, styles, onChange }) {
 }
 
 // Inline reminder form that drops below the drawer's action bar
-function ReminderInlineForm({ leadId, onSubmit, onClose }) {
+function ReminderInlineForm({ leadId, lead, onSubmit, onClose }) {
   const [kind, setKind] = useState('call')
   const [due, setDue] = useState(() => {
     const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(9, 0, 0, 0)
@@ -396,6 +506,24 @@ function ReminderInlineForm({ leadId, onSubmit, onClose }) {
           Cancel
         </button>
       </div>
+      {/* Google Calendar shortcut — opens a pre-filled event in a new tab */}
+      {due && (() => {
+        const leadName = lead ? ([lead.first_name, lead.last_name].filter(Boolean).join(' ') || lead.phone || 'Lead') : 'Lead'
+        const labels = { call: 'Call', appt: 'Appt with', task: 'Task —' }
+        const title = `${labels[kind] || ''} ${leadName}`.trim()
+        const url = googleCalendarUrl({
+          title,
+          startsAt: new Date(due).toISOString(),
+          durationMinutes: 15,
+          details: note || '',
+        })
+        return url ? (
+          <a href={url} target="_blank" rel="noopener"
+            className="block text-center py-1 rounded text-[10px] font-mono uppercase tracking-wider text-[#A78BFA] hover:text-white border border-[#1A2130] hover:border-[#A78BFA40]">
+            + add 15-min slot to Google Calendar ↗
+          </a>
+        ) : null
+      })()}
     </div>
   )
 }

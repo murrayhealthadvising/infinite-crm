@@ -162,6 +162,58 @@ function OnboardingChecklist() {
   )
 }
 
+// Computes conversion stats per source/campaign from the user's lead history.
+// Shows the top performers — sold count, total leads, conversion %.
+function SourceAnalytics({ leads }) {
+  const buckets = new Map()  // name → { total, sold, totalPrem }
+  for (const l of (leads || [])) {
+    const name = (l.campaign && String(l.campaign).trim()) || (l.source && String(l.source).trim()) || '(none)'
+    const b = buckets.get(name) || { name, total: 0, sold: 0, totalPrem: 0 }
+    b.total++
+    if (l.stage === 'sold') {
+      b.sold++
+      b.totalPrem += (Number(l.premium) || 0) * 12  // annualized
+    }
+    buckets.set(name, b)
+  }
+  // Only show buckets with at least one lead, sort by sold count then conversion %
+  const rows = Array.from(buckets.values())
+    .filter(b => b.total > 0)
+    .sort((a, b) => {
+      if (b.sold !== a.sold) return b.sold - a.sold
+      return (b.sold / b.total) - (a.sold / a.total)
+    })
+    .slice(0, 5)
+  const totalSold = rows.reduce((a, b) => a + b.sold, 0)
+  if (rows.length === 0) return null
+  return (
+    <div className="mx-4 mb-4 p-3 rounded-lg border border-[#00E5C320]" style={{ background: '#00E5C308' }}>
+      <div className="flex items-center gap-2 mb-2">
+        <Zap size={12} className="text-[#00E5C3]" />
+        <span className="text-xs font-mono text-[#00E5C3] uppercase tracking-wider">Top sources</span>
+      </div>
+      {totalSold === 0 ? (
+        <p className="text-xs text-[#8899AA]">Nothing sold yet. Once you close a deal, this panel ranks campaigns by conversion %.</p>
+      ) : (
+        <div className="space-y-1.5">
+          {rows.map(r => {
+            const pct = Math.round((r.sold / Math.max(1, r.total)) * 100)
+            return (
+              <div key={r.name} className="flex items-center justify-between gap-2 text-xs">
+                <span className="text-white truncate flex-1">{r.name}</span>
+                <span className="text-[#5A6A7A] font-mono">{r.sold}/{r.total}</span>
+                <span className="font-mono text-right w-12" style={{ color: pct >= 20 ? '#00E5C3' : pct >= 10 ? '#F59E0B' : '#5A6A7A' }}>
+                  {pct}%
+                </span>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 const StatCard = ({ label, value, sub, color, icon: Icon }) => (
   <div className="rounded-xl p-5 border border-[#1A2130] relative overflow-hidden group hover:border-[#2A3547] transition-colors" style={{ background: '#0E1318' }}>
     <div className="flex items-start justify-between">
@@ -278,16 +330,8 @@ export default function Dashboard() {
             {stageBreakdown.length === 0 && <p className="text-[#5A6A7A] text-sm">No leads yet</p>}
           </div>
 
-          {/* AI Insight */}
-          <div className="mx-4 mb-4 p-3 rounded-lg border border-[#00E5C320]" style={{ background: '#00E5C308' }}>
-            <div className="flex items-center gap-2 mb-2">
-              <Zap size={12} className="text-[#00E5C3]" />
-              <span className="text-xs font-mono text-[#00E5C3] uppercase tracking-wider">AI Insight</span>
-            </div>
-            <p className="text-xs text-[#8899AA] leading-relaxed">
-              {stats.ghosted > 0 ? `${stats.ghosted} ghosted leads could be re-engaged. Try a follow-up text sequence.` : `${stats.interested} leads in your pipeline need follow-up. Prioritize APT leads today.`}
-            </p>
-          </div>
+          {/* Source analytics — which campaigns convert best */}
+          <SourceAnalytics leads={safeLeads} />
         </div>
       </div>
     </div>

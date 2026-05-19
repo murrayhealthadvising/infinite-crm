@@ -36,6 +36,19 @@ const ZIP_RANGES = [
   ['995', '999', 'AK'],
 ]
 
+// Compute age from a DOB string (ISO 'YYYY-MM-DD' or anything Date can parse).
+// Returns an integer 0-129 or null if invalid.
+export function ageFromDob(dob) {
+  if (!dob) return null
+  const d = new Date(dob)
+  if (isNaN(d.getTime())) return null
+  const today = new Date()
+  let age = today.getFullYear() - d.getFullYear()
+  const m = today.getMonth() - d.getMonth()
+  if (m < 0 || (m === 0 && today.getDate() < d.getDate())) age--
+  return age >= 0 && age < 130 ? age : null
+}
+
 export function stateFromZip(zip) {
   if (!zip) return null
   const digits = String(zip).replace(/\D/g, '')
