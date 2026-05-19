@@ -138,6 +138,11 @@ export default function Pipeline() {
   const { leads, tags, updateLeadStage, updateTag, refreshLeads, user } = useApp()
   const navigate = useNavigate()
   const [drawerLeadId, setDrawerLeadId] = useState(null)
+  const [drawerBucket, setDrawerBucket] = useState([])  // ids of leads in the column the drawer was opened from
+  const openDrawer = (leadId, bucketIds) => {
+    setDrawerLeadId(leadId)
+    setDrawerBucket(Array.isArray(bucketIds) ? bucketIds : [])
+  }
   const [refreshing, setRefreshing] = useState(false)
   const doRefresh = async () => {
     if (refreshing) return
@@ -621,7 +626,7 @@ export default function Pipeline() {
                       <PipelineCard key={lead.id} lead={lead}
                         onDragStart={e => { e.dataTransfer.setData('leadId', lead.id); e.dataTransfer.effectAllowed = 'move'; setDragLeadId(lead.id) }}
                         onDragEnd={handleDragEnd}
-                        onClick={() => setDrawerLeadId(lead.id)} />
+                        onClick={() => openDrawer(lead.id, stageLeads.map(l => l.id))} />
                     ))}
                     {stageLeads.length === 0 && (
                       <div className={clsx('flex items-center justify-center h-16 border border-dashed rounded-lg transition-colors', isCardDragOver ? 'border-opacity-60' : 'border-[#1A2130]')}
@@ -663,7 +668,10 @@ export default function Pipeline() {
 
       {/* Right-side drawer for working a lead without leaving the pipeline */}
       {drawerLeadId && (
-        <LeadDrawer leadId={drawerLeadId} onClose={() => setDrawerLeadId(null)} />
+        <LeadDrawer leadId={drawerLeadId}
+          bucket={drawerBucket}
+          onNavigate={(id) => setDrawerLeadId(id)}
+          onClose={() => setDrawerLeadId(null)} />
       )}
     </div>
   )

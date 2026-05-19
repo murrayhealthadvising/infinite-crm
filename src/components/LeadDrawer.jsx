@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useApp } from '../context/AppContext'
 import StatusTag from './StatusTag'
-import { X, Phone, PhoneCall, ChevronDown, ChevronRight, ExternalLink, Check, Calendar, MapPin, Pencil } from 'lucide-react'
+import { X, Phone, PhoneCall, ChevronDown, ChevronRight, ChevronUp, Maximize2, Check, Calendar, MapPin, Pencil, Plus } from 'lucide-react'
 import { format, formatDistanceToNow } from 'date-fns'
 import clsx from 'clsx'
 import { displayPhone } from '../lib/phone'
@@ -57,18 +58,34 @@ function NotesField({ value, onSave, placeholder }) {
   )
 }
 
-export default function LeadDrawer({ leadId, onClose }) {
-  const { leads, tags, updateLead, updateLeadStage, addActivity, addReminder, splitNotes } = useApp()
+export default function LeadDrawer({ leadId, onClose, bucket = [], onNavigate }) {
+  const { leads, tags, updateLead, updateLeadStage, addActivity, addReminder, splitNotes, sideTagStyles } = useApp()
+  const navigate = useNavigate()
   const [stageOpen, setStageOpen] = useState(false)
   const [showEmpty, setShowEmpty] = useState(false)
+  const [reminderOpen, setReminderOpen] = useState(false)
   const lastCallRef = useRef(0)
 
-  // Esc closes
+  // Bucket navigation — pipeline passes the current column's lead IDs in
+  // order. Arrow Up/Down hops to prev/next without closing the drawer.
+  const bucketIdx = Array.isArray(bucket) ? bucket.indexOf(leadId) : -1
+  const goPrev = () => { if (bucketIdx > 0 && onNavigate) onNavigate(bucket[bucketIdx - 1]) }
+  const goNext = () => { if (bucketIdx >= 0 && bucketIdx < bucket.length - 1 && onNavigate) onNavigate(bucket[bucketIdx + 1]) }
+
   useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') onClose() }
+    const onKey = (e) => {
+      if (e.key === 'Escape') { onClose(); return }
+      // Don't hijack arrows while the user is typing in an input/textarea
+      const t = document.activeElement
+      const inField = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)
+      if (inField) return
+      if (e.key === 'ArrowDown') { e.preventDefault(); goNext() }
+      if (e.key === 'ArrowUp')   { e.preventDefault(); goPrev() }
+    }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leadId, bucket, onClose])
 
   const lead = (leads || []).find(l => l.id === leadId)
   if (!lead) return null
@@ -121,6 +138,30 @@ export default function LeadDrawer({ leadId, onClose }) {
             </div>
           </div>
           <div className="flex items-center gap-1 flex-shrink-0">
+            {/* Prev/Next within the bucket */}
+            {bucket.length > 1 && (
+              <>
+                <button onClick={goPrev} disabled={bucketIdx <= 0}
+                  className="p-1.5 rounded-lg text-[#5A6A7A] hover:text-white hover:bg-[#1A2130] disabled:opacity-30"
+                  title="Previous lead in bucket (↑)">
+                  <ChevronUp size={14} />
+                </button>
+                <span className="text-[10px] font-mono text-[#5A6A7A] select-none px-1" title="Position in this bucket">
+                  {bucketIdx + 1}/{bucket.length}
+                </span>
+                <button onClick={goNext} disabled={bucketIdx < 0 || bucketIdx >= bucket.length - 1}
+                  className="p-1.5 rounded-lg text-[#5A6A7A] hover:text-white hover:bg-[#1A2130] disabled:opacity-30"
+                  title="Next lead in bucket (↓)">
+                  <ChevronDown size={14} />
+                </button>
+              </>
+            )}
+            {/* Open full page (same tab) */}
+            <button onClick={() => { navigate(`/leads/${leadId}`); onClose() }}
+              className="p-2 rounded-lg text-[#5A6A7A] hover:text-white hover:bg-[#1A2130]"
+              title="Open the full lead page (same tab)">
+              <Maximize2 size={14} />
+            </button>
             <button onClick={onClose} className="p-2 rounded-lg text-[#5A6A7A] hover:text-white hover:bg-[#1A2130]" title="Close (esc)">
               <X size={16} />
             </button>
@@ -155,7 +196,19 @@ export default function LeadDrawer({ leadId, onClose }) {
               </div>
             )}
           </div>
+          <button onClick={() => setReminderOpen(v => !v)}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-[#1A2130] text-sm text-[#8899AA] hover:text-white hover:border-[#2A3547]"
+            title="Schedule a reminder">
+            <Calendar size={13} /> Remind
+          </button>
         </div>
+
+        {/* Inline reminder form (toggleable) */}
+        {reminderOpen && (
+          <ReminderInlineForm leadId={leadId}
+            onSubmit={async (data) => { await addReminder({ ...data, lead_id: leadId }); setReminderOpen(false) }}
+            onClose={() => setReminderOpen(false)} />
+        )}
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -186,12 +239,162 @@ export default function LeadDrawer({ leadId, onClose }) {
             </div>
           )}
 
+          {/* Side tags */}
+          <SideTagsEditor
+            tags={lead.tags}
+            styles={sideTagStyles}
+            onChange={(next) => updateLead(leadId, { tags: next })} />
+
           {/* ALL info — every standard field + custom_fields, inline editable */}
           <AllInfoPanel lead={lead} leadId={leadId} updateLead={updateLead}
             showEmpty={showEmpty} setShowEmpty={setShowEmpty} />
         </div>
       </aside>
     </>
+  )
+}
+
+// Side tags chip editor — same UX as the lead-card chips but inline in the
+// drawer. Pulls colors + order from the user's side_tag_styles library.
+function SideTagsEditor({ tags, styles, onChange }) {
+  const [adding, setAdding] = useState(false)
+  const [text, setText] = useState('')
+  const lib = styles || {}
+  const orderOf = (n) => (typeof lib[n]?.order === 'number' ? lib[n].order : 9999)
+  const visible = (Array.isArray(tags) ? tags : [])
+    .filter(t => t && t !== 'starred' && !lib[t]?.hidden)
+    .sort((a, b) => orderOf(a) - orderOf(b) || a.localeCompare(b))
+  const add = (raw) => {
+    const v = String(raw || '').trim().toLowerCase()
+    if (!v) return
+    const cur = Array.isArray(tags) ? [...tags] : []
+    if (!cur.includes(v)) onChange([...cur, v])
+    setText(''); setAdding(false)
+  }
+  const remove = (t) => onChange((Array.isArray(tags) ? tags : []).filter(x => x !== t))
+
+  const pool = Object.keys(lib)
+    .filter(k => !visible.includes(k) && !lib[k]?.hidden)
+    .filter(k => !text || k.toLowerCase().includes(text.toLowerCase()))
+    .sort((a, b) => orderOf(a) - orderOf(b) || a.localeCompare(b))
+  const trimmed = text.trim().toLowerCase()
+  const showCreate = trimmed && !pool.some(k => k.toLowerCase() === trimmed) && !visible.includes(trimmed)
+
+  return (
+    <div className="rounded-xl border border-[#1A2130] p-3" style={{ background: '#080B0F' }}>
+      <p className="text-[10px] font-mono uppercase tracking-wider text-[#5A6A7A] mb-2">Side tags</p>
+      <div className="flex flex-wrap items-center gap-1.5">
+        {visible.map(t => {
+          const c = lib[t]?.color
+          const chipStyle = c
+            ? { background: c + '15', color: c, border: `1px solid ${c}40` }
+            : { background: '#1A2130', color: '#8899AA', border: '1px solid #2A3547' }
+          return (
+            <span key={t} className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded font-mono"
+              style={chipStyle}>
+              #{t}
+              <button onClick={() => remove(t)} className="opacity-60 hover:opacity-100 leading-none"><X size={9} /></button>
+            </span>
+          )
+        })}
+        {adding ? (
+          <div className="relative">
+            <input autoFocus value={text}
+              onChange={e => setText(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') { e.preventDefault(); add(text) }
+                if (e.key === 'Escape') { setAdding(false); setText('') }
+              }}
+              onBlur={() => setTimeout(() => setAdding(false), 150)}
+              placeholder="search or create…"
+              className="text-[10px] px-1.5 py-0.5 rounded font-mono bg-[#0E1318] border border-[#2A3547] outline-none w-32 text-white" />
+            {(pool.length > 0 || showCreate) && (
+              <div className="absolute top-full left-0 mt-1 z-50 rounded-lg overflow-hidden border max-h-40 overflow-y-auto"
+                style={{ background: '#0A0E14', borderColor: '#1A2130', minWidth: 140, boxShadow: '0 8px 20px rgba(0,0,0,0.5)' }}>
+                {showCreate && (
+                  <button onMouseDown={e => { e.preventDefault(); add(trimmed) }}
+                    className="block w-full text-left px-2 py-1.5 text-[11px] font-mono text-[#00E5C3] hover:bg-[#1A2130] border-b border-[#1A2130]">
+                    + Create <strong>#{trimmed}</strong>
+                  </button>
+                )}
+                {pool.map(s => (
+                  <button key={s} onMouseDown={e => { e.preventDefault(); add(s) }}
+                    className="block w-full text-left px-2 py-1.5 text-[11px] font-mono hover:bg-[#1A2130]"
+                    style={{ color: lib[s]?.color || '#8899AA' }}>
+                    #{s}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : (
+          <button onClick={() => setAdding(true)}
+            className="text-[10px] px-1.5 py-0.5 rounded font-mono border border-dashed border-[#2A3547] text-[#5A6A7A] hover:text-white">
+            + tag
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// Inline reminder form that drops below the drawer's action bar
+function ReminderInlineForm({ leadId, onSubmit, onClose }) {
+  const [kind, setKind] = useState('call')
+  const [due, setDue] = useState(() => {
+    const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(9, 0, 0, 0)
+    const pad = n => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+  })
+  const [note, setNote] = useState('')
+  const [saving, setSaving] = useState(false)
+  const submit = async (e) => {
+    e?.preventDefault?.()
+    setSaving(true)
+    try { await onSubmit({ kind, due_at: due ? new Date(due).toISOString() : null, note: note.trim() || null }) }
+    finally { setSaving(false) }
+  }
+  const setBy = (fn) => {
+    const d = fn(new Date())
+    const pad = n => String(n).padStart(2, '0')
+    setDue(`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`)
+  }
+  return (
+    <div className="px-4 py-3 border-b border-[#1A2130] space-y-2"
+      style={{ background: '#A78BFA08' }}>
+      <div className="flex gap-1.5">
+        {[['call','Call','#10B981'],['appt','Appt','#3B82F6'],['task','Task','#F59E0B']].map(([k, label, color]) => (
+          <button type="button" key={k} onClick={() => setKind(k)}
+            className="flex-1 px-2 py-1 rounded text-[10px] font-mono uppercase tracking-wider border"
+            style={kind === k
+              ? { background: color + '15', color, borderColor: color + '60' }
+              : { color: '#5A6A7A', borderColor: '#1A2130' }}>
+            {label}
+          </button>
+        ))}
+      </div>
+      <input type="datetime-local" value={due} onChange={e => setDue(e.target.value)}
+        className="w-full bg-[#080B0F] border border-[#1A2130] rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-[#A78BFA40]" />
+      <div className="flex gap-1 flex-wrap">
+        <button type="button" onClick={() => setBy(d => { d.setHours(d.getHours()+1); return d })} className="text-[10px] px-1.5 py-0.5 rounded border border-[#1A2130] text-[#5A6A7A] hover:text-white">+1h</button>
+        <button type="button" onClick={() => setBy(d => { d.setHours(d.getHours()+3); return d })} className="text-[10px] px-1.5 py-0.5 rounded border border-[#1A2130] text-[#5A6A7A] hover:text-white">+3h</button>
+        <button type="button" onClick={() => setBy(d => { d.setDate(d.getDate()+1); d.setHours(9,0,0,0); return d })} className="text-[10px] px-1.5 py-0.5 rounded border border-[#1A2130] text-[#5A6A7A] hover:text-white">Tmrw 9am</button>
+        <button type="button" onClick={() => setBy(d => { d.setDate(d.getDate()+7); return d })} className="text-[10px] px-1.5 py-0.5 rounded border border-[#1A2130] text-[#5A6A7A] hover:text-white">+1 wk</button>
+      </div>
+      <input value={note} onChange={e => setNote(e.target.value)}
+        placeholder="Note (optional) — what do you need to do?"
+        className="w-full bg-[#080B0F] border border-[#1A2130] rounded-lg px-2 py-1.5 text-xs text-white placeholder-[#3A4A5A] focus:outline-none focus:border-[#A78BFA40]" />
+      <div className="flex gap-2">
+        <button onClick={submit} disabled={saving}
+          className="flex-1 py-1.5 rounded-lg text-xs font-semibold text-black disabled:opacity-50"
+          style={{ background: 'linear-gradient(135deg, #A78BFA, #3B82F6)' }}>
+          {saving ? 'Saving…' : 'Set reminder'}
+        </button>
+        <button onClick={onClose} className="px-3 py-1.5 rounded-lg text-xs text-[#5A6A7A] hover:text-white border border-[#1A2130]">
+          Cancel
+        </button>
+      </div>
+    </div>
   )
 }
 
