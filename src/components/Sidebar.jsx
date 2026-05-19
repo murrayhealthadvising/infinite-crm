@@ -73,11 +73,14 @@ export default function Sidebar() {
           )}
         </nav>
         {sidebarOpen ? (
-          <div className="border-t border-[#1A2130] p-3 flex items-center gap-2">
-            <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-black flex-shrink-0" style={{background:'linear-gradient(135deg,#00D4FF,#0099CC)'}}>{user?.email?.[0]?.toUpperCase() ?? 'U'}</div>
-            <div className="flex-1 min-w-0"><div className="text-xs text-white font-medium truncate">{user?.name || user?.email?.split('@')[0] || 'Agent'}</div><div className="text-[10px] text-[#8899AA] capitalize">{profile?.role ?? 'Agent'}</div></div>
-            <button onClick={() => typeof signOut === 'function' && signOut()} className="p-1.5 rounded text-[#8899AA] hover:text-white hover:bg-[#1A2130]" title="Sign out"><LogOut size={13} /></button>
-          </div>
+          <>
+            <div className="border-t border-[#1A2130] p-3 flex items-center gap-2">
+              <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-black flex-shrink-0" style={{background:'linear-gradient(135deg,#00D4FF,#0099CC)'}}>{user?.email?.[0]?.toUpperCase() ?? 'U'}</div>
+              <div className="flex-1 min-w-0"><div className="text-xs text-white font-medium truncate">{user?.name || user?.email?.split('@')[0] || 'Agent'}</div><div className="text-[10px] text-[#8899AA] capitalize">{profile?.role ?? 'Agent'}</div></div>
+              <button onClick={() => typeof signOut === 'function' && signOut()} className="p-1.5 rounded text-[#8899AA] hover:text-white hover:bg-[#1A2130]" title="Sign out"><LogOut size={13} /></button>
+            </div>
+            <div className="px-3 pb-2 text-[9px] text-[#445566] font-mono tracking-wider select-none">build 0518-v2 · cache-bust</div>
+          </>
         ) : (
           <div className="border-t border-[#1A2130] p-2 flex flex-col items-center gap-1">
             <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-black" style={{background:'linear-gradient(135deg,#00D4FF,#0099CC)'}}>{user?.email?.[0]?.toUpperCase() ?? 'U'}</div>
