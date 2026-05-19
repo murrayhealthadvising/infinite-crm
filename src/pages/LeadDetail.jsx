@@ -6,6 +6,7 @@ import { Phone, Mail, MapPin, Calendar, ArrowLeft, MessageSquare, PhoneCall, AtS
 import { normalizePhone, displayPhone } from '../lib/phone'
 import { localTimeFor, localHourFor } from '../lib/timezone'
 import { format, formatDistanceToNow, isToday, isYesterday } from 'date-fns'
+import { googleCalendarUrl, createCalendarEvent, isGcalConnected } from '../lib/gcal'
 import clsx from 'clsx'
 
 // Big notes panel — fixed resting height with internal scroll. User can drag
@@ -628,13 +629,38 @@ function RemindMeModal({ lead, onClose, onSubmit }) {
   })
   const [note, setNote] = useState('')
   const [saving, setSaving] = useState(false)
+  const [gcalStatus, setGcalStatus] = useState(null)
+  const connected = isGcalConnected()
+  const [pushToGcal, setPushToGcal] = useState(connected)
+
+  const buildEvent = () => {
+    if (!due) return null
+    const leadName = [lead?.first_name, lead?.last_name].filter(Boolean).join(' ') || lead?.phone || 'Lead'
+    const labels = { call: 'Call', appt: 'Appt with', task: 'Task —' }
+    return {
+      title: `${labels[kind] || ''} ${leadName}`.trim(),
+      startsAt: new Date(due).toISOString(),
+      durationMinutes: 15,
+      details: note || '',
+    }
+  }
 
   const submit = async (e) => {
     e.preventDefault()
     setSaving(true)
+    setGcalStatus(null)
     try {
       const due_at = due ? new Date(due).toISOString() : null
       await onSubmit({ kind, due_at, note: note.trim() || null })
+      if (pushToGcal && due) {
+        const ev = buildEvent()
+        if (ev) {
+          const result = await createCalendarEvent(ev)
+          setGcalStatus(result)
+          // Auto-close on success after a beat so they see the confirmation
+          if (result.ok) setTimeout(() => onClose(), 1200)
+        }
+      }
     } finally { setSaving(false) }
   }
 
@@ -685,6 +711,41 @@ function RemindMeModal({ lead, onClose, onSubmit }) {
               placeholder="What about this lead needs your attention?"
               className="w-full bg-[#080B0F] border border-[#1A2130] rounded-lg px-3 py-2 text-sm text-white placeholder-[#3A4A5A] focus:outline-none focus:border-[#00E5C340] resize-y" />
           </div>
+          {/* Google Calendar — direct or fallback URL */}
+          {due && (
+            <div className="rounded-lg border border-[#1A2130] p-3" style={{ background: '#080B0F' }}>
+              {connected ? (
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" checked={pushToGcal} onChange={e => setPushToGcal(e.target.checked)}
+                    className="accent-[#A78BFA]" />
+                  <span className="text-xs text-[#A78BFA]">
+                    {pushToGcal ? 'Will create 15-min event on Google Calendar' : 'Skip Google Calendar for this reminder'}
+                  </span>
+                </label>
+              ) : (
+                <a href={(() => { const ev = buildEvent(); return ev ? googleCalendarUrl(ev) : '#' })()}
+                  target="_blank" rel="noopener"
+                  className="block text-center py-1 text-xs text-[#A78BFA] hover:text-white">
+                  + open as new Google Calendar event ↗
+                  <span className="block text-[10px] text-[#3A4A5A] mt-0.5">
+                    Connect Google Calendar in Settings to skip this step.
+                  </span>
+                </a>
+              )}
+              {gcalStatus && (
+                <p className={`text-[11px] font-mono mt-2 ${gcalStatus.ok ? 'text-[#10B981]' : 'text-[#EF4444]'}`}>
+                  {gcalStatus.ok ? (
+                    <>✓ on calendar · <a href={gcalStatus.htmlLink} target="_blank" rel="noopener" className="underline">view ↗</a></>
+                  ) : (
+                    <>✗ {gcalStatus.error}{gcalStatus.fallbackUrl && (
+                      <> · <a href={gcalStatus.fallbackUrl} target="_blank" rel="noopener" className="underline">open fallback ↗</a></>
+                    )}</>
+                  )}
+                </p>
+              )}
+            </div>
+          )}
+
           <div className="flex gap-2">
             <button type="submit" disabled={saving}
               className="flex-1 py-2.5 rounded-lg text-sm font-semibold text-black disabled:opacity-50"

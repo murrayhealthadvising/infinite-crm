@@ -7,7 +7,7 @@ import { format, formatDistanceToNow } from 'date-fns'
 import clsx from 'clsx'
 import { displayPhone } from '../lib/phone'
 import { localTimeFor, localHourFor, tzLabelFor } from '../lib/timezone'
-import { googleCalendarUrl } from '../lib/gcal'
+import { googleCalendarUrl, createCalendarEvent, isGcalConnected } from '../lib/gcal'
 
 // Slim notes editor — auto-grows to content within [6 lines, 15 lines], grows
 // upward only so manual resize sticks across re-renders.
@@ -460,11 +460,39 @@ function ReminderInlineForm({ leadId, lead, onSubmit, onClose }) {
   })
   const [note, setNote] = useState('')
   const [saving, setSaving] = useState(false)
+  const [gcalStatus, setGcalStatus] = useState(null)  // {ok, link, error, fallbackUrl}
+  const connected = isGcalConnected()
+  const [pushToGcal, setPushToGcal] = useState(connected)  // user can opt out per reminder
+
+  // Build the calendar event payload from current form values
+  const buildEvent = () => {
+    if (!due) return null
+    const leadName = lead ? ([lead.first_name, lead.last_name].filter(Boolean).join(' ') || lead.phone || 'Lead') : 'Lead'
+    const labels = { call: 'Call', appt: 'Appt with', task: 'Task —' }
+    return {
+      title: `${labels[kind] || ''} ${leadName}`.trim(),
+      startsAt: new Date(due).toISOString(),
+      durationMinutes: 15,
+      details: note || '',
+    }
+  }
+
   const submit = async (e) => {
     e?.preventDefault?.()
     setSaving(true)
-    try { await onSubmit({ kind, due_at: due ? new Date(due).toISOString() : null, note: note.trim() || null }) }
-    finally { setSaving(false) }
+    setGcalStatus(null)
+    try {
+      // Always save the in-app reminder
+      await onSubmit({ kind, due_at: due ? new Date(due).toISOString() : null, note: note.trim() || null })
+      // If user has GCal connected + wants to push, create the event server-side
+      if (pushToGcal && due) {
+        const ev = buildEvent()
+        if (ev) {
+          const result = await createCalendarEvent(ev)
+          setGcalStatus(result)
+        }
+      }
+    } finally { setSaving(false) }
   }
   const setBy = (fn) => {
     const d = fn(new Date())
@@ -506,24 +534,40 @@ function ReminderInlineForm({ leadId, lead, onSubmit, onClose }) {
           Cancel
         </button>
       </div>
-      {/* Google Calendar shortcut — opens a pre-filled event in a new tab */}
-      {due && (() => {
-        const leadName = lead ? ([lead.first_name, lead.last_name].filter(Boolean).join(' ') || lead.phone || 'Lead') : 'Lead'
-        const labels = { call: 'Call', appt: 'Appt with', task: 'Task —' }
-        const title = `${labels[kind] || ''} ${leadName}`.trim()
-        const url = googleCalendarUrl({
-          title,
-          startsAt: new Date(due).toISOString(),
-          durationMinutes: 15,
-          details: note || '',
-        })
-        return url ? (
-          <a href={url} target="_blank" rel="noopener"
-            className="block text-center py-1 rounded text-[10px] font-mono uppercase tracking-wider text-[#A78BFA] hover:text-white border border-[#1A2130] hover:border-[#A78BFA40]">
-            + add 15-min slot to Google Calendar ↗
-          </a>
-        ) : null
-      })()}
+      {/* Google Calendar — direct create if connected, URL fallback if not */}
+      {due && (
+        <div className="rounded-lg border border-[#1A2130] p-2" style={{ background: '#080B0F' }}>
+          {connected ? (
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={pushToGcal} onChange={e => setPushToGcal(e.target.checked)}
+                className="accent-[#A78BFA]" />
+              <span className="text-[10px] font-mono uppercase tracking-wider text-[#A78BFA]">
+                {pushToGcal ? 'Will create 15-min event on Google Calendar' : 'Skip Google Calendar for this reminder'}
+              </span>
+            </label>
+          ) : (
+            <a href={(() => {
+              const ev = buildEvent()
+              return ev ? googleCalendarUrl(ev) : '#'
+            })()} target="_blank" rel="noopener"
+              className="block text-center py-1 rounded text-[10px] font-mono uppercase tracking-wider text-[#A78BFA] hover:text-white">
+              + open as new Google Calendar event ↗
+              <span className="block text-[9px] text-[#3A4A5A] normal-case mt-0.5">(connect calendar in Settings to skip this step)</span>
+            </a>
+          )}
+          {gcalStatus && (
+            <p className={`text-[10px] font-mono mt-1 ${gcalStatus.ok ? 'text-[#10B981]' : 'text-[#EF4444]'}`}>
+              {gcalStatus.ok ? (
+                <>✓ on calendar · <a href={gcalStatus.htmlLink} target="_blank" rel="noopener" className="underline">view ↗</a></>
+              ) : (
+                <>✗ {gcalStatus.error}{gcalStatus.fallbackUrl && (
+                  <> · <a href={gcalStatus.fallbackUrl} target="_blank" rel="noopener" className="underline">open fallback ↗</a></>
+                )}</>
+              )}
+            </p>
+          )}
+        </div>
+      )}
     </div>
   )
 }

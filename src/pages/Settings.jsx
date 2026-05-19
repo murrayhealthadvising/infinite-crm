@@ -6,8 +6,10 @@ import {
   Key, CheckCircle, XCircle, Eye, EyeOff, Copy,
   Plus, Trash2, Check, X, GripVertical, AlertTriangle, Tags as TagsIcon,
   UserPlus, Users as UsersIcon, RefreshCw, Calendar as CalendarIcon,
+  Link as LinkIcon, Unlink,
 } from 'lucide-react'
 import { format } from 'date-fns'
+import { connectGoogleCalendar, clearGcalToken, isGcalConnected, getGoogleClientId, createCalendarEvent } from '../lib/gcal'
 
 // Headless secondary Supabase client — used to create a runner account
 // WITHOUT logging the current agent out. persistSession=false so it leaves
@@ -841,41 +843,122 @@ function CampaignsPanel() {
 // ─────────────────────────────────────────────────────────────────────────────
 function CalendarPanel() {
   const { reminders } = useApp()
+  const [connected, setConnected] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState(null)
+  const clientId = getGoogleClientId()
+  const hasClientId = !!clientId
+
+  // Re-check connection on mount and after connect/disconnect actions
+  const refreshStatus = () => setConnected(isGcalConnected())
+  useEffect(() => { refreshStatus() }, [])
+
   const upcoming = (Array.isArray(reminders) ? reminders : [])
     .filter(r => !r.done_at && r.due_at)
     .sort((a, b) => new Date(a.due_at) - new Date(b.due_at))
     .slice(0, 3)
-  const openMyCalendar = () => {
-    try { window.open('https://calendar.google.com/calendar/u/0/r', '_blank', 'noopener') } catch {}
+
+  const handleConnect = async () => {
+    setBusy(true); setMsg(null)
+    try {
+      await connectGoogleCalendar()
+      refreshStatus()
+      setMsg({ type: 'success', text: 'Connected. Reminders will now create real calendar events.' })
+    } catch (e) {
+      setMsg({ type: 'error', text: e?.message || 'Connect failed' })
+    } finally { setBusy(false) }
   }
+
+  const handleDisconnect = () => {
+    if (!confirm('Disconnect Google Calendar? Future reminders will fall back to the popup link.')) return
+    clearGcalToken()
+    refreshStatus()
+    setMsg({ type: 'info', text: 'Disconnected. Reminders will use the URL fallback until you reconnect.' })
+  }
+
+  const handleTest = async () => {
+    setBusy(true); setMsg(null)
+    try {
+      const when = new Date(Date.now() + 5 * 60 * 1000)
+      const res = await createCalendarEvent({
+        title: 'Infinite CRM · test event',
+        startsAt: when.toISOString(),
+        durationMinutes: 15,
+        details: 'You can delete this — Infinite CRM is testing your calendar connection.',
+      })
+      if (res.ok) setMsg({ type: 'success', text: `Test event created on your calendar (5 min from now). View: ${res.htmlLink}` })
+      else setMsg({ type: 'error', text: `Test failed: ${res.error}` })
+    } catch (e) {
+      setMsg({ type: 'error', text: e?.message || 'Test failed' })
+    } finally { setBusy(false) }
+  }
+
   return (
     <div className="rounded-xl border border-[#1A2130] p-5" style={{ background: '#0D1117' }}>
       <div className="flex items-start justify-between mb-3 gap-3">
         <div>
           <h2 className="text-xs font-mono uppercase tracking-wider text-[#5A6A7A] flex items-center gap-2">
             <CalendarIcon size={12} /> Google Calendar
+            {connected && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded font-mono"
+                style={{ background: '#10B98115', color: '#10B981', border: '1px solid #10B98140' }}>
+                connected
+              </span>
+            )}
           </h2>
           <p className="text-xs text-[#3A4A5A] mt-1">
-            Every reminder you set on a lead has a <span className="text-[#00E5C3] font-mono">+ add 15-min slot</span> link that pre-fills a Google Calendar event. No OAuth needed — Google handles auth when you click. Use it to block out callbacks, follow-ups, and appointment confirmations.
+            When connected, reminders create real 15-min events on your primary Google Calendar — no popup, no clicking Save. The connection lives in your browser only (no token stored on a server), so you'll re-authorize about once an hour.
           </p>
         </div>
-        <button onClick={openMyCalendar}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-black flex-shrink-0"
-          style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
-          <CalendarIcon size={12} /> Open my calendar
-        </button>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {connected ? (
+            <>
+              <button onClick={handleTest} disabled={busy}
+                className="px-3 py-1.5 rounded-lg text-xs border border-[#1A2130] text-[#8899AA] hover:text-white hover:border-[#2A3547] disabled:opacity-40">
+                Send test event
+              </button>
+              <button onClick={handleDisconnect} disabled={busy}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border border-[#EF444440] text-[#EF4444] hover:bg-[#EF444415] disabled:opacity-40">
+                <Unlink size={11} /> Disconnect
+              </button>
+            </>
+          ) : (
+            <button onClick={handleConnect} disabled={busy || !hasClientId}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-black disabled:opacity-50"
+              style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
+              <LinkIcon size={11} /> {busy ? 'Connecting…' : 'Connect Google Calendar'}
+            </button>
+          )}
+        </div>
       </div>
+
+      {!hasClientId && (
+        <div className="mb-3 rounded-lg border border-[#F59E0B40] px-3 py-2 text-xs text-[#F59E0B]" style={{ background: '#F59E0B08' }}>
+          <strong>Setup required.</strong> Google OAuth client ID is missing. Admin: set <code className="px-1 py-0.5 bg-black/30 rounded text-[10px] font-mono">VITE_GOOGLE_CLIENT_ID</code> in Vercel env vars and redeploy. Until then, reminders use the popup link fallback.
+        </div>
+      )}
+
+      {msg && (
+        <div className={`mb-3 px-3 py-2 rounded-lg text-xs flex items-start gap-2 ${
+          msg.type === 'success' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+          : msg.type === 'error' ? 'bg-red-500/10 text-red-400 border border-red-500/20'
+          : 'bg-blue-500/10 text-blue-400 border border-blue-500/20'
+        }`}>
+          <span className="flex-1">{msg.text}</span>
+          <button onClick={() => setMsg(null)}><X size={12} /></button>
+        </div>
+      )}
+
       <div className="rounded-lg border border-[#1A2130] p-3" style={{ background: '#080B0F' }}>
-        <p className="text-[10px] font-mono uppercase tracking-wider text-[#5A6A7A] mb-2">
-          How it works
-        </p>
+        <p className="text-[10px] font-mono uppercase tracking-wider text-[#5A6A7A] mb-2">How it works</p>
         <ol className="text-xs text-[#8899AA] space-y-1 list-decimal ml-4">
-          <li>Open any lead → click <span className="text-white font-mono">Remind</span>.</li>
-          <li>Pick a date + time (use the +1h / Tmrw 9am shortcuts).</li>
-          <li>Click <span className="text-[#00E5C3] font-mono">+ add 15-min slot to Google Calendar ↗</span>.</li>
-          <li>Google opens with everything pre-filled. Hit Save — it's on your calendar.</li>
+          <li>Click <span className="text-white font-mono">Connect Google Calendar</span> above — Google asks you to authorize.</li>
+          <li>Open any lead → <span className="text-white font-mono">Remind</span> → pick date/time → <span className="text-white font-mono">Set reminder</span>.</li>
+          <li>15-min event appears on your calendar instantly. You'll see a green checkmark + a "view ↗" link.</li>
+          <li>If the connection expires, the next reminder triggers a silent re-auth (or shows a popup fallback).</li>
         </ol>
       </div>
+
       {upcoming.length > 0 && (
         <div className="mt-3 rounded-lg border border-[#1A2130] p-3" style={{ background: '#080B0F' }}>
           <p className="text-[10px] font-mono uppercase tracking-wider text-[#5A6A7A] mb-2">
