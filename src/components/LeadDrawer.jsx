@@ -6,7 +6,7 @@ import { X, Phone, PhoneCall, ChevronDown, ChevronRight, ChevronUp, Maximize2, C
 import { format, formatDistanceToNow } from 'date-fns'
 import clsx from 'clsx'
 import { displayPhone } from '../lib/phone'
-import { localTimeFor, localHourFor } from '../lib/timezone'
+import { localTimeFor, localHourFor, tzLabelFor } from '../lib/timezone'
 
 // Slim notes editor — auto-grows to content within [6 lines, 15 lines], grows
 // upward only so manual resize sticks across re-renders.
@@ -98,6 +98,7 @@ export default function LeadDrawer({ leadId, onClose, bucket = [], onNavigate })
   const fullName = [fName, lName].filter(Boolean).join(' ').trim() || lead.phone || 'Lead'
   const tzTime = localTimeFor(lead)
   const tzHour = localHourFor(lead)
+  const tzLabel = tzLabelFor(lead)
   const tzOff = tzHour != null && (tzHour < 8 || tzHour >= 21)
 
   const logCall = async () => {
@@ -130,8 +131,9 @@ export default function LeadDrawer({ leadId, onClose, bucket = [], onNavigate })
               <div className="flex items-center gap-2 flex-wrap">
                 <StatusTag stage={lead.stage} status={lead.status} size="sm" />
                 {tzTime && (
-                  <span className="text-xs font-mono" style={{ color: tzOff ? '#F59E0B' : '#5A6A7A' }}>
-                    · {tzTime}
+                  <span className="text-xs font-mono" style={{ color: tzOff ? '#F59E0B' : '#5A6A7A' }}
+                    title={tzOff ? 'Outside 8a–9p local' : 'Local time'}>
+                    · {tzTime}{tzLabel ? ` ${tzLabel}` : ''}
                   </span>
                 )}
               </div>

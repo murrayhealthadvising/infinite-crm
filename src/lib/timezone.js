@@ -100,3 +100,19 @@ export function localHourFor(lead, now = new Date()) {
     return parseInt(h, 10)
   } catch { return null }
 }
+
+// Short, human label for the lead's time zone. e.g. 'EST', 'CST', 'PST', 'AZ'.
+// Returns null when the zone isn't recognized as a US zone.
+const TZ_SHORT = {
+  'America/New_York': 'EST', 'America/Detroit': 'EST', 'America/Indiana/Indianapolis': 'EST',
+  'America/Chicago': 'CST',
+  'America/Denver': 'MST', 'America/Boise': 'MST',
+  'America/Phoenix': 'AZ',
+  'America/Los_Angeles': 'PST',
+  'America/Anchorage': 'AK',
+  'Pacific/Honolulu': 'HI',
+}
+export function tzLabelFor(lead) {
+  const tz = timezoneFor(lead)
+  return tz ? (TZ_SHORT[tz] || null) : null
+}
