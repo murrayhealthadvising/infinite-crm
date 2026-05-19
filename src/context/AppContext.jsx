@@ -428,8 +428,8 @@ export function AppProvider({ children }) {
   // null/missing = use defaults.
   const PIPELINE_CARD_DEFAULTS = {
     call: true, phone: true, time_in_stage: true, local_time: true,
-    zip: true, comments: true, runner: true,
-    notes_preview: false, source: false, email: false, received_date: false,
+    state: true, zip: true, comments: true, runner: true,
+    notes_preview: false, campaign: false, email: false, received_date: false,
   }
   const pipelineCardFields = { ...PIPELINE_CARD_DEFAULTS, ...(profile?.pipeline_card_fields || {}) }
   const setPipelineCardFields = async (next) => {
@@ -452,14 +452,36 @@ export function AppProvider({ children }) {
   // Commission structure — per-agent JSONB on profiles. Stored shape:
   //   { default_advance, products: [{ key, name, comm_pct, advance_months, half, association }] }
   // For backwards compatibility, also accepts a legacy array of products.
-  const commissionPresets = profile?.commission_presets ?? null
+  //
+  // localStorage mirror: the `commission_presets` column may not exist yet on
+  // every Supabase deployment. If the server update fails (404/no column/RLS),
+  // we fall back to localStorage so the agent's structure still persists across
+  // reloads on the same device — better than silently reverting to defaults.
+  const COMM_LS_KEY = (uid) => `infinite_crm_commission_${uid}`
+  const readLocalCommission = (uid) => {
+    if (!uid) return null
+    try { const v = localStorage.getItem(COMM_LS_KEY(uid)); return v ? JSON.parse(v) : null } catch { return null }
+  }
+  const writeLocalCommission = (uid, val) => {
+    if (!uid) return
+    try { localStorage.setItem(COMM_LS_KEY(uid), JSON.stringify(val)) } catch {}
+  }
+  const commissionPresets = profile?.commission_presets ?? readLocalCommission(session?.user?.id) ?? null
   const saveCommissionPresets = async (next) => {
     const uid = session?.user?.id
-    if (!uid) return
-    // Accept either the structured object OR a legacy array — Supabase JSONB
-    // happily stores either; the Calculator handles both shapes on read.
+    if (!uid) return { ok: false, error: 'Not signed in' }
+    // 1) Mirror locally first so even a server failure doesn't lose the user's work
+    writeLocalCommission(uid, next)
     setProfile(p => p ? { ...p, commission_presets: next } : p)
-    try { await supabase.from('profiles').update({ commission_presets: next }).eq('user_id', uid) } catch (e) { console.error('saveCommissionPresets failed:', e) }
+    // 2) Try to persist to Supabase
+    try {
+      const { error } = await supabase.from('profiles').update({ commission_presets: next }).eq('user_id', uid)
+      if (error) { console.error('saveCommissionPresets failed:', error); return { ok: false, error: error.message } }
+      return { ok: true }
+    } catch (e) {
+      console.error('saveCommissionPresets exception:', e)
+      return { ok: false, error: e?.message || String(e) }
+    }
   }
 
   // Commission entries — each saved deal. { id, user_id, customer_name, sold_at, items, totals }

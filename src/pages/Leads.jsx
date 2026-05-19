@@ -1233,7 +1233,7 @@ function KanbanCol({ tag, leads, onLeadClick, onDrop }) {
             style={{ background: tag.bg, borderColor: tag.color + '30' }}>
             <button className="text-sm font-medium text-white group-hover:underline text-left block truncate w-full">{leadName(lead) || '—'}</button>
             <p className="text-xs font-mono mt-1" style={{ color: tag.color }}>{displayPhone(lead.phone) || ''}</p>
-            <p className="text-xs text-[#3A4A5A] mt-1">{[lead.state, lead.zip].filter(Boolean).join(' · ')}{lead.source ? ` · ${lead.source}` : ''}</p>
+            <p className="text-xs text-[#3A4A5A] mt-1">{[lead.state, lead.zip].filter(Boolean).join(' · ')}{lead.campaign ? ` · ${lead.campaign}` : ''}</p>
           </div>
         ))}
         {leads.length === 0 && (

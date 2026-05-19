@@ -558,9 +558,7 @@ function AllInfoPanel({ lead, leadId, updateLead, showEmpty, setShowEmpty }) {
     ['gender', 'Gender'],
     ['income', 'Income'],
     ['household', 'Household', { type: 'number' }],
-    ['source', 'Source'],
     ['campaign', 'Campaign'],
-    ['current_carrier', 'Current carrier'],
     ['carrier', 'Carrier (sold)'],
     ['premium', 'Premium', { type: 'number' }],
     ['effective_date', 'Effective date', { type: 'date' }],
@@ -568,7 +566,6 @@ function AllInfoPanel({ lead, leadId, updateLead, showEmpty, setShowEmpty }) {
     ['agent', 'Agent'],
     ['runner', 'Runner'],
     ['price', 'Lead cost', { type: 'number' }],
-    ['external_id', 'Vendor ID'],
   ]
 
   const filled = FIELDS.filter(([k]) => {

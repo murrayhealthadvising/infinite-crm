@@ -5,8 +5,9 @@ import { createClient } from '@supabase/supabase-js'
 import {
   Key, CheckCircle, XCircle, Eye, EyeOff, Copy,
   Plus, Trash2, Check, X, GripVertical, AlertTriangle, Tags as TagsIcon,
-  UserPlus, Users as UsersIcon, RefreshCw,
+  UserPlus, Users as UsersIcon, RefreshCw, Calendar as CalendarIcon,
 } from 'lucide-react'
+import { format } from 'date-fns'
 
 // Headless secondary Supabase client — used to create a runner account
 // WITHOUT logging the current agent out. persistSession=false so it leaves
@@ -164,8 +165,35 @@ function RunnerAccessPanel() {
 
   const refresh = async () => {
     setLoading(true)
-    const { data, error } = await supabase.rpc('list_my_runners')
-    if (!error) setRunners(Array.isArray(data) ? data : [])
+    // 1) Primary: the SECURITY DEFINER RPC (only returns confirmed runners)
+    let combined = []
+    try {
+      const { data } = await supabase.rpc('list_my_runners')
+      if (Array.isArray(data)) combined = data
+    } catch {}
+    // 2) Fallback: direct profiles query — catches runners who signed up but
+    //    haven't confirmed email yet, or runners promoted manually in Admin.
+    //    This way an agent can ALWAYS see + delete people attached to them.
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (user?.id) {
+        const { data: extra } = await supabase
+          .from('profiles')
+          .select('id:user_id, user_id, email, full_name, role, lead_agent_id, created_at')
+          .eq('lead_agent_id', user.id)
+        if (Array.isArray(extra)) {
+          const seen = new Set(combined.map(r => r.id || r.user_id))
+          for (const p of extra) {
+            const pid = p.id || p.user_id
+            if (!seen.has(pid)) {
+              combined.push({ ...p, id: pid, _pending: p.role !== 'runner' })
+              seen.add(pid)
+            }
+          }
+        }
+      }
+    } catch {}
+    setRunners(combined)
     setLoading(false)
   }
   useEffect(() => { refresh() }, [])
@@ -220,8 +248,30 @@ function RunnerAccessPanel() {
     if (!confirm(`Really delete? Type their email in the next prompt if you're sure.`)) return
     const conf = window.prompt(`Type "${r.email}" to confirm full deletion:`)
     if (conf !== r.email) { setMsg({ type: 'error', text: 'Email did not match — cancelled.' }); return }
-    const { error } = await supabase.rpc('delete_runner', { rid: r.id })
-    if (error) { setMsg({ type: 'error', text: error.message }); return }
+    // Try the SECURITY DEFINER RPC first — it cleans up auth.users + profiles atomically
+    let rpcErr = null
+    try {
+      const { error } = await supabase.rpc('delete_runner', { rid: r.id })
+      if (error) rpcErr = error
+    } catch (e) { rpcErr = e }
+    if (rpcErr) {
+      // Fallback: profile-only delete via RLS (works for pre-signup runners
+      // whose auth.users entry doesn't exist OR whose RPC isn't installed yet)
+      try {
+        const { error: pErr } = await supabase.from('profiles').delete().eq('user_id', r.id)
+        if (pErr) {
+          setMsg({ type: 'error', text: `Delete failed: ${rpcErr.message || rpcErr}. (Fallback also failed: ${pErr.message}.) Run the delete_runner SQL in Supabase, then retry.` })
+          return
+        }
+        setMsg({ type: 'success', text: `${r.email} profile removed (auth account may still exist — full delete needs the SQL function).` })
+        refresh()
+        setTimeout(() => setMsg(null), 5000)
+        return
+      } catch (e2) {
+        setMsg({ type: 'error', text: `Delete failed: ${rpcErr.message || rpcErr}` })
+        return
+      }
+    }
     setMsg({ type: 'success', text: `${r.email} permanently deleted.` })
     refresh()
     setTimeout(() => setMsg(null), 4000)
@@ -284,10 +334,18 @@ function RunnerAccessPanel() {
                 <p className="text-sm text-white truncate">{r.full_name || r.email.split('@')[0]}</p>
                 <p className="text-xs text-[#5A6A7A] truncate">{r.email}</p>
               </div>
-              <span className="text-[10px] px-1.5 py-0.5 rounded font-mono"
-                style={{ background: '#A78BFA15', color: '#A78BFA', border: '1px solid #A78BFA40' }}>
-                runner
-              </span>
+              {r._pending ? (
+                <span className="text-[10px] px-1.5 py-0.5 rounded font-mono"
+                  style={{ background: '#F59E0B15', color: '#F59E0B', border: '1px solid #F59E0B40' }}
+                  title="Signed up but not yet activated as your runner — confirm email or click Deactivate to reset.">
+                  pending
+                </span>
+              ) : (
+                <span className="text-[10px] px-1.5 py-0.5 rounded font-mono"
+                  style={{ background: '#A78BFA15', color: '#A78BFA', border: '1px solid #A78BFA40' }}>
+                  runner
+                </span>
+              )}
               <button onClick={() => handleDeactivate(r)}
                 className="text-xs px-2 py-1 rounded border border-[#1A2130] text-[#5A6A7A] hover:text-white hover:border-[#2A3547]"
                 title="Revoke runner access (keeps account)">
@@ -775,6 +833,72 @@ function CampaignsPanel() {
   )
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Calendar panel — explains how the Google Calendar integration works (no
+// OAuth required) + gives the agent a quick link to their primary calendar.
+// Every reminder you set in a lead drawer / detail page has a "+ add 15-min
+// slot to Google Calendar" link that opens a pre-filled event in a new tab.
+// ─────────────────────────────────────────────────────────────────────────────
+function CalendarPanel() {
+  const { reminders } = useApp()
+  const upcoming = (Array.isArray(reminders) ? reminders : [])
+    .filter(r => !r.done_at && r.due_at)
+    .sort((a, b) => new Date(a.due_at) - new Date(b.due_at))
+    .slice(0, 3)
+  const openMyCalendar = () => {
+    try { window.open('https://calendar.google.com/calendar/u/0/r', '_blank', 'noopener') } catch {}
+  }
+  return (
+    <div className="rounded-xl border border-[#1A2130] p-5" style={{ background: '#0D1117' }}>
+      <div className="flex items-start justify-between mb-3 gap-3">
+        <div>
+          <h2 className="text-xs font-mono uppercase tracking-wider text-[#5A6A7A] flex items-center gap-2">
+            <CalendarIcon size={12} /> Google Calendar
+          </h2>
+          <p className="text-xs text-[#3A4A5A] mt-1">
+            Every reminder you set on a lead has a <span className="text-[#00E5C3] font-mono">+ add 15-min slot</span> link that pre-fills a Google Calendar event. No OAuth needed — Google handles auth when you click. Use it to block out callbacks, follow-ups, and appointment confirmations.
+          </p>
+        </div>
+        <button onClick={openMyCalendar}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-black flex-shrink-0"
+          style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
+          <CalendarIcon size={12} /> Open my calendar
+        </button>
+      </div>
+      <div className="rounded-lg border border-[#1A2130] p-3" style={{ background: '#080B0F' }}>
+        <p className="text-[10px] font-mono uppercase tracking-wider text-[#5A6A7A] mb-2">
+          How it works
+        </p>
+        <ol className="text-xs text-[#8899AA] space-y-1 list-decimal ml-4">
+          <li>Open any lead → click <span className="text-white font-mono">Remind</span>.</li>
+          <li>Pick a date + time (use the +1h / Tmrw 9am shortcuts).</li>
+          <li>Click <span className="text-[#00E5C3] font-mono">+ add 15-min slot to Google Calendar ↗</span>.</li>
+          <li>Google opens with everything pre-filled. Hit Save — it's on your calendar.</li>
+        </ol>
+      </div>
+      {upcoming.length > 0 && (
+        <div className="mt-3 rounded-lg border border-[#1A2130] p-3" style={{ background: '#080B0F' }}>
+          <p className="text-[10px] font-mono uppercase tracking-wider text-[#5A6A7A] mb-2">
+            Next 3 reminders
+          </p>
+          <div className="space-y-1.5">
+            {upcoming.map(r => {
+              let when = ''
+              try { when = format(new Date(r.due_at), 'EEE MMM d · h:mm a') } catch {}
+              return (
+                <div key={r.id} className="flex items-center gap-2 text-xs">
+                  <span className="text-[#00E5C3] font-mono w-32 truncate">{when}</span>
+                  <span className="text-[#C0D0E0] truncate">{r.note || `(${r.kind || 'reminder'})`}</span>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function IntegrationsPanel() {
   const { user, leadEmail } = useApp()
   const [showInstructions, setShowInstructions] = useState(false)
@@ -1015,6 +1139,9 @@ export default function Settings() {
       {/* Integrations — bookmarklets / webhooks for external tools */}
       {!isRunner && <IntegrationsPanel />}
 
+      {/* Calendar — Google Calendar shortcuts for reminders */}
+      <CalendarPanel />
+
       {/* Preferences — per-user UI toggles */}
       <div className="rounded-xl border border-[#1A2130] p-5" style={{ background: '#0D1117' }}>
         <h2 className="text-xs font-mono uppercase tracking-wider text-[#5A6A7A] mb-4">Preferences</h2>
@@ -1051,11 +1178,12 @@ export default function Settings() {
             ['phone', 'Phone number'],
             ['time_in_stage', 'Time-in-stage badge'],
             ['local_time', 'Local time (lead\'s timezone)'],
+            ['state', 'State'],
             ['zip', 'ZIP code'],
             ['comments', 'Marketplace comments chip'],
             ['runner', 'Runner pill (who worked the lead)'],
             ['notes_preview', 'Notes preview (2 lines)'],
-            ['source', 'Source / campaign chip'],
+            ['campaign', 'Campaign chip'],
             ['email', 'Email address'],
             ['received_date', 'Received date'],
           ].map(([key, label]) => {

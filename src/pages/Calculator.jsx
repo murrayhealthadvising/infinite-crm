@@ -439,8 +439,19 @@ function StructureModal({ config, onClose, onSave }) {
         half: !!p.half,
         association_tier: TIER_KEYS.includes(p.association_tier) ? p.association_tier : 'none',
       }))
-    try { await onSave({ default_advance: Number(defaultAdvance) || 0, products: cleaned }) }
-    catch (e) { setSaveMsg('Save failed: ' + (e.message || e)); setSaving(false) }
+    try {
+      const res = await onSave({ default_advance: Number(defaultAdvance) || 0, products: cleaned })
+      // saveCommissionPresets returns { ok, error } — only show success if it stuck server-side
+      if (res && res.ok === false) {
+        setSaveMsg(`Server save failed (${res.error || 'unknown'}). Saved locally on this device.`)
+        setSaving(false)
+      } else {
+        setSaveMsg('Saved.')
+        setTimeout(() => { setSaving(false); onClose() }, 600)
+      }
+    } catch (e) {
+      setSaveMsg('Save failed: ' + (e.message || e)); setSaving(false)
+    }
   }
 
   return (

@@ -114,14 +114,14 @@ function PipelineCard({ lead, onDragStart, onDragEnd, onClick }) {
             {lead.comments}
           </span>
         )}
-        {fields.source && (lead.campaign || lead.source) && (
+        {fields.campaign && lead.campaign && (
           <span className="text-[10px] px-1.5 py-0.5 rounded font-mono max-w-[140px] truncate"
             style={{ background: sColor + '15', color: sColor }}>
-            {lead.campaign || lead.source}
+            {lead.campaign}
           </span>
         )}
+        {fields.state !== false && lead.state && <span className="text-[10px] text-[#5A6A7A] font-mono">{lead.state}</span>}
         {fields.zip !== false && lead.zip && <span className="text-[10px] text-[#5A6A7A] font-mono">{lead.zip}</span>}
-        {fields.zip !== false && !lead.zip && lead.state && <span className="text-[10px] text-[#5A6A7A] font-mono">{lead.state}</span>}
         {fields.received_date && lead.created_at && (
           <span className="text-[10px] text-[#5A6A7A] font-mono" title="Received date">
             {(() => { try { return formatDistanceToNowStrict(new Date(lead.created_at), { addSuffix: false }) + ' ago' } catch { return '' } })()}

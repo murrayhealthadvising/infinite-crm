@@ -5,7 +5,7 @@ import StatusTag from '../components/StatusTag'
 import { Phone, Mail, MapPin, Calendar, ArrowLeft, MessageSquare, PhoneCall, AtSign, StickyNote, ChevronDown, Zap, Send, User, Users, Home, DollarSign, Heart, Pencil, Check, X, Clock } from 'lucide-react'
 import { normalizePhone, displayPhone } from '../lib/phone'
 import { localTimeFor, localHourFor } from '../lib/timezone'
-import { format, formatDistanceToNow } from 'date-fns'
+import { format, formatDistanceToNow, isToday, isYesterday } from 'date-fns'
 import clsx from 'clsx'
 
 // Big notes panel — fixed resting height with internal scroll. User can drag
@@ -233,6 +233,99 @@ function AIAssistant({ lead }) {
   )
 }
 
+// Big action log panel — auto-logs every Call click with the exact time of day
+// so you can see "called at 2:14 PM Wed, no answer" at a glance. Manual entries
+// (text, email, note) get the same treatment. Kept sticky on the right column
+// so it's visible while you're pitching.
+function ActionLogPanel({ activities, leadId, addActivity, setLeadActivities }) {
+  const [text, setText] = useState('')
+  const [kind, setKind] = useState('note')
+  const list = (activities || []).slice(0, 40)
+
+  const add = async () => {
+    if (!text.trim()) return
+    const entry = await addActivity(leadId, kind, text.trim())
+    if (entry) setLeadActivities(prev => [entry, ...prev])
+    setText('')
+  }
+
+  return (
+    <div className="rounded-xl border border-[#1A2130] overflow-hidden flex flex-col" style={{ background: '#0E1318' }}>
+      <div className="flex items-center justify-between px-4 py-3 border-b border-[#1A2130]">
+        <div className="flex items-center gap-2">
+          <PhoneCall size={13} className="text-[#10B981]" />
+          <span className="text-xs font-mono uppercase tracking-wider text-[#8899AA]">Action log</span>
+          <span className="text-[10px] text-[#3A4A5A] font-mono">· {list.length}</span>
+        </div>
+      </div>
+      <div className="px-4 py-3 border-b border-[#1A2130]">
+        <div className="flex items-center gap-1.5 mb-2 flex-wrap">
+          {[['call','Called','#10B981'],['text','Texted','#3B82F6'],['email','Emailed','#8B5CF6'],['note','Note','#F59E0B']].map(([k, l, c]) => (
+            <button key={k} type="button" onClick={() => setKind(k)}
+              className="text-[10px] px-2 py-0.5 rounded border transition-colors"
+              style={kind === k ? { background: c + '15', color: c, borderColor: c + '60' } : { color: '#5A6A7A', borderColor: '#1A2130' }}>
+              {l}
+            </button>
+          ))}
+        </div>
+        <div className="flex gap-2">
+          <input value={text} onChange={e => setText(e.target.value)} onKeyDown={e => e.key === 'Enter' && add()}
+            placeholder="What happened? (e.g., didn't answer, left vm)"
+            className="flex-1 bg-[#080B0F] border border-[#1A2130] rounded-lg px-3 py-1.5 text-xs text-white placeholder-[#3A4A5A] focus:outline-none focus:border-[#00E5C340]" />
+          <button onClick={add} className="px-3 py-1.5 rounded-lg text-[11px] font-medium text-black"
+            style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
+            Add
+          </button>
+        </div>
+      </div>
+      <div className="flex-1 overflow-y-auto p-4 space-y-2.5" style={{ maxHeight: '380px', minHeight: '220px' }}>
+        {list.length === 0 ? (
+          <p className="text-xs text-[#3A4A5A] text-center py-8 px-4">
+            Every call you make is auto-logged here with the exact time of day, so you can see when they don't pick up.
+          </p>
+        ) : list.map((a, i) => {
+          const Icon = ACTIVITY_ICONS[a.type] || StickyNote
+          const color = ACTIVITY_COLORS[a.type] || '#5A6A7A'
+          const when = (() => { try { return new Date(a.created_at) } catch { return new Date() } })()
+          const valid = isFinite(when.getTime())
+          const dayLabel = !valid ? '' : isToday(when) ? 'Today' : isYesterday(when) ? 'Yesterday' : format(when, 'EEE MMM d')
+          const timeLabel = !valid ? '' : format(when, 'h:mm a')
+          return (
+            <div key={a.id || i} className="flex items-start gap-2.5">
+              <div className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5"
+                style={{ background: color + '20' }}>
+                <Icon size={11} style={{ color }} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs text-[#C0D0E0] leading-snug">{a.note}</p>
+                <p className="text-[10px] text-[#3A4A5A] font-mono mt-0.5">
+                  {dayLabel}{dayLabel && timeLabel ? ' · ' : ''}{timeLabel}
+                </p>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// Read-mode info card for the pitch view. Hover → pencil. Click pencil → edit.
+// All fields are visible by default (no hidden accordion). The "Edit all" toggle
+// in the header flips every card into edit mode at once for bulk editing.
+function InfoSection({ title, color, children }) {
+  return (
+    <div className="rounded-xl border border-[#1A2130] overflow-hidden" style={{ background: '#0E1318' }}>
+      <div className="px-4 py-2.5 border-b border-[#1A2130]">
+        <span className="text-[10px] font-mono uppercase tracking-wider" style={{ color: color || '#5A6A7A' }}>{title}</span>
+      </div>
+      <div className="grid grid-cols-2 lg:grid-cols-3 gap-2 p-3">
+        {children}
+      </div>
+    </div>
+  )
+}
+
 export default function LeadDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -240,11 +333,8 @@ export default function LeadDetail() {
   const [showRemindMe, setShowRemindMe] = useState(false)
   const safeLeads = Array.isArray(leads) ? leads : []
   const lead = safeLeads.find(l => l.id === id)
-  const [logType, setLogType] = useState('note')
-  const [logNote, setLogNote] = useState('')
   const [editStage, setEditStage] = useState(false)
   const [leadActivities, setLeadActivities] = useState([])
-  const [editContact, setEditContact] = useState(false)
   const lastCallRef = useRef(0)
 
   useEffect(() => {
@@ -388,27 +478,8 @@ export default function LeadDetail() {
         </div>
       </div>
 
-      {/* Body */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-5 max-w-5xl mx-auto w-full">
-
-        {/* Notes — big notepad, primary surface */}
-        {splitNotes ? (
-          <div className="grid grid-cols-2 gap-3">
-            <NotesEditor
-              value={lead.notes}
-              onSave={(v) => typeof updateLead === 'function' ? updateLead(id, { notes: v }) : Promise.resolve()}
-            />
-            <NotesEditor
-              value={lead.notes_b}
-              onSave={(v) => typeof updateLead === 'function' ? updateLead(id, { notes_b: v }) : Promise.resolve()}
-            />
-          </div>
-        ) : (
-          <NotesEditor
-            value={lead.notes}
-            onSave={(v) => typeof updateLead === 'function' ? updateLead(id, { notes: v }) : Promise.resolve()}
-          />
-        )}
+      {/* Body — pitch-first layout: all info visible, no accordion */}
+      <div className="flex-1 overflow-y-auto p-6 space-y-4 max-w-6xl mx-auto w-full">
 
         {/* Sold product (only on sold stage) */}
         {lead.plan_choice && lead.stage === 'sold' && (
@@ -434,83 +505,105 @@ export default function LeadDetail() {
           </div>
         )}
 
-        {/* Edit contact details — collapsed by default. Click to expand. */}
-        <div className="rounded-xl border border-[#1A2130]" style={{ background: '#0E1318' }}>
-          <button
-            onClick={() => setEditContact(v => !v)}
-            className="w-full flex items-center justify-between px-4 py-3 text-left">
-            <span className="text-xs font-mono uppercase tracking-wider text-[#5A6A7A]">
-              Edit contact details
+        {/* Notes (left) + Action log (right) — pitch surface */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {splitNotes ? (
+            <div className="space-y-3">
+              <NotesEditor value={lead.notes}
+                onSave={(v) => typeof updateLead === 'function' ? updateLead(id, { notes: v }) : Promise.resolve()} />
+              <NotesEditor value={lead.notes_b}
+                onSave={(v) => typeof updateLead === 'function' ? updateLead(id, { notes_b: v }) : Promise.resolve()} />
+            </div>
+          ) : (
+            <NotesEditor value={lead.notes}
+              onSave={(v) => typeof updateLead === 'function' ? updateLead(id, { notes: v }) : Promise.resolve()} />
+          )}
+          <ActionLogPanel activities={leadActivities} leadId={id}
+            addActivity={addActivity} setLeadActivities={setLeadActivities} />
+        </div>
+
+        {/* CONTACT — always visible. Hover any cell to edit. */}
+        <InfoSection title="Contact" color="#00E5C3">
+          <EditableField label="First Name" value={lead.first_name} icon={User} onSave={field('first_name')} />
+          <EditableField label="Last Name" value={lead.last_name} icon={User} onSave={field('last_name')} />
+          <EditableField label="Phone" value={displayPhone(lead.phone)} icon={Phone} onSave={field('phone')} />
+          <EditableField label="Email" value={lead.email} icon={Mail} onSave={field('email')} type="email" />
+          <EditableField label="Address" value={lead.address} icon={Home} onSave={field('address')} />
+          <EditableField label="City" value={lead.city} icon={MapPin} onSave={field('city')} />
+          <EditableField label="State" value={lead.state} icon={MapPin} onSave={field('state')} />
+          <EditableField label="Zip" value={lead.zip} icon={MapPin} onSave={field('zip')} />
+        </InfoSection>
+
+        {/* DEMOGRAPHICS */}
+        <InfoSection title="Demographics" color="#A78BFA">
+          <EditableField label="Age" value={lead.age} icon={Heart} onSave={field('age')} type="number" />
+          <EditableField label="DOB" value={lead.dob} icon={Heart} onSave={field('dob')} type="date" />
+          <EditableField label="Gender" value={lead.gender} icon={User} onSave={field('gender')} />
+          <EditableField label="Household" value={lead.household} icon={Users} onSave={field('household')} type="number" />
+          <EditableField label="Income" value={lead.income} icon={DollarSign} onSave={field('income')} />
+          <EditableField label="Best contact time" value={lead.best_contact_time} icon={Clock} onSave={field('best_contact_time')} />
+        </InfoSection>
+
+        {/* INSURANCE */}
+        <InfoSection title="Insurance" color="#3B82F6">
+          <EditableField label="Campaign" value={lead.campaign} icon={AtSign} onSave={field('campaign')} />
+          <EditableField label="Carrier (sold)" value={lead.carrier} icon={AtSign} onSave={field('carrier')} />
+          <EditableField label="Premium" value={lead.premium} icon={DollarSign} onSave={field('premium')} type="number" />
+          <EditableField label="Effective date" value={lead.effective_date} icon={Calendar} onSave={field('effective_date')} type="date" />
+        </InfoSection>
+
+        {/* LOGISTICS */}
+        <InfoSection title="Logistics" color="#F59E0B">
+          <EditableField label="Agent" value={lead.agent} icon={User} onSave={field('agent')} />
+          <EditableField label="Runner" value={lead.runner} icon={Users} onSave={field('runner')} />
+          <EditableField label="Date received" value={lead.created_at ? new Date(lead.created_at).toISOString().slice(0, 16) : ''} icon={Calendar}
+            onSave={(val) => {
+              if (!val) return
+              const iso = new Date(val).toISOString()
+              if (typeof updateLead === 'function') updateLead(id, { created_at: iso })
+            }} type="datetime-local" />
+        </InfoSection>
+
+        {/* CUSTOM FIELDS — user-defined extras live here */}
+        <div className="rounded-xl border border-[#1A2130] overflow-hidden" style={{ background: '#0E1318' }}>
+          <div className="px-4 py-2.5 border-b border-[#1A2130] flex items-center justify-between">
+            <span className="text-[10px] font-mono uppercase tracking-wider text-[#A78BFA]">Custom fields</span>
+            <span className="text-[10px] text-[#3A4A5A] font-mono">
+              {Object.keys(lead.custom_fields || {}).length} field{Object.keys(lead.custom_fields || {}).length === 1 ? '' : 's'}
             </span>
-            <ChevronDown size={13} className={clsx('text-[#5A6A7A] transition-transform', editContact && 'rotate-180')} />
-          </button>
-          {editContact && (
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 px-4 pb-4">
-              <EditableField label="First Name" value={lead.first_name} icon={User} onSave={field('first_name')} />
-              <EditableField label="Last Name" value={lead.last_name} icon={User} onSave={field('last_name')} />
-              <EditableField label="Phone" value={displayPhone(lead.phone)} icon={Phone} onSave={field('phone')} />
-              <EditableField label="Email" value={lead.email} icon={Mail} onSave={field('email')} type="email" />
-              <EditableField label="Address" value={lead.address} icon={Home} onSave={field('address')} />
-              <EditableField label="City" value={lead.city} icon={MapPin} onSave={field('city')} />
-              <EditableField label="State" value={lead.state} icon={MapPin} onSave={field('state')} />
-              <EditableField label="Zip" value={lead.zip} icon={MapPin} onSave={field('zip')} />
-              <EditableField label="Age" value={lead.age} icon={Heart} onSave={field('age')} type="number" />
-              <EditableField label="DOB" value={lead.dob} icon={Heart} onSave={field('dob')} type="date" />
-              <EditableField label="Gender" value={lead.gender} icon={User} onSave={field('gender')} />
-              <EditableField label="Source" value={lead.source} icon={AtSign} onSave={field('source')} />
-              <EditableField label="Campaign" value={lead.campaign} icon={AtSign} onSave={field('campaign')} />
-              <EditableField label="Income" value={lead.income} icon={DollarSign} onSave={field('income')} />
-              <EditableField label="Household" value={lead.household} icon={Users} onSave={field('household')} type="number" />
-              <EditableField label="Current carrier" value={lead.current_carrier} icon={AtSign} onSave={field('current_carrier')} />
-              <EditableField label="Carrier (sold)" value={lead.carrier} icon={AtSign} onSave={field('carrier')} />
-              <EditableField label="Premium" value={lead.premium} icon={DollarSign} onSave={field('premium')} type="number" />
-              <EditableField label="Effective date" value={lead.effective_date} icon={Calendar} onSave={field('effective_date')} type="date" />
-              <EditableField label="Best contact time" value={lead.best_contact_time} icon={Clock} onSave={field('best_contact_time')} />
-              <EditableField label="Agent" value={lead.agent} icon={User} onSave={field('agent')} />
-              <EditableField label="Runner" value={lead.runner} icon={Users} onSave={field('runner')} />
-              <EditableField label="Date received" value={lead.created_at ? new Date(lead.created_at).toISOString().slice(0, 16) : ''} icon={Calendar}
-                onSave={(val) => {
-                  // datetime-local string → ISO. Also bump last_activity so cards re-sort properly.
-                  if (!val) return
-                  const iso = new Date(val).toISOString()
-                  if (typeof updateLead === 'function') updateLead(id, { created_at: iso })
-                }} type="datetime-local" />
-
-              {/* User-defined custom fields */}
-              {Object.entries(lead.custom_fields || {}).map(([key, value]) => (
-                <CustomFieldRow key={key}
-                  name={key}
-                  value={value}
-                  onUpdate={(v) => {
-                    const next = { ...(lead.custom_fields || {}), [key]: v }
-                    if (typeof updateLead === 'function') updateLead(id, { custom_fields: next })
-                  }}
-                  onDelete={() => {
-                    const next = { ...(lead.custom_fields || {}) }
-                    delete next[key]
-                    if (typeof updateLead === 'function') updateLead(id, { custom_fields: next })
-                  }}
-                />
-              ))}
-
-              {/* Add a new custom field — full-row dashed button */}
-              <button
-                onClick={() => {
-                  const raw = window.prompt('Field name (e.g. "Spouse Name", "Renewal Date", "Best time to call"):')
-                  const name = (raw || '').trim()
-                  if (!name) return
-                  if ((lead.custom_fields || {})[name] !== undefined) {
-                    alert('That field already exists on this lead.')
-                    return
-                  }
-                  const next = { ...(lead.custom_fields || {}), [name]: '' }
+          </div>
+          <div className="grid grid-cols-2 lg:grid-cols-3 gap-2 p-3">
+            {Object.entries(lead.custom_fields || {}).map(([key, value]) => (
+              <CustomFieldRow key={key}
+                name={key}
+                value={value}
+                onUpdate={(v) => {
+                  const next = { ...(lead.custom_fields || {}), [key]: v }
                   if (typeof updateLead === 'function') updateLead(id, { custom_fields: next })
                 }}
-                className="col-span-2 lg:col-span-4 p-3 rounded-lg border border-dashed border-[#2A3547] text-sm text-[#5A6A7A] hover:text-white hover:border-[#A78BFA]/40 transition-colors">
-                + Add custom field
-              </button>
-            </div>
-          )}
+                onDelete={() => {
+                  const next = { ...(lead.custom_fields || {}) }
+                  delete next[key]
+                  if (typeof updateLead === 'function') updateLead(id, { custom_fields: next })
+                }}
+              />
+            ))}
+            <button
+              onClick={() => {
+                const raw = window.prompt('Field name (e.g. "Spouse Name", "Renewal Date"):')
+                const name = (raw || '').trim()
+                if (!name) return
+                if ((lead.custom_fields || {})[name] !== undefined) {
+                  alert('That field already exists on this lead.')
+                  return
+                }
+                const next = { ...(lead.custom_fields || {}), [name]: '' }
+                if (typeof updateLead === 'function') updateLead(id, { custom_fields: next })
+              }}
+              className="col-span-2 lg:col-span-3 p-3 rounded-lg border border-dashed border-[#2A3547] text-xs text-[#5A6A7A] hover:text-white hover:border-[#A78BFA]/40 transition-colors">
+              + Add custom field
+            </button>
+          </div>
         </div>
       </div>
 
