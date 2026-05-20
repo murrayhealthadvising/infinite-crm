@@ -29,3 +29,14 @@ export function displayPhone(phone) {
   // since normalizePhone rejects non-US, but old rows might exist).
   return String(phone)
 }
+
+// copyPhone: the bare 10-digit number with NO +1 and no formatting —
+// "9702380425". This is what goes on the clipboard so it pastes cleanly into
+// dialers, web forms, and other CRMs without a stray country code.
+export function copyPhoneValue(phone) {
+  if (!phone) return ''
+  const digits = String(phone).replace(/\D/g, '')
+  if (digits.length === 11 && digits[0] === '1') return digits.slice(1)
+  if (digits.length === 10) return digits
+  return digits  // fallback: whatever digits we have, still no +
+}

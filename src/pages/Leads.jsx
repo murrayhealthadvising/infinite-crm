@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useApp } from '../context/AppContext'
-import { normalizePhone, displayPhone } from '../lib/phone'
+import { normalizePhone, displayPhone, copyPhoneValue } from '../lib/phone'
 import { localTimeFor, localHourFor, timezoneFor } from '../lib/timezone'
 
 // IANA timezone → short label used for the TZ filter pills
@@ -829,7 +829,7 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
 
   const copyPhone = (e) => {
     e.stopPropagation()
-    if (lead.phone) navigator.clipboard.writeText(lead.phone)
+    if (lead.phone) navigator.clipboard.writeText(copyPhoneValue(lead.phone))
     setCopied(true); setTimeout(() => setCopied(false), 1500)
   }
   const copyName = (e) => {
@@ -880,7 +880,7 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
             {lead.phone && (
               <button onClick={copyPhone}
                 className="text-[#3A4A5A] hover:text-[#8899AA] transition-colors"
-                title="Copy phone (with +1)">
+                title="Copy phone number">
                 {copied ? <Check size={11} className="text-[#00E5C3]" /> : <Copy size={11} />}
               </button>
             )}
