@@ -238,7 +238,7 @@ function AIAssistant({ lead }) {
 // so you can see "called at 2:14 PM Wed, no answer" at a glance. Manual entries
 // (text, email, note) get the same treatment. Kept sticky on the right column
 // so it's visible while you're pitching.
-function ActionLogPanel({ activities, leadId, addActivity, setLeadActivities }) {
+function ActionLogPanel({ activities, leadId, addActivity, deleteActivity, setLeadActivities }) {
   const [text, setText] = useState('')
   const [kind, setKind] = useState('note')
   const list = (activities || []).slice(0, 40)
@@ -248,6 +248,13 @@ function ActionLogPanel({ activities, leadId, addActivity, setLeadActivities }) 
     const entry = await addActivity(leadId, kind, text.trim())
     if (entry) setLeadActivities(prev => [entry, ...prev])
     setText('')
+  }
+
+  const remove = async (aid) => {
+    if (!aid || String(aid).startsWith('tmp-')) return
+    if (!confirm('Delete this action log entry?')) return
+    setLeadActivities(prev => prev.filter(a => a.id !== aid))
+    try { await deleteActivity(aid, leadId) } catch {}
   }
 
   return (
@@ -292,7 +299,7 @@ function ActionLogPanel({ activities, leadId, addActivity, setLeadActivities }) 
           const dayLabel = !valid ? '' : isToday(when) ? 'Today' : isYesterday(when) ? 'Yesterday' : format(when, 'EEE MMM d')
           const timeLabel = !valid ? '' : format(when, 'h:mm a')
           return (
-            <div key={a.id || i} className="flex items-start gap-2.5">
+            <div key={a.id || i} className="flex items-start gap-2.5 group">
               <div className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5"
                 style={{ background: color + '20' }}>
                 <Icon size={11} style={{ color }} />
@@ -303,6 +310,14 @@ function ActionLogPanel({ activities, leadId, addActivity, setLeadActivities }) 
                   {dayLabel}{dayLabel && timeLabel ? ' · ' : ''}{timeLabel}
                 </p>
               </div>
+              {a.id && !String(a.id).startsWith('tmp-') && (
+                <button
+                  onClick={() => remove(a.id)}
+                  className="opacity-0 group-hover:opacity-100 p-1 rounded text-[#3A4A5A] hover:text-[#EF4444] hover:bg-[#EF444415] transition-opacity flex-shrink-0"
+                  title="Delete this entry">
+                  <X size={11} />
+                </button>
+              )}
             </div>
           )
         })}
@@ -330,7 +345,7 @@ function InfoSection({ title, color, children }) {
 export default function LeadDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const { leads, tags, updateLead, updateLeadStage, addActivity, getLeadActivities, splitNotes, addReminder } = useApp()
+  const { leads, tags, updateLead, updateLeadStage, addActivity, getLeadActivities, deleteActivity, splitNotes, addReminder } = useApp()
   const [showRemindMe, setShowRemindMe] = useState(false)
   const safeLeads = Array.isArray(leads) ? leads : []
   const lead = safeLeads.find(l => l.id === id)
@@ -530,7 +545,8 @@ export default function LeadDetail() {
               onSave={(v) => typeof updateLead === 'function' ? updateLead(id, { notes: v }) : Promise.resolve()} />
           )}
           <ActionLogPanel activities={leadActivities} leadId={id}
-            addActivity={addActivity} setLeadActivities={setLeadActivities} />
+            addActivity={addActivity} deleteActivity={deleteActivity}
+            setLeadActivities={setLeadActivities} />
         </div>
 
         {/* CONTACT — always visible. Hover any cell to edit. */}

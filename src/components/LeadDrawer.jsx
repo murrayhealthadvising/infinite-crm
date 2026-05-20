@@ -60,7 +60,7 @@ function NotesField({ value, onSave, placeholder }) {
 }
 
 export default function LeadDrawer({ leadId, onClose, bucket = [], onNavigate }) {
-  const { leads, tags, updateLead, updateLeadStage, addActivity, getLeadActivities, addReminder, splitNotes, sideTagStyles } = useApp()
+  const { leads, tags, updateLead, updateLeadStage, addActivity, getLeadActivities, deleteActivity, addReminder, splitNotes, sideTagStyles } = useApp()
   const navigate = useNavigate()
   const [stageOpen, setStageOpen] = useState(false)
   const [showEmpty, setShowEmpty] = useState(false)
@@ -296,7 +296,11 @@ export default function LeadDrawer({ leadId, onClose, bucket = [], onNavigate })
           <ActionLog activities={activities}
             actionText={actionText} setActionText={setActionText}
             actionKind={actionKind} setActionKind={setActionKind}
-            onLog={logAction} />
+            onLog={logAction}
+            onDelete={async (aid) => {
+              setActivities(prev => prev.filter(a => a.id !== aid))
+              try { await deleteActivity(aid, leadId) } catch {}
+            }} />
 
           {/* ALL info — every standard field + custom_fields, inline editable */}
           <AllInfoPanel lead={lead} leadId={leadId} updateLead={updateLead}
@@ -310,7 +314,7 @@ export default function LeadDrawer({ leadId, onClose, bucket = [], onNavigate })
 // Discreet action log — collapsed by default. Auto-records Call clicks +
 // stage changes via addActivity. Has a small "+ Add" input so the agent can
 // log things like "emailed today" or "left voicemail" inline.
-function ActionLog({ activities, actionText, setActionText, actionKind, setActionKind, onLog }) {
+function ActionLog({ activities, actionText, setActionText, actionKind, setActionKind, onLog, onDelete }) {
   const [open, setOpen] = useState(false)
   const list = Array.isArray(activities) ? activities : []
   const recent = list.slice(0, 8)
@@ -362,10 +366,21 @@ function ActionLog({ activities, actionText, setActionText, actionKind, setActio
                 let when = ''
                 try { when = formatDistanceToNow(new Date(a.created_at), { addSuffix: true }) } catch {}
                 return (
-                  <div key={a.id} className="flex items-start gap-2 px-2 py-1 rounded hover:bg-[#0E1318]">
+                  <div key={a.id} className="flex items-start gap-2 px-2 py-1 rounded hover:bg-[#0E1318] group">
                     <span className="text-[10px] font-mono uppercase mt-0.5 flex-shrink-0" style={{ color: c }}>{a.type}</span>
                     <p className="text-[11px] text-[#C0D0E0] flex-1 leading-tight">{a.note}</p>
                     <span className="text-[10px] text-[#3A4A5A] font-mono flex-shrink-0">{when}</span>
+                    {onDelete && a.id && !String(a.id).startsWith('tmp-') && (
+                      <button
+                        onClick={() => {
+                          if (!confirm('Delete this action log entry?')) return
+                          onDelete(a.id)
+                        }}
+                        className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-[#3A4A5A] hover:text-[#EF4444] hover:bg-[#EF444415] transition-opacity flex-shrink-0"
+                        title="Delete this entry">
+                        <X size={10} />
+                      </button>
+                    )}
                   </div>
                 )
               })}

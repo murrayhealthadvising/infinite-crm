@@ -385,6 +385,44 @@ export function AppProvider({ children }) {
     }
   }
 
+  // Delete a single activity by id. Optimistic — removes from cache first,
+  // then deletes from Supabase. If the server rejects (RLS / not yours / etc.)
+  // we re-fetch to restore truth.
+  const deleteActivity = async (activityId, leadId) => {
+    if (!activityId) return false
+    // Optimistic local remove
+    setActivities(prev => {
+      const next = { ...prev }
+      if (leadId && Array.isArray(next[leadId])) {
+        next[leadId] = next[leadId].filter(a => a.id !== activityId)
+      } else {
+        // Unknown leadId — scan all buckets
+        for (const k of Object.keys(next)) {
+          next[k] = (next[k] || []).filter(a => a.id !== activityId)
+        }
+      }
+      return next
+    })
+    try {
+      const { error } = await supabase.from('activities').delete().eq('id', activityId)
+      if (error) {
+        console.error('[deleteActivity] failed for', activityId, error)
+        // Re-fetch to restore truth
+        if (leadId) {
+          try {
+            const { data } = await supabase.from('activities').select('*').eq('lead_id', leadId).order('created_at', { ascending: false })
+            if (data) setActivities(prev => ({ ...prev, [leadId]: data }))
+          } catch {}
+        }
+        return false
+      }
+      return true
+    } catch (e) {
+      console.error('[deleteActivity] threw for', activityId, e)
+      return false
+    }
+  }
+
   // getLeadActivities: by default returns cached activities for snappy UI.
   // Pass { force: true } to bypass cache — used by lead-detail and drawer on
   // open so teammate activities (created since last open) are always visible.
@@ -625,7 +663,7 @@ export function AppProvider({ children }) {
       getTag, signOut, refreshLeads,
       addLead, bulkAddLeads, updateLead, updateLeadStage,
       deleteLead, deleteLeads, deleteAllLeadsForUser,
-      addActivity, getLeadActivities,
+      addActivity, getLeadActivities, deleteActivity,
       addTag, updateTag, deleteTag, reorderTags,
       // sold-prompt globals
       pendingSoldLeadId, setPendingSoldLeadId,

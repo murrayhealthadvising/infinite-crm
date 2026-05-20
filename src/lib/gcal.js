@@ -14,6 +14,9 @@
 
 const SCOPES = 'https://www.googleapis.com/auth/calendar.events'
 const TOKEN_KEY = 'infinite_crm_gcal_token'
+// "Connected" flag is separate from the access token — it survives token
+// expiry so we can still consider the user connected and silently re-issue.
+const CONNECTED_KEY = 'infinite_crm_gcal_connected'
 
 // ── Token cache (localStorage) ─────────────────────────────────────────────
 function readToken() {
@@ -27,13 +30,43 @@ function readToken() {
   } catch { return null }
 }
 function writeToken(token) {
-  try { localStorage.setItem(TOKEN_KEY, JSON.stringify(token)) } catch {}
+  try {
+    localStorage.setItem(TOKEN_KEY, JSON.stringify(token))
+    localStorage.setItem(CONNECTED_KEY, '1')
+  } catch {}
 }
 export function clearGcalToken() {
-  try { localStorage.removeItem(TOKEN_KEY) } catch {}
+  try {
+    localStorage.removeItem(TOKEN_KEY)
+    localStorage.removeItem(CONNECTED_KEY)
+  } catch {}
 }
+// "Connected" stays true even after the access token expires — we'll silently
+// refresh on next API call. Only an explicit Disconnect (or repeated refresh
+// failure) flips this back to false.
 export function isGcalConnected() {
-  return !!readToken()
+  try { return localStorage.getItem(CONNECTED_KEY) === '1' } catch { return false }
+}
+
+// ── Proactive refresh timer ────────────────────────────────────────────────
+// Once the user is connected, we refresh the token every ~50 min so it never
+// silently goes stale between use. The refresh is silent (prompt:'') and only
+// works if the user is still signed into Google in this browser — which is
+// the case 99% of the time.
+let _refreshTimer = null
+function scheduleRefresh() {
+  if (_refreshTimer) clearTimeout(_refreshTimer)
+  _refreshTimer = setTimeout(async () => {
+    if (!isGcalConnected()) return
+    const t = await silentRefresh()
+    if (t) scheduleRefresh()
+    // If refresh failed silently, leave _connected=true so the next user
+    // action triggers a visible re-prompt instead of a surprise disconnect.
+  }, 50 * 60 * 1000)  // 50 min — well inside the 1hr Google token lifetime
+}
+if (typeof window !== 'undefined') {
+  // Kick off the refresh loop on page load if user is already connected
+  window.addEventListener('load', () => { if (isGcalConnected()) scheduleRefresh() })
 }
 
 // ── Client ID lookup ───────────────────────────────────────────────────────
@@ -69,6 +102,7 @@ export function connectGoogleCalendar() {
           expires_at: Date.now() + (Number(resp.expires_in || 3500) * 1000),
         }
         writeToken(token)
+        scheduleRefresh()  // start the auto-refresh loop
         resolve(token)
       },
       error_callback: (err) => reject(new Error(err?.message || 'OAuth flow failed')),
@@ -78,7 +112,8 @@ export function connectGoogleCalendar() {
 }
 
 // Silent token refresh — tries to get a new token without prompting. Used
-// just before creating an event when the cached token has expired.
+// just before creating an event when the cached token has expired AND by
+// the 50-min auto-refresh timer to keep the connection warm.
 function silentRefresh() {
   return new Promise((resolve) => {
     const clientId = getGoogleClientId()
@@ -96,6 +131,7 @@ function silentRefresh() {
             expires_at: Date.now() + (Number(resp.expires_in || 3500) * 1000),
           }
           writeToken(token)
+          scheduleRefresh()
           resolve(token)
         },
         error_callback: () => resolve(null),
@@ -115,9 +151,19 @@ export async function createCalendarEvent({ title, startsAt, durationMinutes = 1
   const end = new Date(start.getTime() + durationMinutes * 60 * 1000)
   const fallbackUrl = googleCalendarUrl({ title, startsAt, durationMinutes, details, location })
 
+  // Try cached → silent refresh. If both fail and the user was "connected",
+  // still don't wipe the connected flag here; let the API call try anyway and
+  // we'll handle 401 with one retry below.
   let token = readToken()
   if (!token) token = await silentRefresh()
-  if (!token) return { ok: false, error: 'Not connected — connect Google Calendar in Settings', fallbackUrl }
+  if (!token && !isGcalConnected()) {
+    return { ok: false, error: 'Not connected — connect Google Calendar in Settings', fallbackUrl }
+  }
+  if (!token) {
+    // Connected flag was true but no token — silent refresh failed. Tell the
+    // caller it expired but keep the connected flag so the next call retries.
+    return { ok: false, error: 'Token refresh failed — open Settings and click Connect to re-authorize.', fallbackUrl }
+  }
 
   const body = {
     summary: title,
@@ -128,21 +174,27 @@ export async function createCalendarEvent({ title, startsAt, durationMinutes = 1
     reminders: { useDefault: true },
   }
 
+  const post = async (tok) => fetch(
+    'https://www.googleapis.com/calendar/v3/calendars/primary/events',
+    {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${tok.access_token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }
+  )
+
   try {
-    const res = await fetch(
-      'https://www.googleapis.com/calendar/v3/calendars/primary/events',
-      {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token.access_token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(body),
-      }
-    )
+    let res = await post(token)
     if (res.status === 401) {
-      clearGcalToken()
-      return { ok: false, error: 'Connection expired — reconnect Google Calendar', fallbackUrl }
+      // Token rejected — try ONE silent refresh and retry. Only wipe on second failure.
+      const fresh = await silentRefresh()
+      if (fresh) {
+        res = await post(fresh)
+      }
+      if (res.status === 401) {
+        clearGcalToken()
+        return { ok: false, error: 'Connection expired — reconnect Google Calendar in Settings.', fallbackUrl }
+      }
     }
     if (!res.ok) {
       const txt = await res.text().catch(() => '')
