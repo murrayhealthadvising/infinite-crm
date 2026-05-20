@@ -68,14 +68,20 @@ export default function LeadDrawer({ leadId, onClose, bucket = [], onNavigate })
   const [activities, setActivities] = useState([])
   const [actionText, setActionText] = useState('')
   const [actionKind, setActionKind] = useState('note')
-  const lastCallRef = useRef(0)
+  // Per-lead call throttle. Keyed by leadId so navigating between leads in
+  // the drawer (arrow-down etc.) doesn't accidentally suppress a call on the
+  // new lead. Without this fix, agents calling 4 different leads in 15 min
+  // would only get the FIRST call logged.
+  const lastCallByLeadRef = useRef({})
 
-  // Reload the activity history whenever we hop to a different lead
+  // Reload the activity history whenever we hop to a different lead. ALSO
+  // force a fresh fetch (bypassing AppContext cache) so we see activities
+  // created by teammates / other devices since we last opened this lead.
   useEffect(() => {
     if (!leadId || typeof getLeadActivities !== 'function') return
     let cancelled = false
     try {
-      const result = getLeadActivities(leadId)
+      const result = getLeadActivities(leadId, { force: true })
       if (result && typeof result.then === 'function') {
         result.then(acts => { if (!cancelled) setActivities(acts || []) }).catch(() => setActivities([]))
       } else if (Array.isArray(result)) {
@@ -131,13 +137,21 @@ export default function LeadDrawer({ leadId, onClose, bucket = [], onNavigate })
 
   const logCall = async () => {
     const now = Date.now()
-    if (now - lastCallRef.current < 15 * 60 * 1000) return
-    lastCallRef.current = now
+    const lastForThisLead = lastCallByLeadRef.current[leadId] || 0
+    // 2-min coalesce per lead: prevents accidental double-taps but lets the
+    // agent log every legitimate dial. 15 min was way too aggressive.
+    if (now - lastForThisLead < 2 * 60 * 1000) {
+      console.info('[ActionLog] Call to', leadId, 'coalesced — last call', Math.round((now - lastForThisLead)/1000), 'sec ago')
+      return
+    }
+    lastCallByLeadRef.current[leadId] = now
     if (typeof addActivity !== 'function') return
     try {
       const entry = await addActivity(leadId, 'call', `Called ${displayPhone(lead.phone) || lead.phone || ''}`.trim())
       if (entry) setActivities(prev => [entry, ...prev])
-    } catch {}
+    } catch (e) {
+      console.error('[ActionLog] Failed to log call for', leadId, e)
+    }
   }
 
   return (

@@ -341,7 +341,8 @@ export default function LeadDetail() {
   useEffect(() => {
     if (id && typeof getLeadActivities === 'function') {
       try {
-        const result = getLeadActivities(id)
+        // force: true → bypass cache so we always see activities from teammates
+        const result = getLeadActivities(id, { force: true })
         if (result && typeof result.then === 'function') {
           result.then(acts => setLeadActivities(acts || [])).catch(() => setLeadActivities([]))
         }
@@ -391,14 +392,23 @@ export default function LeadDetail() {
   // the call button doesn't fill the timeline — only one log per 15 min.
   const logCall = async () => {
     const now = Date.now()
-    if (now - lastCallRef.current < 15 * 60 * 1000) return
+    if (now - lastCallRef.current < 2 * 60 * 1000) {
+      console.info('[ActionLog] Call to', id, 'coalesced — last call', Math.round((now - lastCallRef.current)/1000), 'sec ago')
+      return
+    }
     lastCallRef.current = now
     if (typeof addActivity !== 'function') return
     try {
       const entry = await addActivity(id, 'call', `Called ${displayPhone(lead.phone) || lead.phone || ''}`.trim())
       if (entry) setLeadActivities(prev => [entry, ...prev])
-    } catch {}
+    } catch (e) {
+      console.error('[ActionLog] Failed to log call for', id, e)
+    }
   }
+
+  // (lastCallRef is per-route-instance — LeadDetail unmounts when you navigate
+  // to a different lead, so the throttle naturally resets. Still, shorten the
+  // window from 15 min to 2 min so legitimate retry-calls aren't dropped.)
 
   // Most-recent call activity → "Last called 2h ago" badge
   const lastCallAt = (() => {

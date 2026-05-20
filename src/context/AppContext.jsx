@@ -366,24 +366,40 @@ export function AppProvider({ children }) {
   const addActivity = async (leadId, type, note) => {
     const entry = { lead_id: leadId, type, note, user_id: session?.user?.id, created_at: new Date().toISOString() }
     try {
-      const { data } = await supabase.from('activities').insert([entry]).select().single()
+      const { data, error } = await supabase.from('activities').insert([entry]).select().single()
+      if (error) {
+        // Surface the failure loudly so silent drops never happen again
+        console.error('[addActivity] insert FAILED for lead', leadId, 'type', type, '— error:', error)
+        const saved = { ...entry, id: 'tmp-' + Date.now(), _failed: true }
+        setActivities(prev => ({ ...prev, [leadId]: [saved, ...(prev[leadId] || [])] }))
+        return saved
+      }
       const saved = data || { ...entry, id: 'tmp-' + Date.now() }
       setActivities(prev => ({ ...prev, [leadId]: [saved, ...(prev[leadId] || [])] }))
       return saved
     } catch (e) {
-      const saved = { ...entry, id: 'tmp-' + Date.now() }
+      console.error('[addActivity] insert THREW for lead', leadId, 'type', type, '— exception:', e)
+      const saved = { ...entry, id: 'tmp-' + Date.now(), _failed: true }
       setActivities(prev => ({ ...prev, [leadId]: [saved, ...(prev[leadId] || [])] }))
       return saved
     }
   }
 
-  const getLeadActivities = async (leadId) => {
-    if (activities[leadId]) return activities[leadId]
+  // getLeadActivities: by default returns cached activities for snappy UI.
+  // Pass { force: true } to bypass cache — used by lead-detail and drawer on
+  // open so teammate activities (created since last open) are always visible.
+  const getLeadActivities = async (leadId, opts = {}) => {
+    const force = !!opts?.force
+    if (!force && activities[leadId]) return activities[leadId]
     try {
-      const { data } = await supabase.from('activities').select('*').eq('lead_id', leadId).order('created_at', { ascending: false })
+      const { data, error } = await supabase.from('activities').select('*').eq('lead_id', leadId).order('created_at', { ascending: false })
+      if (error) console.error('[getLeadActivities] fetch failed for lead', leadId, error)
       if (data) setActivities(prev => ({ ...prev, [leadId]: data }))
       return data || []
-    } catch { return [] }
+    } catch (e) {
+      console.error('[getLeadActivities] threw for lead', leadId, e)
+      return []
+    }
   }
 
   // Combined user object — has both session.user fields (id, email) AND legacy display fields (name, role)
