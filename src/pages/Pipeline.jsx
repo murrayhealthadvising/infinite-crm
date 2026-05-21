@@ -4,9 +4,9 @@ import StatusTag from '../components/StatusTag'
 import LeadDrawer from '../components/LeadDrawer'
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { formatDistanceToNow, formatDistanceToNowStrict } from 'date-fns'
-import { GripHorizontal, Phone, Search, X, RefreshCw } from 'lucide-react'
+import { GripHorizontal, Phone, Search, X, RefreshCw, Copy, Check } from 'lucide-react'
 import clsx from 'clsx'
-import { displayPhone } from '../lib/phone'
+import { displayPhone, copyPhoneValue } from '../lib/phone'
 import { localTimeFor, localHourFor, timezoneFor } from '../lib/timezone'
 
 // IANA → short TZ label for the filter pills (same map used on /leads)
@@ -46,8 +46,27 @@ function leadInitials(lead) { const n = leadName(lead); if (n === '—' || !n) r
 // notes preview, comments chip, ZIP, time-in-stage, local time.
 // Each agent toggles which fields appear via Settings → Pipeline cards.
 function PipelineCard({ lead, onDragStart, onDragEnd, onClick }) {
-  const { getTag, pipelineCardFields } = useApp()
+  const { getTag, pipelineCardFields, addActivity } = useApp()
   const fields = pipelineCardFields || {}
+  // Log a dial when the card's Call button is clicked. 2-min per-card coalesce
+  // so an accidental double-tap doesn't double-count.
+  const lastCallRef = useRef(0)
+  const logDial = () => {
+    const now = Date.now()
+    if (now - lastCallRef.current < 2 * 60 * 1000) return
+    lastCallRef.current = now
+    if (typeof addActivity === 'function') {
+      addActivity(lead.id, 'call', `Called ${displayPhone(lead.phone) || lead.phone || ''}`.trim())
+        .catch(e => console.error('[Pipeline] dial log failed', e))
+    }
+  }
+  // Copy the bare 10-digit number (no +1) to clipboard
+  const [phoneCopied, setPhoneCopied] = useState(false)
+  const copyPhone = (e) => {
+    e.stopPropagation()
+    if (lead.phone) navigator.clipboard.writeText(copyPhoneValue(lead.phone))
+    setPhoneCopied(true); setTimeout(() => setPhoneCopied(false), 1500)
+  }
   const stage = (typeof getTag === 'function' ? getTag(lead.stage || lead.status) : null) || { color: '#5A6A7A' }
   const sColor = stage?.color || '#5A6A7A'
   const phoneVisible = displayPhone(lead.phone)
@@ -89,13 +108,18 @@ function PipelineCard({ lead, onDragStart, onDragEnd, onClick }) {
       {fields.phone !== false && phoneVisible && (
         <div className="flex items-center gap-2 mb-2">
           {fields.call !== false && (
-            <a href={`tel:${lead.phone}`} onClick={(e) => e.stopPropagation()}
+            <a href={`tel:${lead.phone}`} onClick={(e) => { e.stopPropagation(); logDial() }}
               className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold text-black flex-shrink-0"
               style={{ background: `linear-gradient(135deg, ${sColor}, ${sColor}AA)` }}>
               <Phone size={11} /> Call
             </a>
           )}
           <span className="text-xs font-mono text-[#8899AA] truncate">{phoneVisible}</span>
+          <button onClick={copyPhone}
+            className="text-[#3A4A5A] hover:text-[#00E5C3] transition-colors flex-shrink-0"
+            title="Copy phone number">
+            {phoneCopied ? <Check size={12} className="text-[#00E5C3]" /> : <Copy size={12} />}
+          </button>
         </div>
       )}
 
@@ -140,7 +164,7 @@ function PipelineCard({ lead, onDragStart, onDragEnd, onClick }) {
 }
 
 export default function Pipeline() {
-  const { leads, tags, updateLeadStage, updateTag, refreshLeads, user } = useApp()
+  const { leads, tags, updateLeadStage, updateTag, refreshLeads, user, dialsToday } = useApp()
   const navigate = useNavigate()
   const [drawerLeadId, setDrawerLeadId] = useState(null)
   const [drawerBucket, setDrawerBucket] = useState([])  // ids of leads in the column the drawer was opened from
@@ -433,6 +457,14 @@ export default function Pipeline() {
               title="Refresh leads">
               <RefreshCw size={13} className={refreshing ? 'animate-spin' : ''} />
             </button>
+            {/* Daily dial tracker — counts every Call click today, resets at midnight */}
+            <div className="text-right pl-3 border-l border-[#1A2130]" title="Dials you've made today (resets at midnight)">
+              <p className="text-[10px] text-[#5A6A7A] font-mono uppercase tracking-wider">Dials today</p>
+              <p className="text-sm font-display font-bold flex items-center justify-end gap-1"
+                style={{ color: dialsToday > 0 ? '#00E5C3' : '#5A6A7A' }}>
+                <Phone size={11} /> {dialsToday}
+              </p>
+            </div>
             {totalValue > 0 && (
               <div className="text-right pl-3 border-l border-[#1A2130]" title="Annualized premium of your sold leads">
                 <p className="text-[10px] text-[#5A6A7A] font-mono uppercase tracking-wider">Sold annual</p>

@@ -82,7 +82,7 @@ function buildStaleNudges(leads) {
 }
 
 export default function Today() {
-  const { reminders, leads, addReminder, completeReminder, uncompleteReminder, snoozeReminder, deleteReminder, tags } = useApp()
+  const { reminders, leads, addReminder, completeReminder, uncompleteReminder, snoozeReminder, deleteReminder, tags, dialsToday } = useApp()
   const navigate = useNavigate()
   const [showAdd, setShowAdd] = useState(false)
   const [showDone, setShowDone] = useState(false)
@@ -126,6 +126,14 @@ export default function Today() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {/* Daily dial tracker — resets at midnight */}
+          <div className="text-right pr-3 border-r border-[#1A2130]" title="Dials you've made today (resets at midnight)">
+            <p className="text-[10px] text-[#5A6A7A] font-mono uppercase tracking-wider">Dials today</p>
+            <p className="text-sm font-display font-bold flex items-center justify-end gap-1"
+              style={{ color: dialsToday > 0 ? '#00E5C3' : '#5A6A7A' }}>
+              <Phone size={11} /> {dialsToday}
+            </p>
+          </div>
           <button onClick={() => setShowDone(v => !v)}
             className="px-3 py-1.5 rounded-lg text-xs border border-[#1A2130] text-[#8899AA] hover:text-white hover:border-[#2A3547]">
             {showDone ? 'Hide' : 'Show'} completed ({doneReminders.length})

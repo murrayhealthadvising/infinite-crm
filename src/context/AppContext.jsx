@@ -280,6 +280,11 @@ export function AppProvider({ children }) {
       else if (STATUS_LABELS.includes(newStage)) { stageLabel = newStage; stageId = statusToStageId[newStage] || newStage }
       else { stageId = newStage; stageLabel = newStage }
     }
+    // No-op guard: dragging a lead back into the SAME column it's already in
+    // shouldn't reset the "Xd in stage" badge or spam the activity log.
+    const current = leads.find(l => l.id === leadId)
+    if (current && current.stage === stageId) return
+
     // Stamp stage_changed_at so the "Xd in stage" badge on Pipeline cards
     // tracks how long the lead has been sitting in this bucket.
     await updateLead(leadId, { stage: stageId, stage_changed_at: new Date().toISOString() })
@@ -365,11 +370,14 @@ export function AppProvider({ children }) {
 
   const addActivity = async (leadId, type, note) => {
     const entry = { lead_id: leadId, type, note, user_id: session?.user?.id, created_at: new Date().toISOString() }
+    // Daily dial tracker — every logged 'call' bumps today's count optimistically
+    if (type === 'call') setDialsToday(d => d + 1)
     try {
       const { data, error } = await supabase.from('activities').insert([entry]).select().single()
       if (error) {
         // Surface the failure loudly so silent drops never happen again
         console.error('[addActivity] insert FAILED for lead', leadId, 'type', type, '— error:', error)
+        if (type === 'call') setDialsToday(d => Math.max(0, d - 1))  // roll back
         const saved = { ...entry, id: 'tmp-' + Date.now(), _failed: true }
         setActivities(prev => ({ ...prev, [leadId]: [saved, ...(prev[leadId] || [])] }))
         return saved
@@ -379,11 +387,42 @@ export function AppProvider({ children }) {
       return saved
     } catch (e) {
       console.error('[addActivity] insert THREW for lead', leadId, 'type', type, '— exception:', e)
+      if (type === 'call') setDialsToday(d => Math.max(0, d - 1))
       const saved = { ...entry, id: 'tmp-' + Date.now(), _failed: true }
       setActivities(prev => ({ ...prev, [leadId]: [saved, ...(prev[leadId] || [])] }))
       return saved
     }
   }
+
+  // ── Daily dial tracker ─────────────────────────────────────────────────────
+  // Counts 'call'-type activities created TODAY by the current user. Resets
+  // naturally at midnight (the query window starts at local midnight). Each
+  // dial click bumps the count optimistically; a full refresh runs on load.
+  const [dialsToday, setDialsToday] = useState(0)
+  const refreshDialsToday = async () => {
+    if (!session?.user?.id) { setDialsToday(0); return }
+    try {
+      const start = new Date(); start.setHours(0, 0, 0, 0)
+      const { count, error } = await supabase
+        .from('activities')
+        .select('*', { count: 'exact', head: true })
+        .eq('type', 'call')
+        .eq('user_id', session.user.id)
+        .gte('created_at', start.toISOString())
+      if (error) { console.error('[refreshDialsToday]', error); return }
+      if (typeof count === 'number') setDialsToday(count)
+    } catch (e) { console.error('[refreshDialsToday] threw', e) }
+  }
+  useEffect(() => {
+    if (!session?.user) { setDialsToday(0); return }
+    refreshDialsToday()
+    // Re-check at the next local midnight so the counter rolls over live
+    const now = new Date()
+    const midnight = new Date(now); midnight.setHours(24, 0, 0, 0)
+    const t = setTimeout(() => refreshDialsToday(), midnight.getTime() - now.getTime() + 1000)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.user?.id])
 
   // Delete a single activity by id. Optimistic — removes from cache first,
   // then deletes from Supabase. If the server rejects (RLS / not yours / etc.)
@@ -664,6 +703,7 @@ export function AppProvider({ children }) {
       addLead, bulkAddLeads, updateLead, updateLeadStage,
       deleteLead, deleteLeads, deleteAllLeadsForUser,
       addActivity, getLeadActivities, deleteActivity,
+      dialsToday, refreshDialsToday,
       addTag, updateTag, deleteTag, reorderTags,
       // sold-prompt globals
       pendingSoldLeadId, setPendingSoldLeadId,
