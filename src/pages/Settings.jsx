@@ -1093,22 +1093,30 @@ function IntegrationsPanel() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PitchPrfct Automation panel — maps incoming leads to PitchPrfct workflows.
-// When a new lead lands, the email Worker scans the lead's marketplace comments
-// for a keyword set here and enrolls the lead into the matched workflow (or the
-// default). The workflow list is pulled live from PitchPrfct via the Worker
-// proxy (GET /pp-workflows) so the API key never touches the browser.
+// PitchPrfct Automation panel — per-agent. Each agent connects their OWN
+// PitchPrfct account: their API key is saved (privately, row-level secured) to
+// the pitchprfct_keys table, and their keyword→workflow rules to their profile.
+// The email Worker looks both up by the lead's owning agent. The workflow list
+// is pulled live via the Worker proxy so the key never sits in the browser.
 // ─────────────────────────────────────────────────────────────────────────────
 function PitchPerfectPanel() {
-  const { pitchprfctRules, savePitchprfctRules } = useApp()
+  const { pitchprfctRules, savePitchprfctRules, user } = useApp()
+  const uid = user?.id
   const [workflows, setWorkflows] = useState([])
-  const [wfState, setWfState] = useState('loading')   // loading | ok | error
+  const [wfState, setWfState] = useState('idle')   // idle | loading | ok | error
   const [wfError, setWfError] = useState('')
   const [rules, setRules] = useState([])
   const [defaultWorkflowId, setDefaultWorkflowId] = useState('')
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState(null)
   const [reloadKey, setReloadKey] = useState(0)
+  // Per-agent API key (stored in pitchprfct_keys, never rendered back)
+  const [keyState, setKeyState] = useState('loading')   // loading | set | unset
+  const [keyInput, setKeyInput] = useState('')
+  const [showKey, setShowKey] = useState(false)
+  const [editingKey, setEditingKey] = useState(false)
+  const [keySaving, setKeySaving] = useState(false)
+  const [keyMsg, setKeyMsg] = useState(null)
 
   // Seed the editor from the saved rules. Keyed on a stable JSON string so it
   // re-seeds when the saved data actually changes (incl. profile load) but NOT
@@ -1124,18 +1132,51 @@ function PitchPerfectPanel() {
     setDefaultWorkflowId(pitchprfctRules?.defaultWorkflowId || '')
   }, [rulesKey])
 
-  // Pull the agent's real PitchPrfct workflows through the Worker proxy.
+  // Check whether this agent has an API key saved (just the boolean — the key
+  // value is never kept in component state or rendered).
   useEffect(() => {
+    if (!uid) return
+    let cancelled = false
+    supabase.from('pitchprfct_keys').select('api_key').eq('user_id', uid).maybeSingle()
+      .then(({ data, error }) => {
+        if (cancelled) return
+        if (error) {
+          setKeyState('unset')
+          setKeyMsg({ type: 'error', text: 'Could not check key — has SUPABASE_PITCHPRFCT_SQL.sql been run in Supabase?' })
+          return
+        }
+        setKeyState(data && data.api_key ? 'set' : 'unset')
+      })
+      .catch(() => { if (!cancelled) setKeyState('unset') })
+    return () => { cancelled = true }
+  }, [uid])
+
+  const saveKey = async () => {
+    const v = keyInput.trim()
+    if (!v || !uid) return
+    setKeySaving(true); setKeyMsg(null)
+    const { error } = await supabase.from('pitchprfct_keys')
+      .upsert({ user_id: uid, api_key: v, updated_at: new Date().toISOString() }, { onConflict: 'user_id' })
+    setKeySaving(false)
+    if (error) { setKeyMsg({ type: 'error', text: 'Save failed: ' + error.message }); return }
+    setKeyInput(''); setShowKey(false); setEditingKey(false); setKeyState('set')
+    setKeyMsg({ type: 'success', text: 'API key saved.' })
+    setReloadKey(k => k + 1)
+  }
+
+  // Pull the agent's real PitchPrfct workflows through the Worker proxy — only
+  // once a key is saved (the proxy looks the key up by agent_id).
+  useEffect(() => {
+    if (keyState !== 'set' || !uid) { setWfState('idle'); setWorkflows([]); return }
     let cancelled = false
     setWfState('loading'); setWfError('')
-    fetch(`${WORKER_URL}/pp-workflows`)
+    fetch(`${WORKER_URL}/pp-workflows?agent_id=${encodeURIComponent(uid)}`)
       .then(async (resp) => {
         let data = null
         try { data = await resp.json() } catch { data = null }
         if (!resp.ok) throw new Error((data && data.error) || `HTTP ${resp.status}`)
-        if (data == null) throw new Error('Worker returned no data — deploy the v4.6 worker and set PITCHPRFCT_API_KEY.')
+        if (data == null) throw new Error('Worker returned no data — make sure the v4.7 worker is deployed.')
         // PitchPrfct shape: { status, message, data: { rows: [...], metadata } }.
-        // Stay tolerant of a couple other shapes too.
         const container = (data && data.data) || data || {}
         const raw = Array.isArray(data) ? data
           : Array.isArray(container) ? container
@@ -1149,7 +1190,7 @@ function PitchPerfectPanel() {
       })
       .catch((e) => { if (!cancelled) { setWfError(String(e.message || e)); setWfState('error') } })
     return () => { cancelled = true }
-  }, [reloadKey])
+  }, [reloadKey, keyState, uid])
 
   const wfName = (id) => (workflows.find(w => w.id === id) || {}).name || ''
   const addRule = () => setRules(rs => [...rs, { id: `r${Date.now()}`, keyword: '', workflowId: '' }])
@@ -1197,24 +1238,69 @@ function PitchPerfectPanel() {
         </p>
       </div>
 
-      {wfState === 'loading' && (
+      {/* Per-agent API key */}
+      <div className="rounded-lg border border-[#1A2130] p-3 mb-3" style={{ background: '#080B0F' }}>
+        <p className="text-sm text-white mb-0.5">Your PitchPrfct API key</p>
+        <p className="text-xs text-[#5A6A7A] mb-2">
+          Connect your own PitchPrfct account. Generate a key in PitchPrfct → Settings → API Keys (tick all
+          scopes). It's stored privately — only you and the lead worker can read it.
+        </p>
+        {keyState === 'loading' && <p className="text-xs text-[#5A6A7A]">Checking…</p>}
+        {keyState === 'set' && !editingKey && (
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-emerald-400 flex items-center gap-1"><CheckCircle size={13} /> Connected</span>
+            <button onClick={() => { setEditingKey(true); setKeyMsg(null) }}
+              className="text-xs text-[#8899AA] hover:text-white underline">Replace key</button>
+          </div>
+        )}
+        {(keyState === 'unset' || editingKey) && (
+          <div className="flex items-center gap-2">
+            <input type={showKey ? 'text' : 'password'} value={keyInput}
+              onChange={e => setKeyInput(e.target.value)}
+              placeholder="Paste your PitchPrfct API key"
+              className="flex-1 min-w-0 px-2 py-2 rounded-lg text-sm text-white bg-[#0D1117] border border-[#1A2130] focus:outline-none focus:border-[#00E5C340] font-mono" />
+            <button onClick={() => setShowKey(s => !s)} className="p-2 text-[#5A6A7A] hover:text-white flex-shrink-0" title={showKey ? 'Hide' : 'Show'}>
+              {showKey ? <EyeOff size={14} /> : <Eye size={14} />}
+            </button>
+            <button onClick={saveKey} disabled={keySaving || !keyInput.trim()}
+              className="px-3 py-2 rounded-lg text-xs font-semibold text-black disabled:opacity-40 flex-shrink-0"
+              style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
+              {keySaving ? 'Saving…' : 'Save key'}
+            </button>
+            {editingKey && keyState === 'set' && (
+              <button onClick={() => { setEditingKey(false); setKeyInput('') }}
+                className="text-xs text-[#5A6A7A] hover:text-white flex-shrink-0">Cancel</button>
+            )}
+          </div>
+        )}
+        {keyMsg && (
+          <p className={`text-xs mt-2 ${keyMsg.type === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>{keyMsg.text}</p>
+        )}
+      </div>
+
+      {keyState !== 'set' && keyState !== 'loading' && (
+        <div className="mb-3 px-3 py-2 rounded-lg text-xs border border-[#1A2130] text-[#5A6A7A]" style={{ background: '#080B0F' }}>
+          Add your PitchPrfct API key above to load your workflows.
+        </div>
+      )}
+      {keyState === 'set' && wfState === 'loading' && (
         <div className="mb-3 px-3 py-2 rounded-lg text-xs text-[#8899AA] border border-[#1A2130]" style={{ background: '#080B0F' }}>
           Loading your PitchPrfct workflows…
         </div>
       )}
-      {wfState === 'error' && (
+      {keyState === 'set' && wfState === 'error' && (
         <div className="mb-3 px-3 py-2 rounded-lg text-xs border border-red-500/20 bg-red-500/10 text-red-400 flex items-center gap-2">
           <AlertTriangle size={13} className="flex-shrink-0" />
           <span className="flex-1">Couldn't load workflows: {wfError}</span>
           <button onClick={() => setReloadKey(k => k + 1)} className="underline hover:text-white flex-shrink-0">Retry</button>
         </div>
       )}
-      {wfState === 'ok' && workflows.length === 0 && (
+      {keyState === 'set' && wfState === 'ok' && workflows.length === 0 && (
         <div className="mb-3 px-3 py-2 rounded-lg text-xs border border-amber-500/20 bg-amber-500/10 text-amber-400">
           No workflows found in PitchPrfct. Create one there first, then hit Retry.
         </div>
       )}
-      {wfState === 'ok' && workflows.length > 0 && (
+      {keyState === 'set' && wfState === 'ok' && workflows.length > 0 && (
         <p className="text-[11px] text-[#5A6A7A] mb-3">
           Only <span className="text-[#8899AA]">active</span> workflows enroll leads — paused ones are labeled and PitchPrfct will reject them.
         </p>

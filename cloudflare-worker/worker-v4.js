@@ -1,4 +1,4 @@
-// Infinite CRM Email Worker — v4.6 (rich USHA parsing + PitchPrfct workflow enrollment, zero-dep)
+// Infinite CRM Email Worker — v4.7 (rich USHA parsing + per-agent PitchPrfct enrollment, zero-dep)
 //
 // Deploys via the Cloudflare Workers REST API with NO bundler — every helper
 // inlined here. Handles two paths:
@@ -10,10 +10,10 @@
 //   v3-debug only parsed ~9 fields. DOB, income, household, age, age_range,
 //   gender, smoker, comments etc. were silently dropped. v4 captures them all.
 //
-// v4.6: when a brand-new lead is inserted, the email() path pushes it into
-//   PitchPrfct as a contact and enrolls it in a workflow. Which workflow is
-//   chosen by matching the lead's marketplace comments against keyword rules
-//   the agent sets in CRM Settings. See "PitchPrfct workflow enrollment" below.
+// v4.7: when a brand-new lead is inserted, the email() path pushes it into
+//   PitchPrfct as a contact and enrolls it in a workflow. PER-AGENT: each
+//   agent's own PitchPrfct API key + keyword→workflow rules are looked up by
+//   the lead's owning agent. See "PitchPrfct workflow enrollment" below.
 
 const AGENT_ROUTING = {
   'murray-leads@infinite-crm.net':   '01ef1bd7-f5d1-4279-bf9b-15a02eec5f4a',
@@ -318,19 +318,18 @@ function sanitizeForInsert(lead) {
   return out
 }
 
-// ─── PitchPrfct workflow enrollment ────────────────────────────────────────
+// ─── PitchPrfct workflow enrollment (per-agent) ────────────────────────────
 // The moment a brand-new lead is inserted, push it into PitchPrfct as a contact
 // and enroll that contact in a workflow — PitchPrfct then runs whatever the
 // workflow does (texts, calls, drips). No Make.com.
 //
-// Which workflow? It's decided by scanning the lead's marketplace comments for
-// keyword rules the agent configures in CRM Settings → "PitchPrfct Automation".
-// Those rules live on the agent's profile row (profiles.pitchprfct_rules) and
-// are read live here, so the agent can change them with zero code edits.
-// No keyword match → the agent's default/generic workflow.
-//
-// An agent with no rules configured is simply skipped — this is the on/off
-// switch (configure rules in Settings = on).
+// Everything is PER-AGENT — each agent has their own PitchPrfct account:
+//   • their API key lives in the pitchprfct_keys table (one row per user_id),
+//     entered by the agent in CRM Settings → "PitchPrfct Automation"
+//   • their keyword→workflow rules live on their profile (pitchprfct_rules)
+// Both are looked up by the lead's owning agent, so each agent's leads enroll
+// into THAT agent's workflows using THAT agent's key. An agent with no key, or
+// no rules, is simply skipped.
 const PITCHPRFCT_API = 'https://app.pitchprfct.com/api/v1'
 
 // Pull the agent's keyword→workflow rules off their profile row. Shape:
@@ -346,6 +345,21 @@ async function getProfileRules(env, userId) {
     const rows = await r.json()
     return (Array.isArray(rows) && rows[0] && rows[0].pitchprfct_rules) || null
   } catch (e) { console.error('[pp] getProfileRules threw', String(e)); return null }
+}
+
+// Pull the agent's own PitchPrfct API key from the pitchprfct_keys table. Read
+// with the service role so row-level security doesn't block the lookup.
+async function getAgentApiKey(env, userId) {
+  try {
+    const r = await fetch(
+      `${env.SUPABASE_URL}/rest/v1/pitchprfct_keys?user_id=eq.${encodeURIComponent(userId)}&select=api_key`,
+      { headers: { apikey: env.SUPABASE_SERVICE_KEY, authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}` } }
+    )
+    if (!r.ok) { console.error('[pp] getAgentApiKey HTTP', r.status); return null }
+    const rows = await r.json()
+    const key = Array.isArray(rows) && rows[0] && rows[0].api_key
+    return (key && String(key).trim()) || null
+  } catch (e) { console.error('[pp] getAgentApiKey threw', String(e)); return null }
 }
 
 // Decide the workflow ID by scanning the lead's marketplace comments for the
@@ -377,29 +391,32 @@ function extractContactUuid(text) {
 
 // Look an existing contact up by phone (used when create-contact returns 409
 // "phone already exists") so we can still get its UUID to enroll.
-async function findContactByPhone(env, phone) {
+async function findContactByPhone(apiKey, phone) {
   try {
     const r = await fetch(
       `${PITCHPRFCT_API}/contacts?search=${encodeURIComponent(phone)}&take=5`,
-      { headers: { 'x-api-key': env.PITCHPRFCT_API_KEY } }
+      { headers: { 'x-api-key': apiKey } }
     )
     if (!r.ok) { console.error('[pp] findContactByPhone HTTP', r.status); return null }
     const j = await r.json()
-    const list = Array.isArray(j) ? j : ((j && (j.data || j.contacts)) || [])
+    // List may be a bare array or wrapped — e.g. { data: { rows: [...] } }.
+    const list = Array.isArray(j) ? j
+      : ((j && j.data && (j.data.rows || j.data)) || (j && j.contacts) || [])
+    const arr = Array.isArray(list) ? list : []
     const digits = String(phone).replace(/\D/g, '')
-    for (const c of list) {
+    for (const c of arr) {
       const cd = String((c && (c.phoneNumber || c.phone)) || '').replace(/\D/g, '')
       if (cd && (cd === digits || cd.endsWith(digits) || digits.endsWith(cd))) {
         return c.uuid || c.id || null
       }
     }
-    return list[0] ? (list[0].uuid || list[0].id || null) : null
+    return arr[0] ? (arr[0].uuid || arr[0].id || null) : null
   } catch (e) { console.error('[pp] findContactByPhone threw', String(e)); return null }
 }
 
 // Create the lead as a PitchPrfct contact (or find it if it already exists),
 // returning the contact UUID needed for workflow enrollment.
-async function createOrFindContact(env, lead) {
+async function createOrFindContact(apiKey, lead) {
   const payload = {
     phoneNumber: lead.phone,
     firstName: lead.first_name || undefined,
@@ -414,7 +431,7 @@ async function createOrFindContact(env, lead) {
   try {
     r = await fetch(`${PITCHPRFCT_API}/contacts`, {
       method: 'POST',
-      headers: { 'x-api-key': env.PITCHPRFCT_API_KEY, 'content-type': 'application/json' },
+      headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
       body: JSON.stringify(payload),
     })
   } catch (e) { console.error('[pp] createContact threw', String(e)); return null }
@@ -427,18 +444,18 @@ async function createOrFindContact(env, lead) {
   // 409 = phone already a contact. Any other failure: still try to find it.
   if (r.status !== 200 && r.status !== 201) {
     if (r.status !== 409) console.error('[pp] createContact failed', r.status, text.slice(0, 300))
-    const found = await findContactByPhone(env, lead.phone)
+    const found = await findContactByPhone(apiKey, lead.phone)
     if (found) { console.log('[pp] contact found by phone', found); return found }
   }
   return null
 }
 
 // Enroll a contact into a workflow.
-async function enrollInWorkflow(env, workflowId, contactUuid) {
+async function enrollInWorkflow(apiKey, workflowId, contactUuid) {
   try {
     const r = await fetch(`${PITCHPRFCT_API}/workflows/${encodeURIComponent(workflowId)}/enroll`, {
       method: 'POST',
-      headers: { 'x-api-key': env.PITCHPRFCT_API_KEY, 'content-type': 'application/json' },
+      headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
       body: JSON.stringify({ contactUuid }),
     })
     const text = await r.text()
@@ -455,19 +472,20 @@ async function enrollInWorkflow(env, workflowId, contactUuid) {
 // Orchestrator — called once per brand-new lead from the email() handler.
 // Best-effort: any failure here is logged but never breaks lead insertion.
 async function enrollLeadInPitch(env, userId, lead) {
-  if (!env.PITCHPRFCT_API_KEY) { console.log('[pp] PITCHPRFCT_API_KEY not set — skipping'); return }
   if (!lead.phone || !String(lead.phone).startsWith('+')) {
     console.log('[pp] lead has no valid phone — skipping'); return
   }
+  const apiKey = await getAgentApiKey(env, userId)
+  if (!apiKey) { console.log('[pp] agent has no PitchPrfct API key set — skipping'); return }
   const rules = await getProfileRules(env, userId)
   const hasRules = rules && (rules.defaultWorkflowId || (Array.isArray(rules.rules) && rules.rules.length))
   if (!hasRules) { console.log('[pp] no workflow rules for this agent — skipping'); return }
   const pick = pickWorkflowId(rules, lead)
   if (!pick) { console.log('[pp] no workflow matched and no default set — skipping'); return }
   console.log('[pp]', pick.why, '→ workflow', pick.id)
-  const contactUuid = await createOrFindContact(env, lead)
+  const contactUuid = await createOrFindContact(apiKey, lead)
   if (!contactUuid) { console.error('[pp] no contact UUID — cannot enroll'); return }
-  await enrollInWorkflow(env, pick.id, contactUuid)
+  await enrollInWorkflow(apiKey, pick.id, contactUuid)
 }
 
 // ─── Worker entry points ───────────────────────────────────────────────────
@@ -480,16 +498,23 @@ export default {
     }
     // Workflow-list proxy — lets the CRM Settings panel show a dropdown of the
     // agent's real PitchPrfct workflows WITHOUT the API key ever touching the
-    // browser. The key stays here as a Worker secret.
+    // browser — the CRM passes ?agent_id=UUID and the key is looked up here.
     if (req.method === 'GET' && url.pathname === '/pp-workflows') {
-      if (!env.PITCHPRFCT_API_KEY) {
-        return new Response(JSON.stringify({ error: 'PITCHPRFCT_API_KEY not set on worker' }), {
-          status: 500, headers: { 'content-type': 'application/json', ...CORS },
+      const wfAgent = url.searchParams.get('agent_id')
+      if (!wfAgent) {
+        return new Response(JSON.stringify({ error: 'missing agent_id' }), {
+          status: 400, headers: { 'content-type': 'application/json', ...CORS },
+        })
+      }
+      const wfKey = await getAgentApiKey(env, wfAgent)
+      if (!wfKey) {
+        return new Response(JSON.stringify({ error: 'no PitchPrfct API key saved for this agent yet' }), {
+          status: 404, headers: { 'content-type': 'application/json', ...CORS },
         })
       }
       try {
         const r = await fetch(`${PITCHPRFCT_API}/workflows?take=200`, {
-          headers: { 'x-api-key': env.PITCHPRFCT_API_KEY },
+          headers: { 'x-api-key': wfKey },
         })
         const text = await r.text()
         return new Response(text, {
