@@ -6,7 +6,7 @@ import {
   Key, CheckCircle, XCircle, Eye, EyeOff, Copy,
   Plus, Trash2, Check, X, GripVertical, AlertTriangle, Tags as TagsIcon,
   UserPlus, Users as UsersIcon, RefreshCw, Calendar as CalendarIcon,
-  Link as LinkIcon, Unlink,
+  Link as LinkIcon, Unlink, Zap,
 } from 'lucide-react'
 import { format } from 'date-fns'
 import { connectGoogleCalendar, clearGcalToken, isGcalConnected, getGoogleClientId, createCalendarEvent } from '../lib/gcal'
@@ -1092,6 +1092,175 @@ function IntegrationsPanel() {
   )
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// PitchPrfct Automation panel — maps incoming leads to PitchPrfct workflows.
+// When a new lead lands, the email Worker scans the lead's marketplace comments
+// for a keyword set here and enrolls the lead into the matched workflow (or the
+// default). The workflow list is pulled live from PitchPrfct via the Worker
+// proxy (GET /pp-workflows) so the API key never touches the browser.
+// ─────────────────────────────────────────────────────────────────────────────
+function PitchPerfectPanel() {
+  const { pitchprfctRules, savePitchprfctRules } = useApp()
+  const [workflows, setWorkflows] = useState([])
+  const [wfState, setWfState] = useState('loading')   // loading | ok | error
+  const [wfError, setWfError] = useState('')
+  const [rules, setRules] = useState([])
+  const [defaultWorkflowId, setDefaultWorkflowId] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState(null)
+  const [reloadKey, setReloadKey] = useState(0)
+
+  // Seed the editor from the saved rules. Keyed on a stable JSON string so it
+  // re-seeds when the saved data actually changes (incl. profile load) but NOT
+  // on every render — otherwise in-progress edits would get wiped.
+  const rulesKey = JSON.stringify(pitchprfctRules || {})
+  useEffect(() => {
+    const r = Array.isArray(pitchprfctRules?.rules) ? pitchprfctRules.rules : []
+    setRules(r.map((x, i) => ({
+      id: x.id || `r${i}_${Date.now()}`,
+      keyword: x.keyword || '',
+      workflowId: x.workflowId || '',
+    })))
+    setDefaultWorkflowId(pitchprfctRules?.defaultWorkflowId || '')
+  }, [rulesKey])
+
+  // Pull the agent's real PitchPrfct workflows through the Worker proxy.
+  useEffect(() => {
+    let cancelled = false
+    setWfState('loading'); setWfError('')
+    fetch(`${WORKER_URL}/pp-workflows`)
+      .then(async (resp) => {
+        let data = null
+        try { data = await resp.json() } catch { data = null }
+        if (!resp.ok) throw new Error((data && data.error) || `HTTP ${resp.status}`)
+        if (data == null) throw new Error('Worker returned no data — deploy the v4.6 worker and set PITCHPRFCT_API_KEY.')
+        const raw = Array.isArray(data) ? data
+          : (data.data || data.workflows || data.items || data.results || [])
+        const list = (Array.isArray(raw) ? raw : []).map(w => ({
+          id: String(w.id ?? w.uuid ?? w.workflowId ?? ''),
+          name: String(w.name ?? w.title ?? w.label ?? 'Untitled workflow'),
+        })).filter(w => w.id)
+        if (!cancelled) { setWorkflows(list); setWfState('ok') }
+      })
+      .catch((e) => { if (!cancelled) { setWfError(String(e.message || e)); setWfState('error') } })
+    return () => { cancelled = true }
+  }, [reloadKey])
+
+  const wfName = (id) => (workflows.find(w => w.id === id) || {}).name || ''
+  const addRule = () => setRules(rs => [...rs, { id: `r${Date.now()}`, keyword: '', workflowId: '' }])
+  const removeRule = (id) => setRules(rs => rs.filter(r => r.id !== id))
+  const patchRule = (id, patch) => setRules(rs => rs.map(r => r.id === id ? { ...r, ...patch } : r))
+
+  const save = async () => {
+    setSaving(true); setMsg(null)
+    const cleanRules = rules
+      .filter(r => r.keyword.trim() && r.workflowId)
+      .map(r => ({ id: r.id, keyword: r.keyword.trim(), workflowId: r.workflowId, workflowName: wfName(r.workflowId) }))
+    const res = await savePitchprfctRules({
+      rules: cleanRules,
+      defaultWorkflowId,
+      defaultWorkflowName: wfName(defaultWorkflowId),
+    })
+    setSaving(false)
+    if (res && res.ok) setMsg({ type: 'success', text: 'Saved — new leads enroll automatically.' })
+    else setMsg({ type: 'error', text: 'Save failed: ' + ((res && res.error) || 'unknown error') })
+  }
+
+  const selectCls = 'min-w-0 flex-1 bg-[#080B0F] border border-[#1A2130] text-white text-sm rounded-lg px-2 py-2 focus:outline-none focus:border-[#00E5C340]'
+  const workflowSelect = (value, onChange) => (
+    <select value={value} onChange={e => onChange(e.target.value)}
+      disabled={wfState !== 'ok'} className={selectCls}>
+      <option value="">— none —</option>
+      {workflows.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+      {value && !workflows.some(w => w.id === value) && <option value={value}>(saved workflow)</option>}
+    </select>
+  )
+
+  return (
+    <div className="rounded-xl border border-[#1A2130] p-5" style={{ background: '#0D1117' }}>
+      <div className="mb-4">
+        <h2 className="text-xs font-mono uppercase tracking-wider text-[#5A6A7A] flex items-center gap-2">
+          <Zap size={12} /> PitchPrfct Automation
+        </h2>
+        <p className="text-xs text-[#3A4A5A] mt-1">
+          When a new lead lands it's pushed into PitchPrfct and enrolled in a workflow. The workflow is
+          chosen by what the lead's marketplace comments contain — the top rule that matches wins.
+        </p>
+      </div>
+
+      {wfState === 'loading' && (
+        <div className="mb-3 px-3 py-2 rounded-lg text-xs text-[#8899AA] border border-[#1A2130]" style={{ background: '#080B0F' }}>
+          Loading your PitchPrfct workflows…
+        </div>
+      )}
+      {wfState === 'error' && (
+        <div className="mb-3 px-3 py-2 rounded-lg text-xs border border-red-500/20 bg-red-500/10 text-red-400 flex items-center gap-2">
+          <AlertTriangle size={13} className="flex-shrink-0" />
+          <span className="flex-1">Couldn't load workflows: {wfError}</span>
+          <button onClick={() => setReloadKey(k => k + 1)} className="underline hover:text-white flex-shrink-0">Retry</button>
+        </div>
+      )}
+      {wfState === 'ok' && workflows.length === 0 && (
+        <div className="mb-3 px-3 py-2 rounded-lg text-xs border border-amber-500/20 bg-amber-500/10 text-amber-400">
+          No workflows found in PitchPrfct. Create one there first, then hit Retry.
+        </div>
+      )}
+
+      {/* Default / generic workflow */}
+      <div className="rounded-lg border border-[#1A2130] p-3 mb-3" style={{ background: '#080B0F' }}>
+        <p className="text-sm text-white mb-0.5">Default workflow</p>
+        <p className="text-xs text-[#5A6A7A] mb-2">Every lead that doesn't match a keyword rule below goes here.</p>
+        <div className="flex">{workflowSelect(defaultWorkflowId, setDefaultWorkflowId)}</div>
+      </div>
+
+      {/* Keyword rules */}
+      <p className="text-xs font-mono uppercase tracking-wider text-[#5A6A7A] mb-2">Keyword rules</p>
+      <div className="space-y-2 mb-3">
+        {rules.length === 0 && (
+          <div className="border border-dashed border-[#1A2130] rounded-lg py-4 text-center text-xs text-[#5A6A7A]">
+            No rules yet — every lead uses the default workflow. Add a rule to route specific leads.
+          </div>
+        )}
+        {rules.map(r => (
+          <div key={r.id} className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs text-[#5A6A7A] flex-shrink-0">Comments contain</span>
+            <input value={r.keyword} onChange={e => patchRule(r.id, { keyword: e.target.value })}
+              placeholder="e.g. ACN"
+              className="w-32 px-2 py-2 rounded-lg text-sm text-white bg-[#080B0F] border border-[#1A2130] focus:outline-none focus:border-[#00E5C340]" />
+            <span className="text-xs text-[#5A6A7A] flex-shrink-0">enroll in</span>
+            {workflowSelect(r.workflowId, (v) => patchRule(r.id, { workflowId: v }))}
+            <button onClick={() => removeRule(r.id)}
+              className="p-1.5 rounded text-[#3A4A5A] hover:text-[#EF4444] hover:bg-[#EF444415] flex-shrink-0">
+              <Trash2 size={13} />
+            </button>
+          </div>
+        ))}
+      </div>
+
+      <div className="flex items-center gap-2">
+        <button onClick={addRule}
+          className="px-3 py-2 rounded-lg text-xs font-medium border border-[#1A2130] text-[#8899AA] hover:text-white">
+          <Plus size={12} className="inline -mt-0.5" /> Add rule
+        </button>
+        <button onClick={save} disabled={saving}
+          className="px-4 py-2 rounded-lg text-xs font-semibold text-black disabled:opacity-40 ml-auto"
+          style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
+          {saving ? 'Saving…' : 'Save rules'}
+        </button>
+      </div>
+
+      {msg && (
+        <div className={`mt-3 px-3 py-2 rounded-lg flex items-center gap-2 text-xs ${
+          msg.type === 'success' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+          : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}>
+          {msg.type === 'success' ? <CheckCircle size={13} /> : <AlertTriangle size={13} />}
+          {msg.text}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function Settings() {
   const { user, profile, leads, tags, addTag, updateTag, deleteTag, reorderTags, isRunner, isAdmin, splitNotes, setSplitNotes, pipelineCardFields, setPipelineCardFields } = useApp()
   const [dragId, setDragId] = useState(null)
@@ -1221,6 +1390,9 @@ export default function Settings() {
 
       {/* Integrations — bookmarklets / webhooks for external tools */}
       {!isRunner && <IntegrationsPanel />}
+
+      {/* PitchPrfct Automation — campaign/comment → workflow enrollment rules */}
+      {!isRunner && <PitchPerfectPanel />}
 
       {/* Calendar — Google Calendar shortcuts for reminders */}
       <CalendarPanel />

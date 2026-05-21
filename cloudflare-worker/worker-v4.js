@@ -1,4 +1,4 @@
-// Infinite CRM Email Worker — v4.5 (rich USHA parsing + instant PitchPrfct SMS, zero-dep)
+// Infinite CRM Email Worker — v4.6 (rich USHA parsing + PitchPrfct workflow enrollment, zero-dep)
 //
 // Deploys via the Cloudflare Workers REST API with NO bundler — every helper
 // inlined here. Handles two paths:
@@ -10,9 +10,10 @@
 //   v3-debug only parsed ~9 fields. DOB, income, household, age, age_range,
 //   gender, smoker, comments etc. were silently dropped. v4 captures them all.
 //
-// v4.5: when a brand-new lead is inserted, the email() path fires ONE instant
-//   speed-to-lead SMS to the lead via the PitchPrfct API (no Make.com). See the
-//   "PitchPrfct instant SMS" section below.
+// v4.6: when a brand-new lead is inserted, the email() path pushes it into
+//   PitchPrfct as a contact and enrolls it in a workflow. Which workflow is
+//   chosen by matching the lead's marketplace comments against keyword rules
+//   the agent sets in CRM Settings. See "PitchPrfct workflow enrollment" below.
 
 const AGENT_ROUTING = {
   'murray-leads@infinite-crm.net':   '01ef1bd7-f5d1-4279-bf9b-15a02eec5f4a',
@@ -317,75 +318,156 @@ function sanitizeForInsert(lead) {
   return out
 }
 
-// ─── PitchPrfct instant SMS ────────────────────────────────────────────────
-// The moment a brand-new lead is inserted, fire ONE speed-to-lead text to the
-// lead by calling PitchPrfct's REST API directly (no Make.com). PitchPrfct
-// creates the conversation thread automatically, so the lead also shows up in
-// the Conversations tab. Only genuinely NEW leads are texted — duplicate
-// re-sends fall through to the "touch" branch and are never re-texted.
+// ─── PitchPrfct workflow enrollment ────────────────────────────────────────
+// The moment a brand-new lead is inserted, push it into PitchPrfct as a contact
+// and enroll that contact in a workflow — PitchPrfct then runs whatever the
+// workflow does (texts, calls, drips). No Make.com.
 //
-// To turn this on for another agent: add their lead inbox + PitchPrfct number
-// to PITCHPRFCT_FROM_BY_INBOX and their first name to AGENT_FIRST_NAME. A lead
-// inbox with no number here simply doesn't get texted.
+// Which workflow? It's decided by scanning the lead's marketplace comments for
+// keyword rules the agent configures in CRM Settings → "PitchPrfct Automation".
+// Those rules live on the agent's profile row (profiles.pitchprfct_rules) and
+// are read live here, so the agent can change them with zero code edits.
+// No keyword match → the agent's default/generic workflow.
+//
+// An agent with no rules configured is simply skipped — this is the on/off
+// switch (configure rules in Settings = on).
 const PITCHPRFCT_API = 'https://app.pitchprfct.com/api/v1'
 
-// PitchPrfct texting number per lead inbox. Numbers must be owned by the
-// PitchPrfct account the API key belongs to. E.164 format (+1XXXXXXXXXX).
-const PITCHPRFCT_FROM_BY_INBOX = {
-  'murray-leads@infinite-crm.net': '+13213361509',
-}
-// First name used to sign the text, per lead inbox.
-const AGENT_FIRST_NAME = {
-  'murray-leads@infinite-crm.net': 'Nic',
-}
-
-// >>> EDIT THIS to change the wording of the auto-text >>>
-function buildLeadText(lead, agentName) {
-  const first = String(lead.first_name || '').trim() || 'there'
-  return `Hi ${first}, it's ${agentName} with Murray Health Advising — I just `
-       + `got your request for health coverage info. I'll give you a quick call `
-       + `shortly; if now's not a good time, text me back a better time to reach `
-       + `you. Reply STOP to opt out.`
-}
-// <<< EDIT THIS to change the wording of the auto-text <<<
-
-async function sendPitchText(env, inbox, lead) {
-  const fromNumber = PITCHPRFCT_FROM_BY_INBOX[inbox]
-  if (!fromNumber) return  // this inbox isn't enabled for auto-texting
-  if (!env.PITCHPRFCT_API_KEY) {
-    console.error('[sms] PITCHPRFCT_API_KEY secret not set — skipping')
-    return
-  }
-  // parseLead() already normalizes phone to +1XXXXXXXXXX. Require valid E.164.
-  if (!lead.phone || !String(lead.phone).startsWith('+')) {
-    console.log('[sms] no valid E.164 phone — skipping', lead.phone || '(none)')
-    return
-  }
-  const agentName = AGENT_FIRST_NAME[inbox] || 'your agent'
+// Pull the agent's keyword→workflow rules off their profile row. Shape:
+//   { rules: [{ keyword, workflowId, workflowName }],
+//     defaultWorkflowId, defaultWorkflowName }
+async function getProfileRules(env, userId) {
   try {
-    const resp = await fetch(`${PITCHPRFCT_API}/messages`, {
-      method: 'POST',
-      headers: {
-        'x-api-key': env.PITCHPRFCT_API_KEY,
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
-        toNumber: lead.phone,
-        fromNumber,
-        content: buildLeadText(lead, agentName),
-      }),
-    })
-    const text = await resp.text()
-    if (resp.ok) {
-      console.log('[sms] sent to', lead.phone, '— status', resp.status)
-    } else {
-      // 402 = out of SMS credits, 403 = fromNumber not owned by the account,
-      // 400 = bad phone format or contact already opted out.
-      console.error('[sms] send FAILED', resp.status, text.slice(0, 500))
+    const r = await fetch(
+      `${env.SUPABASE_URL}/rest/v1/profiles?user_id=eq.${encodeURIComponent(userId)}&select=pitchprfct_rules`,
+      { headers: { apikey: env.SUPABASE_SERVICE_KEY, authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}` } }
+    )
+    if (!r.ok) { console.error('[pp] getProfileRules HTTP', r.status); return null }
+    const rows = await r.json()
+    return (Array.isArray(rows) && rows[0] && rows[0].pitchprfct_rules) || null
+  } catch (e) { console.error('[pp] getProfileRules threw', String(e)); return null }
+}
+
+// Decide the workflow ID by scanning the lead's marketplace comments for the
+// agent's keywords. First rule that matches wins; otherwise the default.
+function pickWorkflowId(rules, lead) {
+  const hay = String(lead.comments || '').toLowerCase()
+  const list = Array.isArray(rules && rules.rules) ? rules.rules : []
+  for (const rule of list) {
+    const kw = String((rule && rule.keyword) || '').trim().toLowerCase()
+    if (kw && rule.workflowId && hay.includes(kw)) {
+      return { id: rule.workflowId, why: `comments matched "${rule.keyword}"` }
     }
-  } catch (e) {
-    console.error('[sms] send EXCEPTION', String(e))
   }
+  if (rules && rules.defaultWorkflowId) {
+    return { id: rules.defaultWorkflowId, why: 'no keyword match — default workflow' }
+  }
+  return null
+}
+
+// Dig the contact UUID out of PitchPrfct's create-contact response, tolerating
+// a few likely JSON shapes (the API docs don't pin the response body down).
+function extractContactUuid(text) {
+  try {
+    const j = JSON.parse(text)
+    return j && (j.uuid || j.id || (j.data && (j.data.uuid || j.data.id))
+      || (j.contact && (j.contact.uuid || j.contact.id))) || null
+  } catch { return null }
+}
+
+// Look an existing contact up by phone (used when create-contact returns 409
+// "phone already exists") so we can still get its UUID to enroll.
+async function findContactByPhone(env, phone) {
+  try {
+    const r = await fetch(
+      `${PITCHPRFCT_API}/contacts?search=${encodeURIComponent(phone)}&take=5`,
+      { headers: { 'x-api-key': env.PITCHPRFCT_API_KEY } }
+    )
+    if (!r.ok) { console.error('[pp] findContactByPhone HTTP', r.status); return null }
+    const j = await r.json()
+    const list = Array.isArray(j) ? j : ((j && (j.data || j.contacts)) || [])
+    const digits = String(phone).replace(/\D/g, '')
+    for (const c of list) {
+      const cd = String((c && (c.phoneNumber || c.phone)) || '').replace(/\D/g, '')
+      if (cd && (cd === digits || cd.endsWith(digits) || digits.endsWith(cd))) {
+        return c.uuid || c.id || null
+      }
+    }
+    return list[0] ? (list[0].uuid || list[0].id || null) : null
+  } catch (e) { console.error('[pp] findContactByPhone threw', String(e)); return null }
+}
+
+// Create the lead as a PitchPrfct contact (or find it if it already exists),
+// returning the contact UUID needed for workflow enrollment.
+async function createOrFindContact(env, lead) {
+  const payload = {
+    phoneNumber: lead.phone,
+    firstName: lead.first_name || undefined,
+    lastName:  lead.last_name || undefined,
+    email:     lead.email || undefined,
+    city:      lead.city || undefined,
+    state:     lead.state || undefined,
+    zipCode:   lead.zip || undefined,
+    tags:      ['Infinite CRM', lead.campaign].filter(Boolean),
+  }
+  let r
+  try {
+    r = await fetch(`${PITCHPRFCT_API}/contacts`, {
+      method: 'POST',
+      headers: { 'x-api-key': env.PITCHPRFCT_API_KEY, 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+  } catch (e) { console.error('[pp] createContact threw', String(e)); return null }
+  const text = await r.text()
+  if (r.ok) {
+    const uuid = extractContactUuid(text)
+    if (uuid) { console.log('[pp] contact created', uuid); return uuid }
+    console.error('[pp] contact created but no UUID in response:', text.slice(0, 400))
+  }
+  // 409 = phone already a contact. Any other failure: still try to find it.
+  if (r.status !== 200 && r.status !== 201) {
+    if (r.status !== 409) console.error('[pp] createContact failed', r.status, text.slice(0, 300))
+    const found = await findContactByPhone(env, lead.phone)
+    if (found) { console.log('[pp] contact found by phone', found); return found }
+  }
+  return null
+}
+
+// Enroll a contact into a workflow.
+async function enrollInWorkflow(env, workflowId, contactUuid) {
+  try {
+    const r = await fetch(`${PITCHPRFCT_API}/workflows/${encodeURIComponent(workflowId)}/enroll`, {
+      method: 'POST',
+      headers: { 'x-api-key': env.PITCHPRFCT_API_KEY, 'content-type': 'application/json' },
+      body: JSON.stringify({ contactUuid }),
+    })
+    const text = await r.text()
+    if (r.ok) {
+      console.log('[pp] ENROLLED contact', contactUuid, 'in workflow', workflowId)
+    } else {
+      // 400 = workflow not active, 404 = workflow or contact not found.
+      console.error('[pp] enroll FAILED', r.status, text.slice(0, 300))
+    }
+    return r.ok
+  } catch (e) { console.error('[pp] enroll threw', String(e)); return false }
+}
+
+// Orchestrator — called once per brand-new lead from the email() handler.
+// Best-effort: any failure here is logged but never breaks lead insertion.
+async function enrollLeadInPitch(env, userId, lead) {
+  if (!env.PITCHPRFCT_API_KEY) { console.log('[pp] PITCHPRFCT_API_KEY not set — skipping'); return }
+  if (!lead.phone || !String(lead.phone).startsWith('+')) {
+    console.log('[pp] lead has no valid phone — skipping'); return
+  }
+  const rules = await getProfileRules(env, userId)
+  const hasRules = rules && (rules.defaultWorkflowId || (Array.isArray(rules.rules) && rules.rules.length))
+  if (!hasRules) { console.log('[pp] no workflow rules for this agent — skipping'); return }
+  const pick = pickWorkflowId(rules, lead)
+  if (!pick) { console.log('[pp] no workflow matched and no default set — skipping'); return }
+  console.log('[pp]', pick.why, '→ workflow', pick.id)
+  const contactUuid = await createOrFindContact(env, lead)
+  if (!contactUuid) { console.error('[pp] no contact UUID — cannot enroll'); return }
+  await enrollInWorkflow(env, pick.id, contactUuid)
 }
 
 // ─── Worker entry points ───────────────────────────────────────────────────
@@ -395,6 +477,29 @@ export default {
     // CORS preflight
     if (req.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: CORS })
+    }
+    // Workflow-list proxy — lets the CRM Settings panel show a dropdown of the
+    // agent's real PitchPrfct workflows WITHOUT the API key ever touching the
+    // browser. The key stays here as a Worker secret.
+    if (req.method === 'GET' && url.pathname === '/pp-workflows') {
+      if (!env.PITCHPRFCT_API_KEY) {
+        return new Response(JSON.stringify({ error: 'PITCHPRFCT_API_KEY not set on worker' }), {
+          status: 500, headers: { 'content-type': 'application/json', ...CORS },
+        })
+      }
+      try {
+        const r = await fetch(`${PITCHPRFCT_API}/workflows?take=200`, {
+          headers: { 'x-api-key': env.PITCHPRFCT_API_KEY },
+        })
+        const text = await r.text()
+        return new Response(text, {
+          status: r.status, headers: { 'content-type': 'application/json', ...CORS },
+        })
+      } catch (e) {
+        return new Response(JSON.stringify({ error: String(e) }), {
+          status: 502, headers: { 'content-type': 'application/json', ...CORS },
+        })
+      }
     }
     if (req.method !== 'POST' || !url.pathname.startsWith('/leads')) {
       return new Response('infinite-crm-webhook v4 — POST /leads?agent_id=UUID', {
@@ -466,9 +571,9 @@ export default {
       const result = await insertLead(env, lead)
       if (result.ok) {
         console.log('[email] INSERTED ok', { fields: Object.keys(lead) })
-        // Brand-new lead → fire the instant speed-to-lead text. Duplicates fall
-        // through to the touch branch below and are intentionally NOT texted.
-        await sendPitchText(env, recipient, lead)
+        // Brand-new lead → push to PitchPrfct + enroll in a workflow. Duplicates
+        // fall through to the touch branch below and are NOT re-enrolled.
+        await enrollLeadInPitch(env, userId, lead)
       } else if (isDuplicate(result) && lead.phone) {
         // USHA forwarded the same lead twice (e.g. via Gmail filter AND directly
         // to murray-leads@). Bump last_activity on the existing row instead of

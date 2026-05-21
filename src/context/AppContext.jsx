@@ -542,6 +542,32 @@ export function AppProvider({ children }) {
     try { await supabase.from('profiles').update({ split_notes: !!next }).eq('user_id', uid) } catch {}
   }
 
+  // PitchPrfct workflow automation — per-agent rules, stored as JSONB on
+  // profiles.pitchprfct_rules. The email Worker reads this live: when a new
+  // lead lands, it scans the lead's marketplace comments for a rule keyword
+  // and enrolls the lead into the matched PitchPrfct workflow (or the default).
+  // Shape: { rules: [{ id, keyword, workflowId, workflowName }],
+  //          defaultWorkflowId, defaultWorkflowName }
+  const PITCHPRFCT_RULES_DEFAULT = { rules: [], defaultWorkflowId: '', defaultWorkflowName: '' }
+  const pitchprfctRules = (profile?.pitchprfct_rules && typeof profile.pitchprfct_rules === 'object')
+    ? { ...PITCHPRFCT_RULES_DEFAULT, ...profile.pitchprfct_rules }
+    : PITCHPRFCT_RULES_DEFAULT
+  const savePitchprfctRules = async (next) => {
+    const uid = session?.user?.id
+    if (!uid) return { ok: false, error: 'Not signed in' }
+    const clean = {
+      rules: Array.isArray(next?.rules) ? next.rules : [],
+      defaultWorkflowId: next?.defaultWorkflowId || '',
+      defaultWorkflowName: next?.defaultWorkflowName || '',
+    }
+    setProfile(p => p ? { ...p, pitchprfct_rules: clean } : p)
+    try {
+      const { error } = await supabase.from('profiles').update({ pitchprfct_rules: clean }).eq('user_id', uid)
+      if (error) { console.error('savePitchprfctRules failed:', error); return { ok: false, error: error.message } }
+      return { ok: true }
+    } catch (e) { console.error('savePitchprfctRules threw:', e); return { ok: false, error: String(e) } }
+  }
+
   // Commission structure — per-agent JSONB on profiles. Stored shape:
   //   { default_advance, products: [{ key, name, comm_pct, advance_months, half, association }] }
   // For backwards compatibility, also accepts a legacy array of products.
@@ -716,6 +742,7 @@ export function AppProvider({ children }) {
       pipelineCardFields, setPipelineCardFields,
       sideTagStyles, setSideTagStyles,
       campaigns, saveCampaigns,
+      pitchprfctRules, savePitchprfctRules,
       // reminders (Today page)
       reminders, refreshReminders, addReminder, completeReminder, uncompleteReminder, snoozeReminder, deleteReminder,
       // commission entries (Calculator weekly tracker)
