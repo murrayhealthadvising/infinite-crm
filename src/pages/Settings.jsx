@@ -1134,11 +1134,16 @@ function PitchPerfectPanel() {
         try { data = await resp.json() } catch { data = null }
         if (!resp.ok) throw new Error((data && data.error) || `HTTP ${resp.status}`)
         if (data == null) throw new Error('Worker returned no data — deploy the v4.6 worker and set PITCHPRFCT_API_KEY.')
+        // PitchPrfct shape: { status, message, data: { rows: [...], metadata } }.
+        // Stay tolerant of a couple other shapes too.
+        const container = (data && data.data) || data || {}
         const raw = Array.isArray(data) ? data
-          : (data.data || data.workflows || data.items || data.results || [])
+          : Array.isArray(container) ? container
+          : (container.rows || container.workflows || container.items || container.results || [])
         const list = (Array.isArray(raw) ? raw : []).map(w => ({
           id: String(w.id ?? w.uuid ?? w.workflowId ?? ''),
           name: String(w.name ?? w.title ?? w.label ?? 'Untitled workflow'),
+          status: String(w.status ?? '').toLowerCase(),
         })).filter(w => w.id)
         if (!cancelled) { setWorkflows(list); setWfState('ok') }
       })
@@ -1171,7 +1176,11 @@ function PitchPerfectPanel() {
     <select value={value} onChange={e => onChange(e.target.value)}
       disabled={wfState !== 'ok'} className={selectCls}>
       <option value="">— none —</option>
-      {workflows.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+      {workflows.map(w => (
+        <option key={w.id} value={w.id}>
+          {w.name}{w.status && w.status !== 'active' ? ` — ${w.status}` : ''}
+        </option>
+      ))}
       {value && !workflows.some(w => w.id === value) && <option value={value}>(saved workflow)</option>}
     </select>
   )
@@ -1204,6 +1213,11 @@ function PitchPerfectPanel() {
         <div className="mb-3 px-3 py-2 rounded-lg text-xs border border-amber-500/20 bg-amber-500/10 text-amber-400">
           No workflows found in PitchPrfct. Create one there first, then hit Retry.
         </div>
+      )}
+      {wfState === 'ok' && workflows.length > 0 && (
+        <p className="text-[11px] text-[#5A6A7A] mb-3">
+          Only <span className="text-[#8899AA]">active</span> workflows enroll leads — paused ones are labeled and PitchPrfct will reject them.
+        </p>
       )}
 
       {/* Default / generic workflow */}
