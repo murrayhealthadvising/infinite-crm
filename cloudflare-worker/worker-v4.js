@@ -1,4 +1,4 @@
-// Infinite CRM Email Worker — v4 (rich USHA parsing, zero-dep)
+// Infinite CRM Email Worker — v4.5 (rich USHA parsing + instant PitchPrfct SMS, zero-dep)
 //
 // Deploys via the Cloudflare Workers REST API with NO bundler — every helper
 // inlined here. Handles two paths:
@@ -9,6 +9,10 @@
 // Why this exists:
 //   v3-debug only parsed ~9 fields. DOB, income, household, age, age_range,
 //   gender, smoker, comments etc. were silently dropped. v4 captures them all.
+//
+// v4.5: when a brand-new lead is inserted, the email() path fires ONE instant
+//   speed-to-lead SMS to the lead via the PitchPrfct API (no Make.com). See the
+//   "PitchPrfct instant SMS" section below.
 
 const AGENT_ROUTING = {
   'murray-leads@infinite-crm.net':   '01ef1bd7-f5d1-4279-bf9b-15a02eec5f4a',
@@ -313,6 +317,77 @@ function sanitizeForInsert(lead) {
   return out
 }
 
+// ─── PitchPrfct instant SMS ────────────────────────────────────────────────
+// The moment a brand-new lead is inserted, fire ONE speed-to-lead text to the
+// lead by calling PitchPrfct's REST API directly (no Make.com). PitchPrfct
+// creates the conversation thread automatically, so the lead also shows up in
+// the Conversations tab. Only genuinely NEW leads are texted — duplicate
+// re-sends fall through to the "touch" branch and are never re-texted.
+//
+// To turn this on for another agent: add their lead inbox + PitchPrfct number
+// to PITCHPRFCT_FROM_BY_INBOX and their first name to AGENT_FIRST_NAME. A lead
+// inbox with no number here simply doesn't get texted.
+const PITCHPRFCT_API = 'https://app.pitchprfct.com/api/v1'
+
+// PitchPrfct texting number per lead inbox. Numbers must be owned by the
+// PitchPrfct account the API key belongs to. E.164 format (+1XXXXXXXXXX).
+const PITCHPRFCT_FROM_BY_INBOX = {
+  'murray-leads@infinite-crm.net': '+13213361509',
+}
+// First name used to sign the text, per lead inbox.
+const AGENT_FIRST_NAME = {
+  'murray-leads@infinite-crm.net': 'Nic',
+}
+
+// >>> EDIT THIS to change the wording of the auto-text >>>
+function buildLeadText(lead, agentName) {
+  const first = String(lead.first_name || '').trim() || 'there'
+  return `Hi ${first}, it's ${agentName} with Murray Health Advising — I just `
+       + `got your request for health coverage info. I'll give you a quick call `
+       + `shortly; if now's not a good time, text me back a better time to reach `
+       + `you. Reply STOP to opt out.`
+}
+// <<< EDIT THIS to change the wording of the auto-text <<<
+
+async function sendPitchText(env, inbox, lead) {
+  const fromNumber = PITCHPRFCT_FROM_BY_INBOX[inbox]
+  if (!fromNumber) return  // this inbox isn't enabled for auto-texting
+  if (!env.PITCHPRFCT_API_KEY) {
+    console.error('[sms] PITCHPRFCT_API_KEY secret not set — skipping')
+    return
+  }
+  // parseLead() already normalizes phone to +1XXXXXXXXXX. Require valid E.164.
+  if (!lead.phone || !String(lead.phone).startsWith('+')) {
+    console.log('[sms] no valid E.164 phone — skipping', lead.phone || '(none)')
+    return
+  }
+  const agentName = AGENT_FIRST_NAME[inbox] || 'your agent'
+  try {
+    const resp = await fetch(`${PITCHPRFCT_API}/messages`, {
+      method: 'POST',
+      headers: {
+        'x-api-key': env.PITCHPRFCT_API_KEY,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        toNumber: lead.phone,
+        fromNumber,
+        content: buildLeadText(lead, agentName),
+      }),
+    })
+    const text = await resp.text()
+    if (resp.ok) {
+      console.log('[sms] sent to', lead.phone, '— status', resp.status)
+    } else {
+      // 402 = out of SMS credits, 403 = fromNumber not owned by the account,
+      // 400 = bad phone format or contact already opted out.
+      console.error('[sms] send FAILED', resp.status, text.slice(0, 500))
+    }
+  } catch (e) {
+    console.error('[sms] send EXCEPTION', String(e))
+  }
+}
+
 // ─── Worker entry points ───────────────────────────────────────────────────
 export default {
   async fetch(req, env) {
@@ -391,6 +466,9 @@ export default {
       const result = await insertLead(env, lead)
       if (result.ok) {
         console.log('[email] INSERTED ok', { fields: Object.keys(lead) })
+        // Brand-new lead → fire the instant speed-to-lead text. Duplicates fall
+        // through to the touch branch below and are intentionally NOT texted.
+        await sendPitchText(env, recipient, lead)
       } else if (isDuplicate(result) && lead.phone) {
         // USHA forwarded the same lead twice (e.g. via Gmail filter AND directly
         // to murray-leads@). Bump last_activity on the existing row instead of
