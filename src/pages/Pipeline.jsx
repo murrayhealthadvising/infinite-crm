@@ -83,18 +83,18 @@ function PipelineCard({ lead, onDragStart, onDragEnd, onClick }) {
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
       onClick={onClick}
-      className="p-3 rounded-xl border cursor-pointer transition-all group hover:shadow-lg"
+      className="p-3 rounded-[12px] border cursor-pointer transition-all group hover:shadow-lg"
       style={{ background: '#080B0F', borderColor: sColor + '30' }}>
       <div className="flex items-start justify-between gap-2 mb-2">
         <div className="flex items-center gap-2 min-w-0 flex-1">
-          <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
+          <div className="w-7 h-7 rounded-[9999px] flex items-center justify-center text-xs font-bold flex-shrink-0"
             style={{ background: sColor + '25', color: sColor }}>
             {leadInitials(lead)}
           </div>
           <p className="text-sm font-medium text-white group-hover:text-[#00E5C3] transition-colors truncate">{leadName(lead)}</p>
         </div>
         {fields.time_in_stage !== false && inStage && (
-          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded flex-shrink-0"
+          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-[4px] flex-shrink-0"
             style={{ background: sColor + '15', color: sColor, border: `1px solid ${sColor}40` }}
             title={`In ${stage.label || 'stage'} for ${inStage}`}>
             {inStage}
@@ -135,14 +135,14 @@ function PipelineCard({ lead, onDragStart, onDragEnd, onClick }) {
 
       <div className="flex items-center gap-1.5 flex-wrap">
         {fields.comments !== false && lead.comments && (
-          <span className="text-[10px] px-1.5 py-0.5 rounded font-mono max-w-[140px] truncate"
+          <span className="text-[10px] px-1.5 py-0.5 rounded-[4px] font-mono max-w-[140px] truncate"
             title={lead.comments}
             style={{ background: '#F59E0B15', color: '#F59E0B', border: '1px solid #F59E0B30' }}>
             {lead.comments}
           </span>
         )}
         {fields.campaign && lead.campaign && (
-          <span className="text-[10px] px-1.5 py-0.5 rounded font-mono max-w-[140px] truncate"
+          <span className="text-[10px] px-1.5 py-0.5 rounded-[4px] font-mono max-w-[140px] truncate"
             style={{ background: sColor + '15', color: sColor }}>
             {lead.campaign}
           </span>
@@ -421,7 +421,7 @@ export default function Pipeline() {
               <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[#5A6A7A]" />
               <input value={search} onChange={e => setSearch(e.target.value)}
                 placeholder="Search name, phone, tag…"
-                className="bg-[#0E1318] border border-[#1A2130] rounded-lg pl-8 pr-7 py-1.5 text-xs text-white placeholder-[#3A4A5A] focus:outline-none focus:border-[#00E5C340] w-56" />
+                className="bg-[#0E1318] border border-[#1A2130] rounded-[8px] pl-8 pr-7 py-1.5 text-xs text-white placeholder-[#3A4A5A] focus:outline-none focus:border-[#00E5C340] w-56" />
               {search && (
                 <button onClick={() => setSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-[#5A6A7A] hover:text-white">
                   <X size={11} />
@@ -430,7 +430,7 @@ export default function Pipeline() {
             </div>
             {/* Sort dropdown */}
             <select value={sortBy} onChange={e => setSortBy(e.target.value)}
-              className="bg-[#0E1318] border border-[#1A2130] rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-[#00E5C340]">
+              className="bg-[#0E1318] border border-[#1A2130] rounded-[8px] px-2 py-1.5 text-xs text-white focus:outline-none focus:border-[#00E5C340]">
               <option value="stage_newest">Newest in stage</option>
               <option value="stage_oldest">Oldest in stage</option>
               <option value="created_newest">Newest lead</option>
@@ -441,7 +441,7 @@ export default function Pipeline() {
             </select>
             {/* Filters toggle */}
             <button onClick={() => setShowFilters(v => !v)}
-              className="px-2.5 py-1.5 rounded-lg text-xs border transition-colors"
+              className="px-2.5 py-1.5 rounded-[8px] text-xs border transition-colors"
               style={activeCount > 0
                 ? { background: '#A78BFA15', color: '#A78BFA', borderColor: '#A78BFA60' }
                 : { color: '#8899AA', borderColor: '#1A2130' }}>
@@ -449,14 +449,14 @@ export default function Pipeline() {
             </button>
             {/* Collapse/Expand all stages */}
             <button onClick={() => collapsedStages.size === sortedTags.length ? expandAll() : collapseAll()}
-              className="px-2.5 py-1.5 rounded-lg text-xs border border-[#1A2130] text-[#8899AA] hover:text-white hover:border-[#2A3547] transition-colors"
+              className="px-2.5 py-1.5 rounded-[8px] text-xs border border-[#1A2130] text-[#8899AA] hover:text-white hover:border-[#2A3547] transition-colors"
               title={collapsedStages.size === sortedTags.length ? 'Expand all stages' : 'Collapse all stages'}>
               {collapsedStages.size === sortedTags.length ? 'Expand all' : 'Collapse all'}
             </button>
             {/* Refresh — pulls latest leads without reloading the page */}
             <button onClick={doRefresh}
               disabled={refreshing}
-              className="p-1.5 rounded-lg border border-[#1A2130] text-[#8899AA] hover:text-white hover:border-[#2A3547] transition-colors disabled:opacity-50"
+              className="p-1.5 rounded-[8px] border border-[#1A2130] text-[#8899AA] hover:text-white hover:border-[#2A3547] transition-colors disabled:opacity-50"
               title="Refresh leads">
               <RefreshCw size={13} className={refreshing ? 'animate-spin' : ''} />
             </button>
@@ -488,7 +488,7 @@ export default function Pipeline() {
                   return (
                     <button key={t}
                       onClick={() => setTagFilters(prev => { const n = new Set(prev); n.has(t) ? n.delete(t) : n.add(t); return n })}
-                      className="px-2.5 py-1 rounded-full text-xs font-mono"
+                      className="px-2.5 py-1 rounded-[9999px] text-xs font-mono"
                       style={active
                         ? { background: '#A78BFA15', color: '#A78BFA', border: '1px solid #A78BFA60' }
                         : { color: '#5A6A7A', border: '1px solid #1A2130' }}>
@@ -510,7 +510,7 @@ export default function Pipeline() {
                   return (
                     <button key={z}
                       onClick={() => setTzFilters(prev => { const n = new Set(prev); n.has(z) ? n.delete(z) : n.add(z); return n })}
-                      className="px-2.5 py-1 rounded-full text-xs font-mono"
+                      className="px-2.5 py-1 rounded-[9999px] text-xs font-mono"
                       style={active
                         ? { background: '#22D3EE15', color: '#22D3EE', border: '1px solid #22D3EE60' }
                         : { color: '#5A6A7A', border: '1px solid #1A2130' }}>
@@ -595,7 +595,7 @@ export default function Pipeline() {
                       if (dragStageId) handleColumnDrop(e, stage.id)
                       else handleDrop(stage.id)
                     }}
-                    className={clsx('flex flex-col rounded-xl border w-12 flex-shrink-0 transition-all overflow-hidden',
+                    className={clsx('flex flex-col rounded-[12px] border w-12 flex-shrink-0 transition-all overflow-hidden',
                       isColTargetOver && 'ring-2 ring-[#00E5C3]'
                     )}
                     style={{
@@ -607,8 +607,8 @@ export default function Pipeline() {
                     onClick={() => toggleStageCollapse(stage.id)}
                     title={`${stage.label} · ${stageLeads.length} — click to expand`}>
                     <div className="flex flex-col items-center gap-2 py-3 flex-1">
-                      <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: stage.color }} />
-                      <span className="text-xs font-mono text-white bg-[#1A2130] px-2 py-0.5 rounded-full flex-shrink-0">
+                      <div className="w-2.5 h-2.5 rounded-[9999px] flex-shrink-0" style={{ background: stage.color }} />
+                      <span className="text-xs font-mono text-white bg-[#1A2130] px-2 py-0.5 rounded-[9999px] flex-shrink-0">
                         {stageLeads.length}
                       </span>
                       {/* Vertical stage label */}
@@ -630,7 +630,7 @@ export default function Pipeline() {
               return (
                 <div key={stage.id}
                   data-kanban-col="1"
-                  className={clsx('flex flex-col rounded-xl border w-80 flex-shrink-0 transition-all',
+                  className={clsx('flex flex-col rounded-[12px] border w-80 flex-shrink-0 transition-all',
                     isCardDragOver ? 'border-opacity-100' : 'border-[#1A2130]',
                     isColTargetOver && 'ring-2 ring-[#00E5C3]'
                   )}
@@ -655,10 +655,10 @@ export default function Pipeline() {
                     title="Drag to reorder · click to collapse">
                     <div className="flex items-center gap-2">
                       <GripHorizontal size={12} className="text-[#3A4A5A] flex-shrink-0" />
-                      <div className="w-2.5 h-2.5 rounded-full" style={{ background: stage.color }} />
+                      <div className="w-2.5 h-2.5 rounded-[9999px]" style={{ background: stage.color }} />
                       <span className="text-xs font-mono uppercase tracking-wider" style={{ color: stage.color }}>{stage.label}</span>
                     </div>
-                    <span className="text-xs font-mono text-white bg-[#1A2130] px-2 py-0.5 rounded-full">{stageLeads.length}</span>
+                    <span className="text-xs font-mono text-white bg-[#1A2130] px-2 py-0.5 rounded-[9999px]">{stageLeads.length}</span>
                   </div>
                   {/* Cards (vertical scroll) */}
                   <div data-col-cards="1" className="flex-1 overflow-y-auto p-3 space-y-2">
@@ -669,7 +669,7 @@ export default function Pipeline() {
                         onClick={() => openDrawer(lead.id, stageLeads.map(l => l.id))} />
                     ))}
                     {stageLeads.length === 0 && (
-                      <div className={clsx('flex items-center justify-center h-16 border border-dashed rounded-lg transition-colors', isCardDragOver ? 'border-opacity-60' : 'border-[#1A2130]')}
+                      <div className={clsx('flex items-center justify-center h-16 border border-dashed rounded-[8px] transition-colors', isCardDragOver ? 'border-opacity-60' : 'border-[#1A2130]')}
                         style={{ borderColor: isCardDragOver ? stage.color : undefined }}>
                         <p className="text-xs" style={{ color: isCardDragOver ? stage.color : '#3A4A5A' }}>
                           {isCardDragOver ? 'Drop here' : 'Empty'}
@@ -695,13 +695,13 @@ export default function Pipeline() {
         {canScrollLeft && (
           <button
             onClick={() => scrollRef.current?.scrollBy({ left: -300, behavior: 'smooth' })}
-            className="absolute top-1/2 left-2 -translate-y-1/2 w-9 h-9 rounded-full bg-[#0E1318] border border-[#2A3547] text-[#8899AA] hover:text-white hover:bg-[#1A2130] flex items-center justify-center transition-colors z-10 shadow-lg"
+            className="absolute top-1/2 left-2 -translate-y-1/2 w-9 h-9 rounded-[9999px] bg-[#0E1318] border border-[#2A3547] text-[#8899AA] hover:text-white hover:bg-[#1A2130] flex items-center justify-center transition-colors z-10 shadow-lg"
             title="Scroll left">‹</button>
         )}
         {canScrollRight && (
           <button
             onClick={() => scrollRef.current?.scrollBy({ left: 300, behavior: 'smooth' })}
-            className="absolute top-1/2 right-2 -translate-y-1/2 w-9 h-9 rounded-full bg-[#0E1318] border border-[#2A3547] text-[#8899AA] hover:text-white hover:bg-[#1A2130] flex items-center justify-center transition-colors z-10 shadow-lg"
+            className="absolute top-1/2 right-2 -translate-y-1/2 w-9 h-9 rounded-[9999px] bg-[#0E1318] border border-[#2A3547] text-[#8899AA] hover:text-white hover:bg-[#1A2130] flex items-center justify-center transition-colors z-10 shadow-lg"
             title="Scroll right">›</button>
         )}
       </div>
