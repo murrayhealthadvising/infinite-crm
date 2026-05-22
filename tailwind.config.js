@@ -3,6 +3,12 @@ export default {
   content: ['./index.html', './src/**/*.{js,jsx}'],
   theme: {
     extend: {
+      // Sharp UI — every rounded-* utility resolves to 0, so the whole app
+      // renders with squared corners (cards, buttons, inputs, avatars, pills).
+      borderRadius: {
+        none: '0px', sm: '0px', DEFAULT: '0px', md: '0px',
+        lg: '0px', xl: '0px', '2xl': '0px', '3xl': '0px', full: '0px',
+      },
       fontFamily: {
         display: ['Syne', 'sans-serif'],
         body: ['DM Sans', 'sans-serif'],
