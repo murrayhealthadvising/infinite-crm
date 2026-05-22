@@ -914,7 +914,7 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
         <div className="flex flex-col gap-2 pt-0.5" onClick={e => e.stopPropagation()}>
           {lead.phone && (
             <a href={`tel:${lead.phone}`} onClick={e => e.stopPropagation()}
-              className="flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-black transition-opacity hover:opacity-80"
+              className="flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-[8px] text-xs font-semibold text-black transition-opacity hover:opacity-80"
               style={{ background: `linear-gradient(135deg, ${safeColor}, ${safeColor}AA)` }}>
               <Phone size={12} /> Call
             </a>

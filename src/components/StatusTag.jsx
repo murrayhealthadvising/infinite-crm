@@ -14,13 +14,13 @@ export default function StatusTag({ stage, status, size = 'sm', small, onClick }
   return (
     <span onClick={onClick}
       className={clsx(
-        'inline-flex items-center gap-1 rounded-full font-mono uppercase tracking-wider',
+        'inline-flex items-center gap-1 rounded-[9999px] font-mono uppercase tracking-wider',
         effectiveSize === 'sm' && 'text-[10px] px-2 py-0.5',
         effectiveSize === 'md' && 'text-xs px-3 py-1',
         onClick && 'cursor-pointer hover:opacity-80 transition-opacity'
       )}
       style={{ background: safeBg, color: safeColor, border: `1px solid ${safeColor}40` }}>
-      <span className="w-1.5 h-1.5 rounded-full" style={{ background: safeColor }} />
+      <span className="w-1.5 h-1.5 rounded-[9999px]" style={{ background: safeColor }} />
       {label}
     </span>
   )

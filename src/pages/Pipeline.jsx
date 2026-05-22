@@ -112,7 +112,7 @@ function PipelineCard({ lead, onDragStart, onDragEnd, onClick }) {
         <div className="flex items-center gap-2 mb-2">
           {fields.call !== false && (
             <a href={`tel:${lead.phone}`} onClick={(e) => { e.stopPropagation(); logDial() }}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold text-black flex-shrink-0"
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-[8px] text-xs font-semibold text-black flex-shrink-0"
               style={{ background: `linear-gradient(135deg, ${sColor}, ${sColor}AA)` }}>
               <Phone size={11} /> Call
             </a>

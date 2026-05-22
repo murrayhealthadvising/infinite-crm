@@ -192,7 +192,7 @@ export default function Today() {
                     </button>
                     {lead?.phone && (
                       <a href={`tel:${lead.phone}`}
-                        className="px-2.5 py-1 rounded-lg text-xs font-semibold text-black flex-shrink-0"
+                        className="px-2.5 py-1 rounded-[8px] text-xs font-semibold text-black flex-shrink-0"
                         style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
                         Call
                       </a>
@@ -322,7 +322,7 @@ function ReminderRow({ reminder, lead, onComplete, onSnooze, onDelete, onNavigat
         <div className="flex items-center gap-1 flex-shrink-0">
           {lead?.phone && (
             <a href={`tel:${lead.phone}`}
-              className="px-2.5 py-1 rounded-lg text-xs font-semibold text-black"
+              className="px-2.5 py-1 rounded-[8px] text-xs font-semibold text-black"
               style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
               <Phone size={11} className="inline -mt-0.5" /> Call
             </a>

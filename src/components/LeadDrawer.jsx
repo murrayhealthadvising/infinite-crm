@@ -218,7 +218,7 @@ export default function LeadDrawer({ leadId, onClose, bucket = [], onNavigate })
         <div className="px-4 py-3 border-b border-[#1A2130] flex items-center gap-2 flex-shrink-0">
           {lead.phone && (
             <a href={`tel:${lead.phone}`} onClick={logCall}
-              className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold text-black"
+              className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-[8px] text-sm font-semibold text-black"
               style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
               <PhoneCall size={14} /> Call {displayPhone(lead.phone)}
             </a>
