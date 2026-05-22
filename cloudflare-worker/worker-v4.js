@@ -1,4 +1,4 @@
-// Infinite CRM Email Worker — v4.7 (rich USHA parsing + per-agent PitchPrfct enrollment, zero-dep)
+// Infinite CRM Email Worker — v4.8 (per-agent PitchPrfct enrollment + delay queue, zero-dep)
 //
 // Deploys via the Cloudflare Workers REST API with NO bundler — every helper
 // inlined here. Handles two paths:
@@ -10,10 +10,10 @@
 //   v3-debug only parsed ~9 fields. DOB, income, household, age, age_range,
 //   gender, smoker, comments etc. were silently dropped. v4 captures them all.
 //
-// v4.7: when a brand-new lead is inserted, the email() path pushes it into
-//   PitchPrfct as a contact and enrolls it in a workflow. PER-AGENT: each
-//   agent's own PitchPrfct API key + keyword→workflow rules are looked up by
-//   the lead's owning agent. See "PitchPrfct workflow enrollment" below.
+// v4.7+: brand-new leads enroll into a per-agent PitchPrfct workflow — each
+//   agent's own API key + keyword→workflow rules, looked up by lead owner.
+// v4.8: optional delay — the lead is parked in pitchprfct_queue and a cron
+//   trigger enrolls it once the timer runs out, unless the agent cancels.
 
 const AGENT_ROUTING = {
   'murray-leads@infinite-crm.net':   '01ef1bd7-f5d1-4279-bf9b-15a02eec5f4a',
@@ -488,6 +488,112 @@ async function enrollLeadInPitch(env, userId, lead) {
   await enrollInWorkflow(apiKey, pick.id, contactUuid)
 }
 
+// ─── PitchPrfct delay queue ────────────────────────────────────────────────
+// With a delay configured (pitchprfct_rules.delayMinutes), a new lead is parked
+// in the pitchprfct_queue table instead of enrolled right away. The scheduled()
+// cron handler enrolls rows once their timer runs out — unless the agent hit
+// Cancel in the CRM first (which flips the row to 'cancelled').
+
+// Pull the inserted lead's id out of the Supabase insert response body.
+function parseFirstId(body) {
+  try { const a = JSON.parse(body); return (Array.isArray(a) && a[0] && a[0].id) || null }
+  catch { return null }
+}
+
+async function insertQueueRow(env, row) {
+  try {
+    const r = await fetch(`${env.SUPABASE_URL}/rest/v1/pitchprfct_queue`, {
+      method: 'POST',
+      headers: {
+        apikey: env.SUPABASE_SERVICE_KEY,
+        authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}`,
+        'content-type': 'application/json',
+        prefer: 'return=minimal',
+      },
+      body: JSON.stringify([row]),
+    })
+    if (!r.ok) { console.error('[pp] insertQueueRow failed', r.status, (await r.text()).slice(0, 200)); return false }
+    return true
+  } catch (e) { console.error('[pp] insertQueueRow threw', String(e)); return false }
+}
+
+// Decide: queue the lead for later, or enroll it now. delayMinutes <= 0 (or no
+// lead id) means enroll immediately.
+async function schedulePitchForLead(env, userId, lead) {
+  if (!lead.phone || !String(lead.phone).startsWith('+')) {
+    console.log('[pp] lead has no valid phone — skipping'); return
+  }
+  const rules = await getProfileRules(env, userId)
+  const delayMin = Math.max(0, parseInt((rules && rules.delayMinutes), 10) || 0)
+  if (delayMin > 0 && lead.id) {
+    const enrollAt = new Date(Date.now() + delayMin * 60000).toISOString()
+    const ok = await insertQueueRow(env, {
+      lead_id: lead.id, user_id: userId, enroll_at: enrollAt, status: 'pending',
+    })
+    if (ok) { console.log('[pp] QUEUED lead', lead.id, '— enroll_at', enrollAt, `(+${delayMin}m)`); return }
+    console.error('[pp] queue insert failed — enrolling immediately instead')
+  }
+  await enrollLeadInPitch(env, userId, lead)
+}
+
+// ── Cron side ──────────────────────────────────────────────────────────────
+async function getLeadById(env, leadId) {
+  try {
+    const r = await fetch(
+      `${env.SUPABASE_URL}/rest/v1/leads?id=eq.${encodeURIComponent(leadId)}&select=*&limit=1`,
+      { headers: { apikey: env.SUPABASE_SERVICE_KEY, authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}` } }
+    )
+    if (!r.ok) { console.error('[cron] getLeadById HTTP', r.status); return null }
+    const rows = await r.json()
+    return (Array.isArray(rows) && rows[0]) || null
+  } catch (e) { console.error('[cron] getLeadById threw', String(e)); return null }
+}
+
+async function setQueueStatus(env, id, status) {
+  try {
+    await fetch(`${env.SUPABASE_URL}/rest/v1/pitchprfct_queue?id=eq.${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: {
+        apikey: env.SUPABASE_SERVICE_KEY,
+        authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}`,
+        'content-type': 'application/json',
+        prefer: 'return=minimal',
+      },
+      body: JSON.stringify({ status, updated_at: new Date().toISOString() }),
+    })
+  } catch (e) { console.error('[cron] setQueueStatus threw', String(e)) }
+}
+
+// Enroll one queued lead whose timer has elapsed, then mark the row done.
+async function processQueueRow(env, row) {
+  const lead = await getLeadById(env, row.lead_id)
+  if (!lead) {
+    console.error('[cron] lead not found for queue row', row.id, row.lead_id)
+    await setQueueStatus(env, row.id, 'failed')
+    return
+  }
+  console.log('[cron] enrolling queued lead', row.lead_id)
+  await enrollLeadInPitch(env, row.user_id, lead)
+  await setQueueStatus(env, row.id, 'done')
+}
+
+// Process every pending queue row whose enroll_at has passed. Rows the agent
+// cancelled (status 'cancelled') are never selected here, so they never enroll.
+async function runQueue(env) {
+  try {
+    const now = new Date().toISOString()
+    const r = await fetch(
+      `${env.SUPABASE_URL}/rest/v1/pitchprfct_queue?status=eq.pending&enroll_at=lte.${encodeURIComponent(now)}&select=id,lead_id,user_id&order=enroll_at.asc&limit=50`,
+      { headers: { apikey: env.SUPABASE_SERVICE_KEY, authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}` } }
+    )
+    if (!r.ok) { console.error('[cron] queue query HTTP', r.status); return }
+    const rows = await r.json()
+    const due = Array.isArray(rows) ? rows : []
+    console.log('[cron] due queue rows:', due.length)
+    for (const row of due) await processQueueRow(env, row)
+  } catch (e) { console.error('[cron] runQueue threw', String(e)) }
+}
+
 // ─── Worker entry points ───────────────────────────────────────────────────
 export default {
   async fetch(req, env) {
@@ -596,9 +702,11 @@ export default {
       const result = await insertLead(env, lead)
       if (result.ok) {
         console.log('[email] INSERTED ok', { fields: Object.keys(lead) })
-        // Brand-new lead → push to PitchPrfct + enroll in a workflow. Duplicates
-        // fall through to the touch branch below and are NOT re-enrolled.
-        await enrollLeadInPitch(env, userId, lead)
+        // Brand-new lead → schedule PitchPrfct enrollment. With a delay set in
+        // Settings it's queued (a countdown the agent can cancel); with no delay
+        // it enrolls immediately. Duplicates fall through and are NOT re-enrolled.
+        const insertedId = parseFirstId(result.body)
+        await schedulePitchForLead(env, userId, { ...lead, id: insertedId })
       } else if (isDuplicate(result) && lead.phone) {
         // USHA forwarded the same lead twice (e.g. via Gmail filter AND directly
         // to murray-leads@). Bump last_activity on the existing row instead of
@@ -625,5 +733,13 @@ export default {
     } catch (e) {
       console.error('[email] EXCEPTION', String(e), e?.stack)
     }
+  },
+
+  // Cron trigger — enrolls queued leads whose delay timer has run out. Needs a
+  // Cron Trigger (e.g. every minute, "* * * * *") added to this Worker in the
+  // Cloudflare dashboard. Without a delay configured, nothing is ever queued
+  // and this simply finds no rows.
+  async scheduled(event, env, ctx) {
+    await runQueue(env)
   },
 }

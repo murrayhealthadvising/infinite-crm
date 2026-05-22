@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useApp } from '../context/AppContext'
 import StatusTag from '../components/StatusTag'
+import PitchCountdown from '../components/PitchCountdown'
 import { Phone, Mail, MapPin, Calendar, ArrowLeft, MessageSquare, PhoneCall, AtSign, StickyNote, ChevronDown, Zap, Send, User, Users, Home, DollarSign, Heart, Pencil, Check, X, Clock } from 'lucide-react'
 import { normalizePhone, displayPhone } from '../lib/phone'
 import { localTimeFor, localHourFor } from '../lib/timezone'
@@ -464,6 +465,7 @@ export default function LeadDetail() {
               {lastCallLabel && (
                 <span className="text-xs text-[#5A6A7A]">· last called {lastCallLabel}</span>
               )}
+              <PitchCountdown leadId={id} />
             </div>
           </div>
         </div>

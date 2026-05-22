@@ -547,8 +547,8 @@ export function AppProvider({ children }) {
   // lead lands, it scans the lead's marketplace comments for a rule keyword
   // and enrolls the lead into the matched PitchPrfct workflow (or the default).
   // Shape: { rules: [{ id, keyword, workflowId, workflowName }],
-  //          defaultWorkflowId, defaultWorkflowName }
-  const PITCHPRFCT_RULES_DEFAULT = { rules: [], defaultWorkflowId: '', defaultWorkflowName: '' }
+  //          defaultWorkflowId, defaultWorkflowName, delayMinutes }
+  const PITCHPRFCT_RULES_DEFAULT = { rules: [], defaultWorkflowId: '', defaultWorkflowName: '', delayMinutes: 0 }
   const pitchprfctRules = (profile?.pitchprfct_rules && typeof profile.pitchprfct_rules === 'object')
     ? { ...PITCHPRFCT_RULES_DEFAULT, ...profile.pitchprfct_rules }
     : PITCHPRFCT_RULES_DEFAULT
@@ -559,6 +559,7 @@ export function AppProvider({ children }) {
       rules: Array.isArray(next?.rules) ? next.rules : [],
       defaultWorkflowId: next?.defaultWorkflowId || '',
       defaultWorkflowName: next?.defaultWorkflowName || '',
+      delayMinutes: Math.max(0, parseInt(next?.delayMinutes, 10) || 0),
     }
     setProfile(p => p ? { ...p, pitchprfct_rules: clean } : p)
     try {
@@ -567,6 +568,43 @@ export function AppProvider({ children }) {
       return { ok: true }
     } catch (e) { console.error('savePitchprfctRules threw:', e); return { ok: false, error: String(e) } }
   }
+
+  // PitchPrfct delay queue — leads waiting out their delay window before the
+  // Worker enrolls them. Loaded as a { leadId: { id, enroll_at } } map so cards
+  // can show a live countdown + Cancel button. Refreshed on a 60s poll.
+  const [pitchQueue, setPitchQueue] = useState({})
+  const refreshPitchQueue = async () => {
+    if (!session?.user?.id) { setPitchQueue({}); return }
+    try {
+      const { data, error } = await supabase
+        .from('pitchprfct_queue')
+        .select('id, lead_id, enroll_at, status')
+        .eq('status', 'pending')
+      if (error) { console.error('[pitchQueue] load failed:', error); return }
+      const map = {}
+      for (const row of (data || [])) map[row.lead_id] = { id: row.id, enroll_at: row.enroll_at }
+      setPitchQueue(map)
+    } catch (e) { console.error('[pitchQueue] load threw:', e) }
+  }
+  const cancelPitchQueue = async (leadId) => {
+    const row = pitchQueue[leadId]
+    if (!row) return { ok: false, error: 'Not queued' }
+    setPitchQueue(prev => { const n = { ...prev }; delete n[leadId]; return n })  // optimistic
+    try {
+      const { error } = await supabase
+        .from('pitchprfct_queue')
+        .update({ status: 'cancelled', updated_at: new Date().toISOString() })
+        .eq('id', row.id)
+      if (error) { console.error('[pitchQueue] cancel failed:', error); refreshPitchQueue(); return { ok: false, error: error.message } }
+      return { ok: true }
+    } catch (e) { console.error('[pitchQueue] cancel threw:', e); refreshPitchQueue(); return { ok: false, error: String(e) } }
+  }
+  useEffect(() => {
+    if (!session?.user) { setPitchQueue({}); return }
+    refreshPitchQueue()
+    const iv = setInterval(refreshPitchQueue, 60000)
+    return () => clearInterval(iv)
+  }, [session?.user?.id])
 
   // Commission structure — per-agent JSONB on profiles. Stored shape:
   //   { default_advance, products: [{ key, name, comm_pct, advance_months, half, association }] }
@@ -743,6 +781,7 @@ export function AppProvider({ children }) {
       sideTagStyles, setSideTagStyles,
       campaigns, saveCampaigns,
       pitchprfctRules, savePitchprfctRules,
+      pitchQueue, refreshPitchQueue, cancelPitchQueue,
       // reminders (Today page)
       reminders, refreshReminders, addReminder, completeReminder, uncompleteReminder, snoozeReminder, deleteReminder,
       // commission entries (Calculator weekly tracker)

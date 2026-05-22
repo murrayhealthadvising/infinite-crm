@@ -2,6 +2,7 @@ import { useNavigate } from 'react-router-dom'
 import { useApp } from '../context/AppContext'
 import StatusTag from '../components/StatusTag'
 import LeadDrawer from '../components/LeadDrawer'
+import PitchCountdown from '../components/PitchCountdown'
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { formatDistanceToNow, formatDistanceToNowStrict } from 'date-fns'
 import { GripHorizontal, Phone, Search, X, RefreshCw, Copy, Check } from 'lucide-react'
@@ -100,6 +101,8 @@ function PipelineCard({ lead, onDragStart, onDragEnd, onClick }) {
           </span>
         )}
       </div>
+
+      <div className="mb-2 empty:hidden"><PitchCountdown leadId={lead.id} /></div>
 
       {fields.email && lead.email && (
         <p className="text-[11px] text-[#5A6A7A] truncate mb-1.5">{lead.email}</p>

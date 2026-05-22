@@ -1107,6 +1107,7 @@ function PitchPerfectPanel() {
   const [wfError, setWfError] = useState('')
   const [rules, setRules] = useState([])
   const [defaultWorkflowId, setDefaultWorkflowId] = useState('')
+  const [delayMinutes, setDelayMinutes] = useState(0)
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState(null)
   const [reloadKey, setReloadKey] = useState(0)
@@ -1130,6 +1131,7 @@ function PitchPerfectPanel() {
       workflowId: x.workflowId || '',
     })))
     setDefaultWorkflowId(pitchprfctRules?.defaultWorkflowId || '')
+    setDelayMinutes(Math.max(0, parseInt(pitchprfctRules?.delayMinutes, 10) || 0))
   }, [rulesKey])
 
   // Check whether this agent has an API key saved (just the boolean — the key
@@ -1206,6 +1208,7 @@ function PitchPerfectPanel() {
       rules: cleanRules,
       defaultWorkflowId,
       defaultWorkflowName: wfName(defaultWorkflowId),
+      delayMinutes,
     })
     setSaving(false)
     if (res && res.ok) setMsg({ type: 'success', text: 'Saved — new leads enroll automatically.' })
@@ -1311,6 +1314,21 @@ function PitchPerfectPanel() {
         <p className="text-sm text-white mb-0.5">Default workflow</p>
         <p className="text-xs text-[#5A6A7A] mb-2">Every lead that doesn't match a keyword rule below goes here.</p>
         <div className="flex">{workflowSelect(defaultWorkflowId, setDefaultWorkflowId)}</div>
+      </div>
+
+      {/* Call-first delay */}
+      <div className="rounded-lg border border-[#1A2130] p-3 mb-3" style={{ background: '#080B0F' }}>
+        <p className="text-sm text-white mb-0.5">Call-first delay</p>
+        <p className="text-xs text-[#5A6A7A] mb-2">
+          Hold a new lead this many minutes before enrolling it — your window to call them first. You'll
+          get a live countdown with a Cancel button on the lead card. Set 0 to enroll instantly.
+        </p>
+        <div className="flex items-center gap-2">
+          <input type="number" min="0" max="120" value={delayMinutes}
+            onChange={e => setDelayMinutes(Math.max(0, Math.min(120, parseInt(e.target.value, 10) || 0)))}
+            className="w-20 px-2 py-2 rounded-lg text-sm text-white bg-[#0D1117] border border-[#1A2130] focus:outline-none focus:border-[#00E5C340]" />
+          <span className="text-xs text-[#5A6A7A]">minutes {delayMinutes > 0 ? '' : '(instant)'}</span>
+        </div>
       </div>
 
       {/* Keyword rules */}
