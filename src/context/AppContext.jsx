@@ -599,6 +599,22 @@ export function AppProvider({ children }) {
       return { ok: true }
     } catch (e) { console.error('[pitchQueue] cancel threw:', e); refreshPitchQueue(); return { ok: false, error: String(e) } }
   }
+  // Bypass the wait — enroll now. Pulls the row's enroll_at to "now" so the
+  // next cron pass (within ~1 min) picks it up. Status stays 'pending'.
+  const bypassPitchQueue = async (leadId) => {
+    const row = pitchQueue[leadId]
+    if (!row) return { ok: false, error: 'Not queued' }
+    const nowIso = new Date().toISOString()
+    setPitchQueue(prev => prev[leadId] ? { ...prev, [leadId]: { ...prev[leadId], enroll_at: nowIso } } : prev)  // optimistic
+    try {
+      const { error } = await supabase
+        .from('pitchprfct_queue')
+        .update({ enroll_at: nowIso, updated_at: nowIso })
+        .eq('id', row.id)
+      if (error) { console.error('[pitchQueue] bypass failed:', error); refreshPitchQueue(); return { ok: false, error: error.message } }
+      return { ok: true }
+    } catch (e) { console.error('[pitchQueue] bypass threw:', e); refreshPitchQueue(); return { ok: false, error: String(e) } }
+  }
   useEffect(() => {
     if (!session?.user) { setPitchQueue({}); return }
     refreshPitchQueue()
@@ -781,7 +797,7 @@ export function AppProvider({ children }) {
       sideTagStyles, setSideTagStyles,
       campaigns, saveCampaigns,
       pitchprfctRules, savePitchprfctRules,
-      pitchQueue, refreshPitchQueue, cancelPitchQueue,
+      pitchQueue, refreshPitchQueue, cancelPitchQueue, bypassPitchQueue,
       // reminders (Today page)
       reminders, refreshReminders, addReminder, completeReminder, uncompleteReminder, snoozeReminder, deleteReminder,
       // commission entries (Calculator weekly tracker)
