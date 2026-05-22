@@ -11,7 +11,7 @@ body {
 }
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #1A2130; border-radius: 0; }
+::-webkit-scrollbar-thumb { background: #1A2130; border-radius: 2px; }
 ::-webkit-scrollbar-thumb:hover { background: #2A3547; }
 
 .tag-not-started { background: #1A2130; color: #8899AA; border: 1px solid #2A3547; }

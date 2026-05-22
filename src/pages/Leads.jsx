@@ -192,7 +192,7 @@ function TagPill({ stage, tags, onChange }) {
     <div id="tag-portal"
       style={{ position: 'fixed', top: pos.top, left: pos.left, width: '192px',
         maxHeight: MAX_DROPDOWN_H + 'px',
-        background: '#0A0E14', border: '1px solid #1A2130', borderRadius: '0',
+        background: '#0A0E14', border: '1px solid #1A2130', borderRadius: '2px',
         boxShadow: '0 20px 40px rgba(0,0,0,0.6)', zIndex: 9999, overflowY: 'auto', overflowX: 'hidden' }}>
       {safeTags.map(t => (
         <button key={t.id}
@@ -203,7 +203,7 @@ function TagPill({ stage, tags, onChange }) {
           onMouseEnter={e => e.currentTarget.style.background = '#1A2130'}
           onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span style={{ width: 8, height: 8, borderRadius: '0', background: t.color, flexShrink: 0 }} />
+            <span style={{ width: 8, height: 8, borderRadius: '2px', background: t.color, flexShrink: 0 }} />
             {t.label}
           </div>
           {t.id === stage && <Check size={11} />}
@@ -215,9 +215,9 @@ function TagPill({ stage, tags, onChange }) {
   return (
     <div onClick={e => e.stopPropagation()}>
       <button ref={btnRef} onClick={handleOpen}
-        className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold transition-all hover:opacity-90 whitespace-nowrap"
+        className="flex items-center gap-1.5 px-3 py-1 rounded-[9999px] text-xs font-semibold transition-all hover:opacity-90 whitespace-nowrap"
         style={{ background: tag.bg, color: tag.color, border: `1px solid ${tag.color}40` }}>
-        <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: tag.color }} />
+        <span className="w-1.5 h-1.5 rounded-[9999px] flex-shrink-0" style={{ background: tag.color }} />
         {tag.label}
         <ChevronDown size={11} className={clsx('transition-transform flex-shrink-0', open && 'rotate-180')} />
       </button>
@@ -341,7 +341,7 @@ function CampaignPill({ value, color, onSave }) {
         left: pos.left, top: pos.top,
         transform: pos.openUp ? 'translateY(-100%)' : undefined,
         width: '220px',
-        background: '#0A0E14', border: '1px solid #1A2130', borderRadius: '0',
+        background: '#0A0E14', border: '1px solid #1A2130', borderRadius: '2px',
         boxShadow: '0 20px 40px rgba(0,0,0,0.6)', zIndex: 9999, overflow: 'hidden',
       }}>
       <div className="p-2 border-b border-[#1A2130]">
@@ -550,7 +550,7 @@ function TagChips({ tags = [], onChange, suggestions = [] }) {
         transform: pos.openUp ? 'translateY(-100%)' : undefined,
         background: '#0A0E14',
         border: '1px solid #1A2130',
-        borderRadius: '0',
+        borderRadius: '2px',
         boxShadow: '0 20px 40px rgba(0,0,0,0.6)',
         zIndex: 9999,
         minWidth: 180,
