@@ -3,13 +3,13 @@ export default {
   content: ['./index.html', './src/**/*.{js,jsx}'],
   theme: {
     extend: {
-      // Sharp UI — every rounded-* utility resolves to a 2px hair of radius, so
+      // Sharp UI — every rounded-* utility resolves to a small 4px radius, so
       // the whole app reads crisp. Elements that opt out with an arbitrary value
       // (Call buttons rounded-[8px], stage pills rounded-[9999px]) keep their
       // own radius, since arbitrary values bypass this scale.
       borderRadius: {
-        none: '0px', sm: '2px', DEFAULT: '2px', md: '2px',
-        lg: '2px', xl: '2px', '2xl': '2px', '3xl': '2px', full: '2px',
+        none: '0px', sm: '4px', DEFAULT: '4px', md: '4px',
+        lg: '4px', xl: '4px', '2xl': '4px', '3xl': '4px', full: '4px',
       },
       fontFamily: {
         display: ['Syne', 'sans-serif'],

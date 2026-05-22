@@ -192,7 +192,7 @@ function TagPill({ stage, tags, onChange }) {
     <div id="tag-portal"
       style={{ position: 'fixed', top: pos.top, left: pos.left, width: '192px',
         maxHeight: MAX_DROPDOWN_H + 'px',
-        background: '#0A0E14', border: '1px solid #1A2130', borderRadius: '2px',
+        background: '#0A0E14', border: '1px solid #1A2130', borderRadius: '4px',
         boxShadow: '0 20px 40px rgba(0,0,0,0.6)', zIndex: 9999, overflowY: 'auto', overflowX: 'hidden' }}>
       {safeTags.map(t => (
         <button key={t.id}
@@ -203,7 +203,7 @@ function TagPill({ stage, tags, onChange }) {
           onMouseEnter={e => e.currentTarget.style.background = '#1A2130'}
           onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span style={{ width: 8, height: 8, borderRadius: '2px', background: t.color, flexShrink: 0 }} />
+            <span style={{ width: 8, height: 8, borderRadius: '4px', background: t.color, flexShrink: 0 }} />
             {t.label}
           </div>
           {t.id === stage && <Check size={11} />}
@@ -341,7 +341,7 @@ function CampaignPill({ value, color, onSave }) {
         left: pos.left, top: pos.top,
         transform: pos.openUp ? 'translateY(-100%)' : undefined,
         width: '220px',
-        background: '#0A0E14', border: '1px solid #1A2130', borderRadius: '2px',
+        background: '#0A0E14', border: '1px solid #1A2130', borderRadius: '4px',
         boxShadow: '0 20px 40px rgba(0,0,0,0.6)', zIndex: 9999, overflow: 'hidden',
       }}>
       <div className="p-2 border-b border-[#1A2130]">
@@ -550,7 +550,7 @@ function TagChips({ tags = [], onChange, suggestions = [] }) {
         transform: pos.openUp ? 'translateY(-100%)' : undefined,
         background: '#0A0E14',
         border: '1px solid #1A2130',
-        borderRadius: '2px',
+        borderRadius: '4px',
         boxShadow: '0 20px 40px rgba(0,0,0,0.6)',
         zIndex: 9999,
         minWidth: 180,

@@ -40,8 +40,8 @@ class ErrorBoundary extends Component {
               </pre>
             </details>
             <div style={{ display: 'flex', gap: 8 }}>
-              <button onClick={this.reset} style={{ padding: '8px 16px', borderRadius: 2, background: '#1A2130', color: 'white', border: '1px solid #2A3547', fontSize: 13, cursor: 'pointer' }}>Try again</button>
-              <button onClick={this.reload} style={{ padding: '8px 16px', borderRadius: 2, background: 'linear-gradient(135deg, #00E5C3, #3B82F6)', color: 'black', border: 'none', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>Reload page</button>
+              <button onClick={this.reset} style={{ padding: '8px 16px', borderRadius: 4, background: '#1A2130', color: 'white', border: '1px solid #2A3547', fontSize: 13, cursor: 'pointer' }}>Try again</button>
+              <button onClick={this.reload} style={{ padding: '8px 16px', borderRadius: 4, background: 'linear-gradient(135deg, #00E5C3, #3B82F6)', color: 'black', border: 'none', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>Reload page</button>
             </div>
           </div>
         </div>
@@ -58,7 +58,7 @@ function AuthGate() {
     return (
       <div style={{ background: '#080B0F', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
-          <div style={{ width: 40, height: 40, borderRadius: 2, background: 'linear-gradient(135deg, #00E5C3, #3B82F6)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ width: 40, height: 40, borderRadius: 4, background: 'linear-gradient(135deg, #00E5C3, #3B82F6)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <svg viewBox="0 0 20 20" width="20" height="20" fill="none">
               <path d="M3 10 C3 7.5 5 6 7 6 C9 6 10 8 10 10 C10 12 11 14 13 14 C15 14 17 12.5 17 10 C17 7.5 15 6 13 6 C11 6 10 8 10 10 C10 12 9 14 7 14 C5 14 3 12.5 3 10 Z" stroke="black" strokeWidth="1.8" strokeLinecap="round"/>
             </svg>
