@@ -1,4 +1,4 @@
-// Infinite CRM Email Worker — v4.8 (per-agent PitchPrfct enrollment + delay queue, zero-dep)
+// Infinite CRM Email Worker — v4.9 (per-agent PitchPrfct enrollment + delay queue + manual enroll, zero-dep)
 //
 // Deploys via the Cloudflare Workers REST API with NO bundler — every helper
 // inlined here. Handles two paths:
@@ -632,6 +632,58 @@ export default {
           status: 502, headers: { 'content-type': 'application/json', ...CORS },
         })
       }
+    }
+    // Manual workflow enrollment — used occasionally from the LeadDetail UI when
+    // an agent wants to drop a specific lead into a specific workflow on demand.
+    // Fires IMMEDIATELY (no delay, no queue) — manual means manual.
+    //   POST /pp-enroll-manual  { agent_id, lead_id, workflow_id }
+    if (req.method === 'POST' && url.pathname === '/pp-enroll-manual') {
+      let payload = {}
+      try { payload = await req.json() } catch {
+        return new Response(JSON.stringify({ error: 'bad json' }), {
+          status: 400, headers: { 'content-type': 'application/json', ...CORS },
+        })
+      }
+      const agentId = payload.agent_id
+      const leadId = payload.lead_id
+      const workflowId = payload.workflow_id
+      if (!agentId || !leadId || !workflowId) {
+        return new Response(JSON.stringify({ error: 'missing agent_id, lead_id, or workflow_id' }), {
+          status: 400, headers: { 'content-type': 'application/json', ...CORS },
+        })
+      }
+      const apiKey = await getAgentApiKey(env, agentId)
+      if (!apiKey) {
+        return new Response(JSON.stringify({ error: 'no PitchPrfct API key saved for this agent' }), {
+          status: 404, headers: { 'content-type': 'application/json', ...CORS },
+        })
+      }
+      const lead = await getLeadById(env, leadId)
+      if (!lead) {
+        return new Response(JSON.stringify({ error: 'lead not found' }), {
+          status: 404, headers: { 'content-type': 'application/json', ...CORS },
+        })
+      }
+      if (!lead.phone || !String(lead.phone).startsWith('+')) {
+        return new Response(JSON.stringify({ error: 'lead has no valid phone number' }), {
+          status: 400, headers: { 'content-type': 'application/json', ...CORS },
+        })
+      }
+      const contactUuid = await createOrFindContact(apiKey, lead)
+      if (!contactUuid) {
+        return new Response(JSON.stringify({ error: 'could not create/find PitchPrfct contact' }), {
+          status: 502, headers: { 'content-type': 'application/json', ...CORS },
+        })
+      }
+      const ok = await enrollInWorkflow(apiKey, workflowId, contactUuid)
+      if (!ok) {
+        return new Response(JSON.stringify({ error: 'workflow enroll failed (workflow paused or not found?)', contact_uuid: contactUuid }), {
+          status: 502, headers: { 'content-type': 'application/json', ...CORS },
+        })
+      }
+      return new Response(JSON.stringify({ ok: true, contact_uuid: contactUuid, workflow_id: workflowId }), {
+        status: 200, headers: { 'content-type': 'application/json', ...CORS },
+      })
     }
     if (req.method !== 'POST' || !url.pathname.startsWith('/leads')) {
       return new Response('infinite-crm-webhook v4 — POST /leads?agent_id=UUID', {
