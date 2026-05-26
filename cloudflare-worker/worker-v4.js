@@ -1,4 +1,4 @@
-// Infinite CRM Email Worker — v4.9 (per-agent PitchPrfct enrollment + delay queue + manual enroll, zero-dep)
+// Infinite CRM Email Worker — v4.10 (per-agent PitchPrfct + manual enroll + tolerant phone normalization)
 //
 // Deploys via the Cloudflare Workers REST API with NO bundler — every helper
 // inlined here. Handles two paths:
@@ -320,6 +320,21 @@ function sanitizeForInsert(lead) {
   return out
 }
 
+// Coerce a phone in any common shape — "(717) 623-0690", "7176230690",
+// "+17176230690", "1-717-623-0690" — into E.164 +1XXXXXXXXXX. Returns null
+// for anything that doesn't look like a US phone. Older leads in the DB were
+// stored before parseLead's normalization ran, so we tolerate them at the
+// enroll boundary rather than gate-rejecting them.
+function coercePhoneE164(raw) {
+  if (!raw) return null
+  const digits = String(raw).replace(/\D/g, '')
+  if (digits.length === 10) return '+1' + digits
+  if (digits.length === 11 && digits[0] === '1') return '+' + digits
+  // Already in +1XXXXXXXXXX shape and the original had a leading +
+  if (String(raw).trim().startsWith('+') && digits.length >= 10) return '+' + digits
+  return null
+}
+
 // ─── PitchPrfct workflow enrollment (per-agent) ────────────────────────────
 // The moment a brand-new lead is inserted, push it into PitchPrfct as a contact
 // and enroll that contact in a workflow — PitchPrfct then runs whatever the
@@ -474,9 +489,11 @@ async function enrollInWorkflow(apiKey, workflowId, contactUuid) {
 // Orchestrator — called once per brand-new lead from the email() handler.
 // Best-effort: any failure here is logged but never breaks lead insertion.
 async function enrollLeadInPitch(env, userId, lead) {
-  if (!lead.phone || !String(lead.phone).startsWith('+')) {
-    console.log('[pp] lead has no valid phone — skipping'); return
+  const normPhone = coercePhoneE164(lead.phone)
+  if (!normPhone) {
+    console.log('[pp] lead has no usable phone — skipping', { raw: lead.phone }); return
   }
+  lead = { ...lead, phone: normPhone }
   const apiKey = await getAgentApiKey(env, userId)
   if (!apiKey) { console.log('[pp] agent has no PitchPrfct API key set — skipping'); return }
   const rules = await getProfileRules(env, userId)
@@ -522,8 +539,8 @@ async function insertQueueRow(env, row) {
 // Decide: queue the lead for later, or enroll it now. delayMinutes <= 0 (or no
 // lead id) means enroll immediately.
 async function schedulePitchForLead(env, userId, lead) {
-  if (!lead.phone || !String(lead.phone).startsWith('+')) {
-    console.log('[pp] lead has no valid phone — skipping'); return
+  if (!coercePhoneE164(lead.phone)) {
+    console.log('[pp] lead has no usable phone — skipping', { raw: lead.phone }); return
   }
   const rules = await getProfileRules(env, userId)
   const delayMin = Math.max(0, parseInt((rules && rules.delayMinutes), 10) || 0)
@@ -665,12 +682,13 @@ export default {
           status: 404, headers: { 'content-type': 'application/json', ...CORS },
         })
       }
-      if (!lead.phone || !String(lead.phone).startsWith('+')) {
-        return new Response(JSON.stringify({ error: 'lead has no valid phone number' }), {
+      const normPhone = coercePhoneE164(lead.phone)
+      if (!normPhone) {
+        return new Response(JSON.stringify({ error: `lead phone "${lead.phone || ''}" doesn't look like a US number` }), {
           status: 400, headers: { 'content-type': 'application/json', ...CORS },
         })
       }
-      const contactUuid = await createOrFindContact(apiKey, lead)
+      const contactUuid = await createOrFindContact(apiKey, { ...lead, phone: normPhone })
       if (!contactUuid) {
         return new Response(JSON.stringify({ error: 'could not create/find PitchPrfct contact' }), {
           status: 502, headers: { 'content-type': 'application/json', ...CORS },
