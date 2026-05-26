@@ -3,6 +3,7 @@ import { useApp } from '../context/AppContext'
 import StatusTag from '../components/StatusTag'
 import LeadDrawer from '../components/LeadDrawer'
 import PitchCountdown from '../components/PitchCountdown'
+import ManualEnrollButton from '../components/ManualEnrollButton'
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { formatDistanceToNow, formatDistanceToNowStrict } from 'date-fns'
 import { GripHorizontal, Phone, Search, X, RefreshCw, Copy, Check } from 'lucide-react'
@@ -93,13 +94,16 @@ function PipelineCard({ lead, onDragStart, onDragEnd, onClick }) {
           </div>
           <p className="text-sm font-medium text-white group-hover:text-[#00E5C3] transition-colors truncate">{leadName(lead)}</p>
         </div>
-        {fields.time_in_stage !== false && inStage && (
-          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-[4px] flex-shrink-0"
-            style={{ background: sColor + '15', color: sColor, border: `1px solid ${sColor}40` }}
-            title={`In ${stage.label || 'stage'} for ${inStage}`}>
-            {inStage}
-          </span>
-        )}
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          {fields.time_in_stage !== false && inStage && (
+            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-[4px]"
+              style={{ background: sColor + '15', color: sColor, border: `1px solid ${sColor}40` }}
+              title={`In ${stage.label || 'stage'} for ${inStage}`}>
+              {inStage}
+            </span>
+          )}
+          <ManualEnrollButton lead={lead} compact />
+        </div>
       </div>
 
       <div className="mb-2 empty:hidden"><PitchCountdown leadId={lead.id} /></div>

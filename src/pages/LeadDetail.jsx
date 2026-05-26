@@ -3,118 +3,13 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useApp } from '../context/AppContext'
 import StatusTag from '../components/StatusTag'
 import PitchCountdown from '../components/PitchCountdown'
+import ManualEnrollButton from '../components/ManualEnrollButton'
 import { Phone, Mail, MapPin, Calendar, ArrowLeft, MessageSquare, PhoneCall, AtSign, StickyNote, ChevronDown, Zap, Send, User, Users, Home, DollarSign, Heart, Pencil, Check, X, Clock } from 'lucide-react'
 import { normalizePhone, displayPhone } from '../lib/phone'
 import { localTimeFor, localHourFor } from '../lib/timezone'
 import { format, formatDistanceToNow, isToday, isYesterday } from 'date-fns'
 import { googleCalendarUrl, createCalendarEvent, isGcalConnected } from '../lib/gcal'
 import clsx from 'clsx'
-
-// Cloudflare Worker URL — same env hook as Settings.jsx. Used by the manual
-// PitchPrfct enroll button below (calls /pp-workflows + /pp-enroll-manual).
-const WORKER_URL = (import.meta.env.VITE_CRM_WORKER_URL
-  || 'https://infinite-crm-webhook.murrayhealthadvising.workers.dev').replace(/\/+$/, '')
-
-// Small, occasional-use button in the LeadDetail header — pick any workflow
-// from the lead-owner's PitchPrfct account and drop this lead into it right
-// now. No delay, no queue: manual = you mean it. Workflows are loaded the
-// first time the dropdown opens, not on every render. Paused workflows render
-// disabled with a "paused" hint so you don't waste a click.
-function ManualEnrollButton({ lead }) {
-  const [open, setOpen] = useState(false)
-  const [workflows, setWorkflows] = useState(null) // null = not loaded yet
-  const [loadingList, setLoadingList] = useState(false)
-  const [busyId, setBusyId] = useState(null)
-  const [error, setError] = useState(null)
-  const [success, setSuccess] = useState(null)
-  const ref = useRef(null)
-  const agentId = lead?.user_id || lead?.agent_id
-
-  // Load workflows the first time the menu opens. Cached in state thereafter.
-  useEffect(() => {
-    if (!open || workflows || !agentId) return
-    setLoadingList(true); setError(null)
-    fetch(`${WORKER_URL}/pp-workflows?agent_id=${encodeURIComponent(agentId)}`)
-      .then(async r => ({ ok: r.ok, j: await r.json().catch(() => ({})) }))
-      .then(({ ok, j }) => {
-        if (!ok) { setError(j?.error || 'Failed to load workflows'); return }
-        const rows = (j && j.data && (j.data.rows || j.data)) || j.rows || (Array.isArray(j) ? j : [])
-        setWorkflows(Array.isArray(rows) ? rows : [])
-      })
-      .catch(e => setError(String(e)))
-      .finally(() => setLoadingList(false))
-  }, [open, agentId, workflows])
-
-  // Click-outside to close
-  useEffect(() => {
-    if (!open) return
-    const onClick = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
-    document.addEventListener('mousedown', onClick)
-    return () => document.removeEventListener('mousedown', onClick)
-  }, [open])
-
-  const enroll = async (wf) => {
-    if (!wf?.id || !agentId || busyId) return
-    setBusyId(wf.id); setError(null); setSuccess(null)
-    try {
-      const r = await fetch(`${WORKER_URL}/pp-enroll-manual`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ agent_id: agentId, lead_id: lead.id, workflow_id: wf.id }),
-      })
-      const j = await r.json().catch(() => ({}))
-      if (!r.ok || !j.ok) { setError(j.error || `HTTP ${r.status}`); return }
-      setSuccess(wf.name || 'workflow')
-      // Auto-dismiss so the agent can go back to working
-      setTimeout(() => { setOpen(false); setSuccess(null) }, 1500)
-    } catch (e) { setError(String(e)) }
-    finally { setBusyId(null) }
-  }
-
-  return (
-    <div ref={ref} className="relative">
-      <button onClick={() => setOpen(o => !o)}
-        title="Enroll this lead in a PitchPrfct workflow now"
-        className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-[#1A2130] text-sm text-[#8899AA] hover:text-white hover:border-[#2A3547]">
-        <Zap size={13} /> Enroll
-      </button>
-      {open && (
-        <div className="absolute right-0 top-full mt-1 w-64 rounded-xl border border-[#1A2130] overflow-hidden z-20 shadow-xl" style={{ background: '#0E1318' }}>
-          <div className="px-3 py-2 border-b border-[#1A2130]">
-            <p className="text-[10px] font-mono uppercase tracking-wider text-[#A78BFA]">Manual enroll</p>
-            <p className="text-[10px] text-[#3A4A5A] mt-0.5">Sends now — no delay</p>
-          </div>
-          <div className="max-h-72 overflow-y-auto">
-            {loadingList && <p className="px-3 py-3 text-xs text-[#5A6A7A]">Loading workflows…</p>}
-            {error && !loadingList && (
-              <p className="px-3 py-3 text-xs text-[#EF4444] break-words">{error}</p>
-            )}
-            {success && (
-              <p className="px-3 py-3 text-xs text-[#10B981] flex items-center gap-1.5">
-                <Check size={12} /> Enrolled in “{success}”
-              </p>
-            )}
-            {!loadingList && !error && !success && workflows && workflows.length === 0 && (
-              <p className="px-3 py-3 text-xs text-[#5A6A7A]">No workflows found. Save your PitchPrfct API key in Settings first.</p>
-            )}
-            {!success && workflows && workflows.map(wf => {
-              const paused = wf.status && String(wf.status).toLowerCase() !== 'active'
-              return (
-                <button key={wf.id} onClick={() => enroll(wf)} disabled={!!busyId || paused}
-                  className="w-full flex items-center justify-between gap-2 px-3 py-2 text-left hover:bg-[#1A2130] transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
-                  <span className="text-xs text-white truncate">{wf.name || '(unnamed)'}</span>
-                  <span className="text-[10px] text-[#5A6A7A] flex-shrink-0 font-mono">
-                    {busyId === wf.id ? 'enrolling…' : paused ? 'paused' : 'enroll →'}
-                  </span>
-                </button>
-              )
-            })}
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
 
 // Big notes panel — fixed resting height with internal scroll. User can drag
 // the bottom-right corner to expand it into a notepad as big as they want.

@@ -1533,6 +1533,34 @@ export default function Leads() {
   const [unmappedCols, setUnmappedCols] = useState([])
   const [importResult, setImportResult] = useState(null)
 
+  // Scroll-position preservation. When the agent clicks into a lead and comes
+  // back, we want them dropped right where they were — not jumped to the top.
+  // The list view container is the actual scrollable element (the page itself
+  // doesn't scroll), so we save its scrollTop to sessionStorage on every scroll
+  // and restore once the leads have rendered on mount.
+  const listScrollRef = useRef(null)
+  const SCROLL_KEY = 'leads:list:scrollTop'
+  const handleListScroll = () => {
+    const el = listScrollRef.current
+    if (!el) return
+    try { sessionStorage.setItem(SCROLL_KEY, String(el.scrollTop)) } catch {}
+  }
+  useEffect(() => {
+    if (view !== 'list') return
+    let raw = 0
+    try { raw = parseInt(sessionStorage.getItem(SCROLL_KEY) || '0', 10) || 0 } catch {}
+    if (!raw) return
+    // Wait one frame so the list has a chance to render its rows, otherwise the
+    // container doesn't have enough scroll height yet and scrollTop snaps to 0.
+    const r1 = requestAnimationFrame(() => {
+      const r2 = requestAnimationFrame(() => {
+        if (listScrollRef.current) listScrollRef.current.scrollTop = raw
+      })
+      return () => cancelAnimationFrame(r2)
+    })
+    return () => cancelAnimationFrame(r1)
+  }, [view])
+
   // Delete-all double-confirm modal state
   const [showDeleteAll, setShowDeleteAll] = useState(false)
   const [deleteAllInput, setDeleteAllInput] = useState('')
@@ -1985,7 +2013,8 @@ export default function Leads() {
 
       {/* Content */}
       {view === 'list' ? (
-        <div className="flex-1 overflow-y-auto p-5 space-y-3">
+        <div ref={listScrollRef} onScroll={handleListScroll}
+          className="flex-1 overflow-y-auto p-5 space-y-3">
           {filtered.map(lead => (
             <LeadCard key={lead.id} lead={lead}
               selected={selected.has(lead.id)}
