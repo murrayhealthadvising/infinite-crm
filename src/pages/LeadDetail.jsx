@@ -357,13 +357,19 @@ export default function LeadDetail() {
 
   useEffect(() => {
     if (id && typeof getLeadActivities === 'function') {
+      // Wipe immediately so the previous lead's activities never bleed into
+      // this lead's view while the fetch is in flight.
+      setLeadActivities([])
+      let cancelled = false
       try {
         // force: true → bypass cache so we always see activities from teammates
         const result = getLeadActivities(id, { force: true })
         if (result && typeof result.then === 'function') {
-          result.then(acts => setLeadActivities(acts || [])).catch(() => setLeadActivities([]))
+          result.then(acts => { if (!cancelled) setLeadActivities(acts || []) })
+                .catch(() => { if (!cancelled) setLeadActivities([]) })
         }
       } catch { setLeadActivities([]) }
+      return () => { cancelled = true }
     }
   }, [id])
 

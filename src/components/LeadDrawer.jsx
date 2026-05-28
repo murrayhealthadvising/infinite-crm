@@ -77,13 +77,19 @@ export default function LeadDrawer({ leadId, onClose, bucket = [], onNavigate })
   // Reload the activity history whenever we hop to a different lead. ALSO
   // force a fresh fetch (bypassing AppContext cache) so we see activities
   // created by teammates / other devices since we last opened this lead.
+  // CRITICAL: clear activities to [] IMMEDIATELY when leadId changes — otherwise
+  // the previous lead's count/entries stick around during the ~hundred-ms fetch
+  // and the agent sees "Action log · 7" from the lead they just navigated away
+  // from. Wiping first guarantees the UI never shows another lead's data.
   useEffect(() => {
     if (!leadId || typeof getLeadActivities !== 'function') return
+    setActivities([])
     let cancelled = false
     try {
       const result = getLeadActivities(leadId, { force: true })
       if (result && typeof result.then === 'function') {
-        result.then(acts => { if (!cancelled) setActivities(acts || []) }).catch(() => setActivities([]))
+        result.then(acts => { if (!cancelled) setActivities(acts || []) })
+              .catch(() => { if (!cancelled) setActivities([]) })
       } else if (Array.isArray(result)) {
         setActivities(result)
       } else { setActivities([]) }
