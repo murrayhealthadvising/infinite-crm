@@ -4,6 +4,8 @@ import { useApp } from '../context/AppContext'
 import StatusTag from '../components/StatusTag'
 import PitchCountdown from '../components/PitchCountdown'
 import ManualEnrollButton from '../components/ManualEnrollButton'
+import SoldBadge from '../components/SoldBadge'
+import CalendlyButton from '../components/CalendlyButton'
 import { Phone, Mail, MapPin, Calendar, ArrowLeft, MessageSquare, PhoneCall, AtSign, StickyNote, ChevronDown, Zap, Send, User, Users, Home, DollarSign, Heart, Pencil, Check, X, Clock } from 'lucide-react'
 import { normalizePhone, displayPhone } from '../lib/phone'
 import { localTimeFor, localHourFor } from '../lib/timezone'
@@ -487,6 +489,7 @@ export default function LeadDetail() {
             </a>
           )}
           <ManualEnrollButton lead={lead} />
+          <CalendlyButton lead={lead} />
           <button onClick={() => setShowRemindMe(true)}
             className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-[#1A2130] text-sm text-[#8899AA] hover:text-white hover:border-[#2A3547]"
             title="Schedule a reminder for this lead">
@@ -517,21 +520,8 @@ export default function LeadDetail() {
       {/* Body — pitch-first layout: all info visible, no accordion */}
       <div className="flex-1 overflow-y-auto p-6 space-y-4 max-w-6xl mx-auto w-full">
 
-        {/* Sold product (only on sold stage) */}
-        {lead.plan_choice && lead.stage === 'sold' && (
-          <div className="p-4 rounded-xl border border-[#00E5C330]" style={{ background: '#00E5C308' }}>
-            <p className="text-[10px] font-mono uppercase tracking-wider text-[#00E5C3] mb-2">Sold — Product</p>
-            <p className="text-sm text-[#C0D0E0] whitespace-pre-wrap">{lead.plan_choice}</p>
-            <button
-              onClick={() => {
-                const v = prompt('Update product details:', lead.plan_choice || '')
-                if (v !== null && typeof updateLead === 'function') updateLead(id, { plan_choice: v })
-              }}
-              className="mt-2 text-[10px] text-[#00E5C3] hover:underline">
-              Edit
-            </button>
-          </div>
-        )}
+        {/* Sold — prominent badge with plan + monthly premium */}
+        <SoldBadge lead={lead} size="detail" />
 
         {/* Vendor comments (raw from marketplace) */}
         {lead.comments && (

@@ -841,6 +841,109 @@ function CampaignsPanel() {
 // Every reminder you set in a lead drawer / detail page has a "+ add 15-min
 // slot to Google Calendar" link that opens a pre-filled event in a new tab.
 // ─────────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Calendly panel — per-agent booking links. Stored in localStorage (personal
+// to this device/browser, intentionally — Calendly URLs rarely need to sync
+// across machines). One required default link + an unbounded list of named
+// extras (e.g. "30-min consult", "Renewal review"). LeadDetail's Book button
+// reads from the same localStorage key.
+// ─────────────────────────────────────────────────────────────────────────────
+function CalendlyPanel() {
+  const { user } = useApp()
+  const uid = user?.id || 'anon'
+  const LS_KEY = `calendly:${uid}`
+  const load = () => {
+    try {
+      const raw = localStorage.getItem(LS_KEY)
+      if (!raw) return { default: { label: 'Book a time', url: '' }, extras: [] }
+      const j = JSON.parse(raw)
+      return {
+        default: { label: j?.default?.label || 'Book a time', url: j?.default?.url || '' },
+        extras: Array.isArray(j?.extras) ? j.extras : [],
+      }
+    } catch { return { default: { label: 'Book a time', url: '' }, extras: [] } }
+  }
+  const [state, setState] = useState(load)
+  const [savedTick, setSavedTick] = useState(false)
+  useEffect(() => { setState(load()) }, [uid])
+
+  const persist = (next) => {
+    setState(next)
+    try { localStorage.setItem(LS_KEY, JSON.stringify(next)) } catch {}
+    setSavedTick(true); setTimeout(() => setSavedTick(false), 1200)
+  }
+  const setDefault = (patch) => persist({ ...state, default: { ...state.default, ...patch } })
+  const addExtra = () => persist({ ...state, extras: [...state.extras, { label: '', url: '' }] })
+  const setExtra = (i, patch) => persist({ ...state, extras: state.extras.map((e, j) => j === i ? { ...e, ...patch } : e) })
+  const removeExtra = (i) => persist({ ...state, extras: state.extras.filter((_, j) => j !== i) })
+
+  return (
+    <div id="calendly" className="rounded-xl border border-[#1A2130] p-5" style={{ background: '#0D1117' }}>
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-xs font-mono uppercase tracking-wider text-[#3B82F6]">Calendly — Booking Links</h2>
+        <span className="text-[10px] text-[#5A6A7A] font-mono">
+          {savedTick ? '✓ saved' : 'per-agent · auto-saves'}
+        </span>
+      </div>
+      <p className="text-xs text-[#8899AA] mb-4">
+        The Book button on a lead opens your Calendly link prefilled with the lead's name and email.
+        Add named extras if you use different links for different appointment types.
+      </p>
+
+      {/* Default link */}
+      <div className="mb-4">
+        <label className="block text-[10px] font-mono uppercase tracking-wider text-[#5A6A7A] mb-1.5">Default link</label>
+        <div className="flex gap-2">
+          <input
+            value={state.default.label}
+            onChange={e => setDefault({ label: e.target.value })}
+            placeholder="Label (e.g. Discovery)"
+            className="w-40 px-3 py-2 bg-[#080B0F] border border-[#1A2130] rounded-lg text-sm text-white focus:outline-none focus:border-[#3B82F6]" />
+          <input
+            value={state.default.url}
+            onChange={e => setDefault({ url: e.target.value })}
+            placeholder="https://calendly.com/yourname/discovery"
+            className="flex-1 px-3 py-2 bg-[#080B0F] border border-[#1A2130] rounded-lg text-sm text-white font-mono focus:outline-none focus:border-[#3B82F6]" />
+        </div>
+      </div>
+
+      {/* Extras */}
+      <div>
+        <label className="block text-[10px] font-mono uppercase tracking-wider text-[#5A6A7A] mb-1.5">Additional links</label>
+        {state.extras.length === 0 && (
+          <p className="text-[11px] text-[#3A4A5A] mb-2">None yet. Add one if you have multiple appointment types.</p>
+        )}
+        <div className="space-y-2">
+          {state.extras.map((e, i) => (
+            <div key={i} className="flex gap-2 items-center">
+              <input
+                value={e.label}
+                onChange={ev => setExtra(i, { label: ev.target.value })}
+                placeholder="Label (e.g. Renewal)"
+                className="w-40 px-3 py-2 bg-[#080B0F] border border-[#1A2130] rounded-lg text-sm text-white focus:outline-none focus:border-[#3B82F6]" />
+              <input
+                value={e.url}
+                onChange={ev => setExtra(i, { url: ev.target.value })}
+                placeholder="https://calendly.com/yourname/renewal"
+                className="flex-1 px-3 py-2 bg-[#080B0F] border border-[#1A2130] rounded-lg text-sm text-white font-mono focus:outline-none focus:border-[#3B82F6]" />
+              <button onClick={() => removeExtra(i)}
+                className="p-2 text-[#5A6A7A] hover:text-[#EF4444] rounded-lg hover:bg-[#1A2130]"
+                title="Remove this link">
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
+        <button onClick={addExtra}
+          className="mt-2 text-xs text-[#3B82F6] hover:underline">
+          + Add another link
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function CalendarPanel() {
   const { reminders } = useApp()
   const [connected, setConnected] = useState(false)
@@ -1511,6 +1614,9 @@ export default function Settings() {
 
       {/* PitchPrfct Automation — campaign/comment → workflow enrollment rules */}
       {!isRunner && <PitchPerfectPanel />}
+
+      {/* Calendly — per-agent booking links (default + named extras) */}
+      <CalendlyPanel />
 
       {/* Calendar — Google Calendar shortcuts for reminders */}
       <CalendarPanel />

@@ -5,6 +5,7 @@ import { supabase } from '../lib/supabase'
 import { useApp } from '../context/AppContext'
 import PitchCountdown from '../components/PitchCountdown'
 import ActionsCounter from '../components/ActionsCounter'
+import SoldBadge from '../components/SoldBadge'
 import { normalizePhone, displayPhone, copyPhoneValue } from '../lib/phone'
 import { localTimeFor, localHourFor, timezoneFor } from '../lib/timezone'
 
@@ -897,6 +898,7 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
                 : <Copy size={10} className="text-[#3A4A5A] flex-shrink-0 opacity-60" />}
             </button>
           )}
+          <SoldBadge lead={lead} />
           <div className="flex items-center gap-1.5 mt-1 flex-wrap">
             <PitchCountdown leadId={lead.id} />
             <span className="text-xs text-[#5A6A7A]">{[lead.state, lead.zip].filter(Boolean).join(' ')}</span>

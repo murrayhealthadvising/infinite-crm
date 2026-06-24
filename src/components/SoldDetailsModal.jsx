@@ -7,11 +7,15 @@ export default function SoldDetailsModal() {
   const lead = (leads || []).find(l => l.id === pendingSoldLeadId)
 
   const [what, setWhat] = useState('')
+  const [price, setPrice] = useState('')
   const [saving, setSaving] = useState(false)
   const ref = useRef(null)
 
   useEffect(() => {
-    if (lead) setWhat(lead.plan_choice || '')
+    if (lead) {
+      setWhat(lead.plan_choice || '')
+      setPrice(lead.premium ? String(lead.premium) : '')
+    }
   }, [pendingSoldLeadId])
 
   useEffect(() => {
@@ -29,8 +33,15 @@ export default function SoldDetailsModal() {
 
   const save = async () => {
     setSaving(true)
-    if (typeof updateLead === 'function' && what.trim()) {
-      try { await updateLead(lead.id, { plan_choice: what.trim() }) } catch (e) { console.error('save sold details:', e) }
+    if (typeof updateLead === 'function' && (what.trim() || price.trim())) {
+      try {
+        const patch = {}
+        if (what.trim()) patch.plan_choice = what.trim()
+        // Premium = monthly price. Strip non-digits; null clears.
+        const cleanPrice = price.replace(/[^\d.]/g, '')
+        if (cleanPrice) patch.premium = Math.round(parseFloat(cleanPrice)) || null
+        await updateLead(lead.id, patch)
+      } catch (e) { console.error('save sold details:', e) }
     }
     setSaving(false)
     close()
@@ -58,14 +69,31 @@ export default function SoldDetailsModal() {
         </div>
 
         <div className="p-5 space-y-4">
-          <textarea ref={ref}
-            value={what}
-            onChange={e => setWhat(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) save() }}
-            placeholder="e.g. USHEALTH SecureAdvantage, $425/mo, effective 6/1, family plan…"
-            className="w-full px-3 py-3 rounded-lg text-sm text-white border border-[#1A2130] bg-[#080B0F] outline-none focus:border-[#00E5C3] resize-none"
-            style={{ minHeight: '80px' }}
-            autoFocus />
+          <div>
+            <label className="block text-[10px] font-mono uppercase tracking-wider text-[#8899AA] mb-1.5">Plan / product</label>
+            <textarea ref={ref}
+              value={what}
+              onChange={e => setWhat(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) save() }}
+              placeholder="e.g. USHEALTH SecureAdvantage — family plan, effective 6/1"
+              className="w-full px-3 py-3 rounded-lg text-sm text-white border border-[#1A2130] bg-[#080B0F] outline-none focus:border-[#00E5C3] resize-none"
+              style={{ minHeight: '80px' }}
+              autoFocus />
+          </div>
+          <div>
+            <label className="block text-[10px] font-mono uppercase tracking-wider text-[#8899AA] mb-1.5">Monthly premium ($)</label>
+            <div className="flex items-center gap-2">
+              <span className="text-lg text-[#5A6A7A] font-mono">$</span>
+              <input
+                value={price}
+                onChange={e => setPrice(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) save() }}
+                placeholder="425"
+                inputMode="numeric"
+                className="flex-1 px-3 py-2.5 rounded-lg text-base font-bold text-white border border-[#1A2130] bg-[#080B0F] outline-none focus:border-[#00E5C3]" />
+              <span className="text-xs text-[#5A6A7A] font-mono">/mo</span>
+            </div>
+          </div>
 
           <div className="flex gap-2">
             <button onClick={save} disabled={saving}
