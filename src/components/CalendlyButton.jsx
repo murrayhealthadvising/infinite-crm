@@ -23,9 +23,10 @@ export function saveCalendlyLinks(uid, payload) {
   try { localStorage.setItem(KEY(uid), JSON.stringify(payload)) } catch {}
 }
 
-// Add ?name= and ?email= query params to a Calendly URL — Calendly natively
-// reads these and prefills the booking form so the agent doesn't have to type
-// the lead's info themselves.
+// Add ?name= and ?email= query params to a Calendly URL — used as a fallback
+// when the in-app popup widget can't load (offline, blocked, etc.). The
+// preferred path uses Calendly's official popup widget instead so booking
+// happens IN-APP rather than in a new browser tab.
 function withPrefill(url, lead) {
   if (!url) return ''
   try {
@@ -35,6 +36,42 @@ function withPrefill(url, lead) {
     if (lead?.email) u.searchParams.set('email', lead.email)
     return u.toString()
   } catch { return url }
+}
+
+// Lazy-load Calendly's official widget script + CSS the first time someone
+// clicks Book. We only load it on demand so it doesn't slow first paint for
+// agents who never book through the CRM.
+let calendlyLoadPromise = null
+function loadCalendlyWidget() {
+  if (typeof window === 'undefined') return Promise.resolve(null)
+  if (window.Calendly && typeof window.Calendly.initPopupWidget === 'function') return Promise.resolve(window.Calendly)
+  if (calendlyLoadPromise) return calendlyLoadPromise
+  calendlyLoadPromise = new Promise((resolve, reject) => {
+    try {
+      if (!document.querySelector('link[href*="calendly.com/assets/external/widget.css"]')) {
+        const css = document.createElement('link')
+        css.rel = 'stylesheet'
+        css.href = 'https://assets.calendly.com/assets/external/widget.css'
+        document.head.appendChild(css)
+      }
+      if (document.querySelector('script[src*="calendly.com/assets/external/widget.js"]')) {
+        // already in flight — wait for window.Calendly
+        const start = Date.now()
+        const iv = setInterval(() => {
+          if (window.Calendly) { clearInterval(iv); resolve(window.Calendly) }
+          else if (Date.now() - start > 8000) { clearInterval(iv); reject(new Error('Calendly load timeout')) }
+        }, 100)
+        return
+      }
+      const s = document.createElement('script')
+      s.src = 'https://assets.calendly.com/assets/external/widget.js'
+      s.async = true
+      s.onload = () => resolve(window.Calendly || null)
+      s.onerror = () => { calendlyLoadPromise = null; reject(new Error('Calendly script failed')) }
+      document.head.appendChild(s)
+    } catch (e) { calendlyLoadPromise = null; reject(e) }
+  })
+  return calendlyLoadPromise
 }
 
 export default function CalendlyButton({ lead }) {
@@ -63,10 +100,28 @@ export default function CalendlyButton({ lead }) {
   const hasLinks = all.length > 0
   const onlyOne = all.length === 1
 
-  const openLink = (url) => {
-    const final = withPrefill(url, lead)
-    if (final) window.open(final, '_blank', 'noopener,noreferrer')
+  const openLink = async (url) => {
+    if (!url) return
     setOpen(false)
+    const name = [lead?.first_name, lead?.last_name].filter(Boolean).join(' ').trim() || lead?.name || ''
+    const email = lead?.email || ''
+    try {
+      const Calendly = await loadCalendlyWidget()
+      if (Calendly && typeof Calendly.initPopupWidget === 'function') {
+        // In-app modal overlay — booking happens without leaving the CRM
+        Calendly.initPopupWidget({
+          url,                              // bare URL — prefill is passed separately
+          prefill: { name, email },         // prefill the booking form
+          utm: { utmSource: 'Infinite CRM' },
+        })
+        return
+      }
+    } catch (e) {
+      console.warn('[Calendly] popup widget unavailable, falling back to new tab', e)
+    }
+    // Fallback path — open in a new tab with query-string prefill
+    const fallback = withPrefill(url, lead)
+    if (fallback) window.open(fallback, '_blank', 'noopener,noreferrer')
   }
 
   // Zero-config state — button still visible, just sends to Settings
