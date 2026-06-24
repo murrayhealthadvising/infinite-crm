@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useApp } from '../context/AppContext'
 import PitchCountdown from '../components/PitchCountdown'
+import ActionsCounter from '../components/ActionsCounter'
 import { normalizePhone, displayPhone, copyPhoneValue } from '../lib/phone'
 import { localTimeFor, localHourFor, timezoneFor } from '../lib/timezone'
 
@@ -2054,6 +2055,9 @@ export default function Leads() {
       )}
 
       {showAdd && <AddLeadModal onClose={() => setShowAdd(false)} />}
+
+      {/* Floating per-agent actions tracker — draggable, position persists */}
+      <ActionsCounter />
 
       {/* Delete-all confirmation modal */}
       {showDeleteAll && (

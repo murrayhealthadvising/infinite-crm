@@ -372,6 +372,9 @@ export function AppProvider({ children }) {
     const entry = { lead_id: leadId, type, note, user_id: session?.user?.id, created_at: new Date().toISOString() }
     // Daily dial tracker — every logged 'call' bumps today's count optimistically
     if (type === 'call') setDialsToday(d => d + 1)
+    // Fire a DOM event so the per-agent ActionsCounter widget (on the Leads
+    // page) can auto-bump its Dials row without a tight context coupling.
+    try { window.dispatchEvent(new CustomEvent('crm:activity', { detail: { type, leadId } })) } catch {}
     try {
       const { data, error } = await supabase.from('activities').insert([entry]).select().single()
       if (error) {
