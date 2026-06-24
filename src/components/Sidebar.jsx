@@ -5,6 +5,7 @@ import {
   ChevronRight, Menu, LogOut,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
+import ActionsCounter from './ActionsCounter'
 import clsx from 'clsx'
 
 const NAV_FULL = [
@@ -72,6 +73,8 @@ export default function Sidebar() {
             </>
           )}
         </nav>
+        {/* Per-agent daily actions tracker — visible when sidebar is open */}
+        {sidebarOpen && <ActionsCounter />}
         {sidebarOpen ? (
           <>
             <div className="border-t border-[#1A2130] p-3 flex items-center gap-2">
@@ -79,7 +82,7 @@ export default function Sidebar() {
               <div className="flex-1 min-w-0"><div className="text-xs text-white font-medium truncate">{user?.name || user?.email?.split('@')[0] || 'Agent'}</div><div className="text-[10px] text-[#8899AA] capitalize">{profile?.role ?? 'Agent'}</div></div>
               <button onClick={() => typeof signOut === 'function' && signOut()} className="p-1.5 rounded text-[#8899AA] hover:text-white hover:bg-[#1A2130]" title="Sign out"><LogOut size={13} /></button>
             </div>
-            <div className="px-3 pb-2 text-[9px] text-[#445566] font-mono tracking-wider select-none">build 0521-v22 · tz-window+tracker</div>
+            <div className="px-3 pb-2 text-[9px] text-[#445566] font-mono tracking-wider select-none">build 0521-v23 · tracker-in-sidebar</div>
           </>
         ) : (
           <div className="border-t border-[#1A2130] p-2 flex flex-col items-center gap-1">
