@@ -1,4 +1,4 @@
-// Infinite CRM Email Worker — v4.10 (per-agent PitchPrfct + manual enroll + tolerant phone normalization)
+// Infinite CRM Email Worker — v4.11 (per-agent PP + manual enroll + TZ window + auto-log entry)
 //
 // Deploys via the Cloudflare Workers REST API with NO bundler — every helper
 // inlined here. Handles two paths:
@@ -335,6 +335,109 @@ function coercePhoneE164(raw) {
   return null
 }
 
+// ─── US state → IANA TZ map (inlined; mirrors src/lib/timezone.js) ─────────
+// Worker is zero-dep so we duplicate this rather than import. Keep in sync if
+// the frontend mapping ever changes. Used by the 9am–9pm "respect their TZ"
+// gate so we never enroll a lead into a workflow that texts them at 3am.
+const WORKER_STATE_TZ = {
+  AL: 'America/Chicago', AK: 'America/Anchorage', AZ: 'America/Phoenix', AR: 'America/Chicago',
+  CA: 'America/Los_Angeles', CO: 'America/Denver', CT: 'America/New_York', DE: 'America/New_York',
+  DC: 'America/New_York', FL: 'America/New_York', GA: 'America/New_York', HI: 'Pacific/Honolulu',
+  ID: 'America/Boise', IL: 'America/Chicago', IN: 'America/Indiana/Indianapolis', IA: 'America/Chicago',
+  KS: 'America/Chicago', KY: 'America/New_York', LA: 'America/Chicago', ME: 'America/New_York',
+  MD: 'America/New_York', MA: 'America/New_York', MI: 'America/Detroit', MN: 'America/Chicago',
+  MS: 'America/Chicago', MO: 'America/Chicago', MT: 'America/Denver', NE: 'America/Chicago',
+  NV: 'America/Los_Angeles', NH: 'America/New_York', NJ: 'America/New_York', NM: 'America/Denver',
+  NY: 'America/New_York', NC: 'America/New_York', ND: 'America/Chicago', OH: 'America/New_York',
+  OK: 'America/Chicago', OR: 'America/Los_Angeles', PA: 'America/New_York', RI: 'America/New_York',
+  SC: 'America/New_York', SD: 'America/Chicago', TN: 'America/Chicago', TX: 'America/Chicago',
+  UT: 'America/Denver', VT: 'America/New_York', VA: 'America/New_York', WA: 'America/Los_Angeles',
+  WV: 'America/New_York', WI: 'America/Chicago', WY: 'America/Denver',
+}
+function workerZipOverride(zip) {
+  if (!zip) return null
+  const z = String(zip).trim().slice(0, 3)
+  if (z === '324' || z === '325') return 'America/Chicago'
+  if (z === '798' || z === '799') return 'America/Denver'
+  if (z === '979') return 'America/Denver'
+  if (z === '838') return 'America/Los_Angeles'
+  if (z === '376' || z === '377' || z === '378') return 'America/New_York'
+  if (z === '420' || z === '421' || z === '422') return 'America/Chicago'
+  return null
+}
+function timezoneForLead(lead) {
+  if (!lead) return null
+  const zo = workerZipOverride(lead.zip)
+  if (zo) return zo
+  const st = String(lead.state || '').trim().toUpperCase()
+  return WORKER_STATE_TZ[st] || null
+}
+// How many minutes the TZ is offset from UTC at a given instant. Positive for
+// east of UTC; negative (e.g. -240 for EDT) for the Americas.
+function tzOffsetMinutes(tz, when) {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+    }).formatToParts(when)
+    const get = (t) => parseInt(parts.find(p => p.type === t)?.value || '0', 10)
+    const localAsUtc = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second'))
+    return Math.round((localAsUtc - when.getTime()) / 60000)
+  } catch { return 0 }
+}
+// Returns the ISO timestamp the queue row should fire at: `base` if the lead's
+// local clock is in the 9am-9pm window, otherwise the next 9am in their TZ.
+// Falls back to `base` for leads whose TZ we can't infer (no state/zip).
+const PP_WINDOW_START_HOUR = 9   // 9 AM
+const PP_WINDOW_END_HOUR   = 21  // 9 PM (exclusive)
+function nextOkEnrollIso(lead, base = new Date()) {
+  const tz = timezoneForLead(lead)
+  if (!tz) return base.toISOString()
+  let localHour
+  try {
+    localHour = parseInt(new Intl.DateTimeFormat('en-US', { hour: 'numeric', hour12: false, timeZone: tz }).format(base), 10)
+  } catch { return base.toISOString() }
+  if (!isFinite(localHour)) return base.toISOString()
+  if (localHour >= PP_WINDOW_START_HOUR && localHour < PP_WINDOW_END_HOUR) {
+    return base.toISOString()
+  }
+  // Build the next 9am in local TZ then convert back to UTC.
+  const offsetMin = tzOffsetMinutes(tz, base)
+  const localNowMs = base.getTime() + offsetMin * 60000
+  const d = new Date(localNowMs)
+  const y = d.getUTCFullYear(), m = d.getUTCMonth(), day = d.getUTCDate()
+  // If we're past 9pm, target tomorrow's 9am. Otherwise (before 9am) target today's.
+  const dayShift = localHour >= PP_WINDOW_END_HOUR ? 1 : 0
+  const targetLocalMs = Date.UTC(y, m, day + dayShift, PP_WINDOW_START_HOUR, 0, 0)
+  const targetUtcMs = targetLocalMs - offsetMin * 60000
+  return new Date(targetUtcMs).toISOString()
+}
+
+// Write an activity row to Supabase so the agent sees confirmation of an
+// auto-enroll in the lead's Action Log. Best-effort: failures here just log.
+async function logEnrollActivity(env, userId, leadId, workflowName) {
+  try {
+    const row = {
+      lead_id: leadId,
+      user_id: userId,
+      type: 'note',
+      note: `Auto-enrolled in PitchPrfct workflow: ${workflowName || '(unnamed)'}`,
+      created_at: new Date().toISOString(),
+    }
+    const r = await fetch(`${env.SUPABASE_URL}/rest/v1/activities`, {
+      method: 'POST',
+      headers: {
+        apikey: env.SUPABASE_SERVICE_KEY,
+        authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}`,
+        'content-type': 'application/json',
+        prefer: 'return=minimal',
+      },
+      body: JSON.stringify([row]),
+    })
+    if (!r.ok) console.error('[pp] logEnrollActivity failed', r.status, (await r.text()).slice(0, 200))
+  } catch (e) { console.error('[pp] logEnrollActivity threw', String(e)) }
+}
+
 // ─── PitchPrfct workflow enrollment (per-agent) ────────────────────────────
 // The moment a brand-new lead is inserted, push it into PitchPrfct as a contact
 // and enroll that contact in a workflow — PitchPrfct then runs whatever the
@@ -387,11 +490,11 @@ function pickWorkflowId(rules, lead) {
   for (const rule of list) {
     const kw = String((rule && rule.keyword) || '').trim().toLowerCase()
     if (kw && rule.workflowId && hay.includes(kw)) {
-      return { id: rule.workflowId, why: `comments matched "${rule.keyword}"` }
+      return { id: rule.workflowId, name: rule.workflowName || '', why: `comments matched "${rule.keyword}"` }
     }
   }
   if (rules && rules.defaultWorkflowId) {
-    return { id: rules.defaultWorkflowId, why: 'no keyword match — default workflow' }
+    return { id: rules.defaultWorkflowId, name: rules.defaultWorkflowName || '', why: 'no keyword match — default workflow' }
   }
   return null
 }
@@ -489,22 +592,28 @@ async function enrollInWorkflow(apiKey, workflowId, contactUuid) {
 // Orchestrator — called once per brand-new lead from the email() handler.
 // Best-effort: any failure here is logged but never breaks lead insertion.
 async function enrollLeadInPitch(env, userId, lead) {
+  const tag = lead.id ? `lead=${lead.id}` : 'lead=?'
   const normPhone = coercePhoneE164(lead.phone)
   if (!normPhone) {
-    console.log('[pp] lead has no usable phone — skipping', { raw: lead.phone }); return
+    console.log('[pp]', tag, 'no usable phone — skipping', { raw: lead.phone }); return false
   }
   lead = { ...lead, phone: normPhone }
   const apiKey = await getAgentApiKey(env, userId)
-  if (!apiKey) { console.log('[pp] agent has no PitchPrfct API key set — skipping'); return }
+  if (!apiKey) { console.log('[pp]', tag, 'agent has no PitchPrfct API key — skipping'); return false }
   const rules = await getProfileRules(env, userId)
   const hasRules = rules && (rules.defaultWorkflowId || (Array.isArray(rules.rules) && rules.rules.length))
-  if (!hasRules) { console.log('[pp] no workflow rules for this agent — skipping'); return }
+  if (!hasRules) { console.log('[pp]', tag, 'no workflow rules for this agent — skipping'); return false }
   const pick = pickWorkflowId(rules, lead)
-  if (!pick) { console.log('[pp] no workflow matched and no default set — skipping'); return }
-  console.log('[pp]', pick.why, '→ workflow', pick.id)
+  if (!pick) { console.log('[pp]', tag, 'no workflow matched and no default set — skipping'); return false }
+  console.log('[pp]', tag, pick.why, '→ workflow', pick.id, pick.name || '')
   const contactUuid = await createOrFindContact(apiKey, lead)
-  if (!contactUuid) { console.error('[pp] no contact UUID — cannot enroll'); return }
-  await enrollInWorkflow(apiKey, pick.id, contactUuid)
+  if (!contactUuid) { console.error('[pp]', tag, 'no contact UUID — cannot enroll'); return false }
+  const ok = await enrollInWorkflow(apiKey, pick.id, contactUuid)
+  if (ok && lead.id) {
+    // Fire-and-forget: agent sees the confirmation in the lead's Action Log
+    await logEnrollActivity(env, userId, lead.id, pick.name || pick.id)
+  }
+  return ok
 }
 
 // ─── PitchPrfct delay queue ────────────────────────────────────────────────
@@ -539,18 +648,37 @@ async function insertQueueRow(env, row) {
 // Decide: queue the lead for later, or enroll it now. delayMinutes <= 0 (or no
 // lead id) means enroll immediately.
 async function schedulePitchForLead(env, userId, lead) {
+  const tag = lead.id ? `lead=${lead.id}` : 'lead=?'
   if (!coercePhoneE164(lead.phone)) {
-    console.log('[pp] lead has no usable phone — skipping', { raw: lead.phone }); return
+    console.log('[pp]', tag, 'no usable phone — skipping', { raw: lead.phone }); return
   }
   const rules = await getProfileRules(env, userId)
   const delayMin = Math.max(0, parseInt((rules && rules.delayMinutes), 10) || 0)
-  if (delayMin > 0 && lead.id) {
-    const enrollAt = new Date(Date.now() + delayMin * 60000).toISOString()
+  // Earliest enroll time the agent's settings allow: now + their call-first delay.
+  const earliest = new Date(Date.now() + delayMin * 60000)
+  // TZ window — if earliest is outside 9am-9pm local, push to next 9am local.
+  const enrollAtIso = nextOkEnrollIso(lead, earliest)
+  const enrollAt = new Date(enrollAtIso)
+  const deferred = enrollAt.getTime() > earliest.getTime() + 1000
+  // If we have no lead.id we can't queue — best we can do is enroll now and
+  // hope the local hour isn't horrible. This case shouldn't happen post-insert.
+  if (!lead.id) {
+    if (deferred) {
+      console.warn('[pp]', tag, 'no lead.id, cannot queue TZ-deferred enroll — firing immediately')
+    }
+    await enrollLeadInPitch(env, userId, lead)
+    return
+  }
+  // Queue if there's any wait (delay OR TZ defer). Otherwise enroll inline.
+  if (delayMin > 0 || deferred) {
     const ok = await insertQueueRow(env, {
-      lead_id: lead.id, user_id: userId, enroll_at: enrollAt, status: 'pending',
+      lead_id: lead.id, user_id: userId, enroll_at: enrollAtIso, status: 'pending',
     })
-    if (ok) { console.log('[pp] QUEUED lead', lead.id, '— enroll_at', enrollAt, `(+${delayMin}m)`); return }
-    console.error('[pp] queue insert failed — enrolling immediately instead')
+    if (ok) {
+      console.log('[pp]', tag, 'QUEUED — enroll_at', enrollAtIso, deferred ? '(TZ-deferred to 9am local)' : `(+${delayMin}m)`)
+      return
+    }
+    console.error('[pp]', tag, 'queue insert failed — enrolling inline instead')
   }
   await enrollLeadInPitch(env, userId, lead)
 }
@@ -568,7 +696,7 @@ async function getLeadById(env, leadId) {
   } catch (e) { console.error('[cron] getLeadById threw', String(e)); return null }
 }
 
-async function setQueueStatus(env, id, status) {
+async function patchQueueRow(env, id, patch) {
   try {
     await fetch(`${env.SUPABASE_URL}/rest/v1/pitchprfct_queue?id=eq.${encodeURIComponent(id)}`, {
       method: 'PATCH',
@@ -578,12 +706,17 @@ async function setQueueStatus(env, id, status) {
         'content-type': 'application/json',
         prefer: 'return=minimal',
       },
-      body: JSON.stringify({ status, updated_at: new Date().toISOString() }),
+      body: JSON.stringify({ ...patch, updated_at: new Date().toISOString() }),
     })
-  } catch (e) { console.error('[cron] setQueueStatus threw', String(e)) }
+  } catch (e) { console.error('[cron] patchQueueRow threw', String(e)) }
+}
+async function setQueueStatus(env, id, status) {
+  await patchQueueRow(env, id, { status })
 }
 
 // Enroll one queued lead whose timer has elapsed, then mark the row done.
+// Re-checks the 9am-9pm TZ window at fire time; if still outside, defers the
+// row to the next OK time instead of enrolling and waking the lead at 3am.
 async function processQueueRow(env, row) {
   const lead = await getLeadById(env, row.lead_id)
   if (!lead) {
@@ -591,9 +724,32 @@ async function processQueueRow(env, row) {
     await setQueueStatus(env, row.id, 'failed')
     return
   }
-  console.log('[cron] enrolling queued lead', row.lead_id)
-  await enrollLeadInPitch(env, row.user_id, lead)
-  await setQueueStatus(env, row.id, 'done')
+  // Re-check TZ window at fire time — clock may have advanced since the row
+  // was queued, but a lead queued at 8pm with a 90-min delay would fire at
+  // 9:30pm which is outside the window. Defer in that case.
+  const okIso = nextOkEnrollIso(lead, new Date())
+  if (new Date(okIso).getTime() > Date.now() + 30 * 1000) {
+    console.log('[cron] row', row.id, 'still outside 9-9 local — defer to', okIso)
+    await patchQueueRow(env, row.id, { enroll_at: okIso, status: 'pending' })
+    return
+  }
+  console.log('[cron] enrolling queued lead', row.lead_id, 'attempt', (row.attempts || 0) + 1)
+  const ok = await enrollLeadInPitch(env, row.user_id, lead)
+  if (ok) {
+    await setQueueStatus(env, row.id, 'done')
+    return
+  }
+  // Enroll failed — bump attempts. After 3 failures, give up loudly.
+  const attempts = (row.attempts || 0) + 1
+  if (attempts >= 3) {
+    console.error('[cron] row', row.id, 'failed', attempts, 'times — marking failed')
+    await patchQueueRow(env, row.id, { status: 'failed', attempts })
+  } else {
+    // Retry in 5 minutes
+    const retryAt = new Date(Date.now() + 5 * 60 * 1000).toISOString()
+    console.warn('[cron] row', row.id, 'enroll failed (attempt', attempts + ') — retrying at', retryAt)
+    await patchQueueRow(env, row.id, { enroll_at: retryAt, status: 'pending', attempts })
+  }
 }
 
 // Process every pending queue row whose enroll_at has passed. Rows the agent
@@ -602,7 +758,7 @@ async function runQueue(env) {
   try {
     const now = new Date().toISOString()
     const r = await fetch(
-      `${env.SUPABASE_URL}/rest/v1/pitchprfct_queue?status=eq.pending&enroll_at=lte.${encodeURIComponent(now)}&select=id,lead_id,user_id&order=enroll_at.asc&limit=50`,
+      `${env.SUPABASE_URL}/rest/v1/pitchprfct_queue?status=eq.pending&enroll_at=lte.${encodeURIComponent(now)}&select=id,lead_id,user_id,attempts&order=enroll_at.asc&limit=50`,
       { headers: { apikey: env.SUPABASE_SERVICE_KEY, authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}` } }
     )
     if (!r.ok) { console.error('[cron] queue query HTTP', r.status); return }
@@ -665,6 +821,7 @@ export default {
       const agentId = payload.agent_id
       const leadId = payload.lead_id
       const workflowId = payload.workflow_id
+      const workflowName = payload.workflow_name || ''
       if (!agentId || !leadId || !workflowId) {
         return new Response(JSON.stringify({ error: 'missing agent_id, lead_id, or workflow_id' }), {
           status: 400, headers: { 'content-type': 'application/json', ...CORS },
@@ -700,6 +857,9 @@ export default {
           status: 502, headers: { 'content-type': 'application/json', ...CORS },
         })
       }
+      // Log a confirmation row so the agent sees this enrollment in the lead's
+      // Action Log too — same pattern as auto-enroll, just labeled "Manually".
+      await logEnrollActivity(env, agentId, leadId, workflowName ? `Manually → ${workflowName}` : 'Manual enroll')
       return new Response(JSON.stringify({ ok: true, contact_uuid: contactUuid, workflow_id: workflowId }), {
         status: 200, headers: { 'content-type': 'application/json', ...CORS },
       })

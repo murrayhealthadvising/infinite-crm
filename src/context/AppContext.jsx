@@ -621,8 +621,29 @@ export function AppProvider({ children }) {
   useEffect(() => {
     if (!session?.user) { setPitchQueue({}); return }
     refreshPitchQueue()
+    // Background fallback poll — every 60s catches anything the realtime
+    // subscription might have missed (network blip, channel disconnect).
     const iv = setInterval(refreshPitchQueue, 60000)
-    return () => clearInterval(iv)
+    // Realtime subscription: when the worker enqueues / cron updates / agent
+    // cancels a row, we refresh immediately instead of waiting up to 60s for
+    // the next poll. This fixes the "no countdown badge for ~1 min" bug where
+    // a brand-new lead was already queued but the UI hadn't refreshed yet.
+    let ch = null
+    try {
+      ch = supabase
+        .channel(`pitchprfct_queue:${session.user.id}`)
+        .on('postgres_changes', {
+          event: '*',
+          schema: 'public',
+          table: 'pitchprfct_queue',
+          filter: `user_id=eq.${session.user.id}`,
+        }, () => { refreshPitchQueue() })
+        .subscribe()
+    } catch (e) { console.warn('[pitchQueue] realtime subscribe failed:', e) }
+    return () => {
+      clearInterval(iv)
+      if (ch) { try { supabase.removeChannel(ch) } catch {} }
+    }
   }, [session?.user?.id])
 
   // Commission structure — per-agent JSONB on profiles. Stored shape:

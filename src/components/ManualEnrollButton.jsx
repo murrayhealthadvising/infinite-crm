@@ -55,7 +55,7 @@ export default function ManualEnrollButton({ lead, compact = false }) {
       const r = await fetch(`${WORKER_URL}/pp-enroll-manual`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ agent_id: agentId, lead_id: lead.id, workflow_id: wf.id }),
+        body: JSON.stringify({ agent_id: agentId, lead_id: lead.id, workflow_id: wf.id, workflow_name: wf.name || '' }),
       })
       const j = await r.json().catch(() => ({}))
       if (!r.ok || !j.ok) { setError(j.error || `HTTP ${r.status}`); return }
