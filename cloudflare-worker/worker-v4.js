@@ -1,4 +1,4 @@
-// Infinite CRM Email Worker — v4.15 (full MIME-level diagnostics: raw + per-part headers logged)
+// Infinite CRM Email Worker — v4.16 (chunked raw email logging — captures full MIME past header bloat)
 //
 // Deploys via the Cloudflare Workers REST API with NO bundler — every helper
 // inlined here. Handles two paths:
@@ -820,9 +820,9 @@ export default {
     // every release so a stale deploy is immediately visible.
     if (req.method === 'GET' && url.pathname === '/version') {
       return new Response(JSON.stringify({
-        version: 'v4.15',
-        parser: 'full MIME-level diagnostics enabled',
-        deployed_check: 'if you see v4.15 here, the deploy succeeded',
+        version: 'v4.16',
+        parser: 'chunked raw email logging',
+        deployed_check: 'if you see v4.16 here, the deploy succeeded',
       }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
     }
     // Workflow-list proxy — lets the CRM Settings panel show a dropdown of the
@@ -964,14 +964,18 @@ export default {
     console.log('[email] received', { recipient, from: message.from, subject: message.headers?.get?.('subject') || '' })
     try {
       const raw = await streamToString(message.raw)
-      // CRITICAL DEBUG: dump the RAW message structure so we can see exactly
-      // what MIME parts Cloudflare is handing the worker. The previous version
-      // only logged the post-extracted body, which made it impossible to tell
-      // if extractBody was failing because the email had no text/plain part
-      // OR because our multipart split was wrong.
-      console.log('[email] raw length:', raw.length, 'chars')
-      console.log('[email] raw first 1500:', raw.slice(0, 1500).replace(/\r/g, '\\r').replace(/\n/g, '\\n'))
-      console.log('[email] raw last 500:', raw.slice(-500).replace(/\r/g, '\\r').replace(/\n/g, '\\n'))
+      // Chunked raw dump — DKIM/ARC headers eat ~2000 chars before the MIME
+      // body even starts, so we log multiple windows to capture both the
+      // outer Content-Type AND the actual multipart structure.
+      const CHUNK = 1800
+      const totalChunks = Math.min(6, Math.ceil(raw.length / CHUNK))
+      console.log('[email] raw length:', raw.length, 'chars,', totalChunks, 'chunks')
+      for (let i = 0; i < totalChunks; i++) {
+        const start = i * CHUNK
+        const slice = raw.slice(start, start + CHUNK)
+        console.log(`[email] raw chunk ${i + 1}/${totalChunks} (${start}..${start + slice.length}):`,
+          slice.replace(/\r/g, '\\r').replace(/\n/g, '\\n'))
+      }
       const body = extractBody(raw)
       const userId = AGENT_ROUTING[recipient]
       if (!userId) {
@@ -989,7 +993,7 @@ export default {
       lead.agent_id = userId
       // Tag the source so we can tell worker-imported leads apart from
       // manual-paste imports. v4.14 stamps a build id so we can verify deploys.
-      lead.source = 'USHA Marketplace (worker v4.15)'
+      lead.source = 'USHA Marketplace (worker v4.16)'
       lead.stage = DEFAULT_STAGE
       lead.created_at = new Date().toISOString()
       lead.last_activity = lead.created_at
