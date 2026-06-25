@@ -84,24 +84,47 @@
   //   2. Walk inputs/selects/textareas — if a labeled input has a value, use it.
   // Inputs are usually more reliable than text walk in single-page CRMs.
 
+  // VanillaSoft is a frameset/legacy app: the actual lead data often lives in
+  // an iframe, not the top document. Walk all accessible same-origin frames in
+  // addition to the top doc so we don't miss data. Different-origin frames are
+  // silently skipped (browser blocks access).
+  function collectDocs() {
+    var docs = []
+    function visit(doc) {
+      if (!doc) return
+      docs.push(doc)
+      var frames = doc.querySelectorAll ? doc.querySelectorAll('iframe, frame') : []
+      for (var i = 0; i < frames.length; i++) {
+        try {
+          var sub = frames[i].contentDocument
+          if (sub && sub !== doc) visit(sub)
+        } catch (e) { /* cross-origin — skip */ }
+      }
+    }
+    visit(document)
+    return docs
+  }
+
   function collectTextNodes(root) {
     var out = []
-    var walker = document.createTreeWalker(root || document.body, NodeFilter.SHOW_TEXT, null)
-    var n
-    while ((n = walker.nextNode())) {
-      var t = (n.nodeValue || '').replace(/\s+/g, ' ').trim()
-      if (t) out.push({ node: n, text: t })
-    }
+    if (!root || !root.createTreeWalker) return out
+    try {
+      var walker = root.createTreeWalker(root.body || root.documentElement || root, NodeFilter.SHOW_TEXT, null)
+      var n
+      while ((n = walker.nextNode())) {
+        var t = (n.nodeValue || '').replace(/\s+/g, ' ').trim()
+        if (t) out.push({ node: n, text: t })
+      }
+    } catch (e) { /* defensive */ }
     return out
   }
 
-  function scrapeByText() {
-    var nodes = collectTextNodes(document.body)
+  function scrapeByText(doc) {
+    var nodes = collectTextNodes(doc)
     var data = {}
     for (var i = 0; i < nodes.length; i++) {
       var key = fieldForLabel(nodes[i].text)
       if (!key) continue
-      // Look ahead for the next non-empty non-label text node = the value.
       for (var j = i + 1; j < Math.min(i + 5, nodes.length); j++) {
         var v = nodes[j].text
         if (!v) continue
@@ -114,20 +137,24 @@
     return data
   }
 
-  function scrapeByInputs() {
+  function scrapeByInputs(doc) {
     var data = {}
-    var inputs = [].slice.call(document.querySelectorAll('input, select, textarea'))
+    if (!doc || !doc.querySelectorAll) return data
+    var inputs
+    try { inputs = [].slice.call(doc.querySelectorAll('input, select, textarea')) }
+    catch (e) { return data }
     inputs.forEach(function (inp) {
       if (!inp || inp.type === 'hidden' || inp.type === 'submit' || inp.type === 'button') return
       var val = (inp.value || '').trim()
       if (!val) return
-      // Find a label: <label for=id>, ancestor label, aria-label, placeholder, name attr
       var label = ''
       if (inp.id) {
-        var lbl = document.querySelector('label[for="' + inp.id.replace(/"/g, '\\"') + '"]')
-        if (lbl) label = lbl.textContent || ''
+        try {
+          var lbl = doc.querySelector('label[for="' + inp.id.replace(/"/g, '\\"') + '"]')
+          if (lbl) label = lbl.textContent || ''
+        } catch (e) {}
       }
-      if (!label) {
+      if (!label && inp.closest) {
         var parentLbl = inp.closest('label')
         if (parentLbl) label = parentLbl.textContent || ''
       }
@@ -142,12 +169,18 @@
   }
 
   function mergeScrapes() {
-    var byInputs = scrapeByInputs()
-    var byText = scrapeByText()
-    // Inputs win when both present — they're more reliable than text-walk.
     var merged = {}
-    Object.keys(byText).forEach(function (k) { merged[k] = byText[k] })
-    Object.keys(byInputs).forEach(function (k) { merged[k] = byInputs[k] })
+    var docs = collectDocs()
+    // First pass: text walk on every accessible doc/frame
+    docs.forEach(function (d) {
+      var t = scrapeByText(d)
+      Object.keys(t).forEach(function (k) { if (merged[k] == null) merged[k] = t[k] })
+    })
+    // Second pass: inputs (more reliable) — overwrite whatever text walk found
+    docs.forEach(function (d) {
+      var i = scrapeByInputs(d)
+      Object.keys(i).forEach(function (k) { merged[k] = i[k] })
+    })
     return merged
   }
 
@@ -325,16 +358,32 @@
   sheet.textContent = '#infinite-crm-overlay::backdrop { background: rgba(0,0,0,0.5) }'
   dialog.appendChild(sheet)
 
-  document.body.appendChild(dialog)
+  // VanillaSoft frameset quirk: document.body sometimes isn't a normal Node.
+  // Try body → documentElement → html element — whichever works.
+  function safeMount(node) {
+    var targets = [document.body, document.documentElement, document.getElementsByTagName('html')[0]]
+    for (var i = 0; i < targets.length; i++) {
+      var t = targets[i]
+      if (t && typeof t.appendChild === 'function') {
+        try { t.appendChild(node); return true } catch (e) {}
+      }
+    }
+    return false
+  }
+  if (!safeMount(dialog)) {
+    alert('GoldBars: could not attach the lead overlay to this page. The data was still scraped — refresh and try again.')
+    window.__INFINITE_BOOKMARKLET_OPEN = false
+    return
+  }
   try { dialog.showModal() } catch (e) {
-    Object.assign(dialog.style, { position: 'fixed', inset: '20px auto auto auto', right: '20px', top: '20px' })
+    Object.assign(dialog.style, { position: 'fixed', inset: '20px auto auto auto', right: '20px', top: '20px', zIndex: '2147483647' })
     dialog.setAttribute('open', '')
   }
   setTimeout(function () { rows[0] && rows[0].focus && rows[0].focus() }, 30)
 
   function close() {
     try { dialog.close() } catch (e) {}
-    try { document.body.removeChild(dialog) } catch (e) {}
+    try { (dialog.parentNode || document.body || document.documentElement).removeChild(dialog) } catch (e) {}
     window.__INFINITE_BOOKMARKLET_OPEN = false
   }
 
@@ -406,7 +455,9 @@
       font: '600 13px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
       opacity: '0', transition: 'opacity 280ms ease, transform 280ms ease',
     })
-    document.body.appendChild(t)
+    var toastTarget = document.body || document.documentElement
+    if (toastTarget && toastTarget.appendChild) toastTarget.appendChild(t)
+    else return  // give up silently — the lead already imported, toast is cosmetic
     requestAnimationFrame(function () {
       t.style.opacity = '1'
       t.style.transform = 'translateX(-50%) translateY(0)'

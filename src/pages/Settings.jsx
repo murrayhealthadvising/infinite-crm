@@ -1101,7 +1101,10 @@ function IntegrationsPanel() {
 
   // GoldBars (VanillaSoft) bookmarklet — same loader pattern, different script
   // so the field dictionary + UI colors are tailored to VanillaSoft.
-  const goldBarsSnippet = `javascript:(function(){window.__INFINITE_AGENT_ID=${JSON.stringify(agentId)};window.__INFINITE_WORKER=${JSON.stringify(WORKER_URL)};var s=document.createElement('script');s.src=${JSON.stringify(appOrigin + '/goldbars-bookmarklet.js')}+'?'+Date.now();s.onerror=function(){alert('Could not load GoldBars bookmarklet — check internet connection.')};document.body.appendChild(s)})();`
+  // CRITICAL: VanillaSoft is a frameset-based legacy app where document.body
+  // isn't a normal Node (or doesn't exist). Inject the script via documentElement
+  // OR head OR body — whatever's available — instead of relying on body alone.
+  const goldBarsSnippet = `javascript:(function(){window.__INFINITE_AGENT_ID=${JSON.stringify(agentId)};window.__INFINITE_WORKER=${JSON.stringify(WORKER_URL)};var s=document.createElement('script');s.src=${JSON.stringify(appOrigin + '/goldbars-bookmarklet.js')}+'?'+Date.now();s.onerror=function(){alert('Could not load GoldBars bookmarklet — check internet connection.')};var t=document.head||document.documentElement||document.body;if(t&&t.appendChild)t.appendChild(s);else alert('GoldBars: page DOM not ready — try again after the lead view fully loads.')})();`
 
   const copySnippet = () => {
     navigator.clipboard.writeText(snippet)
