@@ -1,4 +1,4 @@
-// Infinite CRM Email Worker — v4.13 (adds GET /version for deploy verification)
+// Infinite CRM Email Worker — v4.13 (adds GET /version + sources tagged "USHA Marketplace (worker v4.13)")
 //
 // Deploys via the Cloudflare Workers REST API with NO bundler — every helper
 // inlined here. Handles two paths:
@@ -964,7 +964,10 @@ export default {
       const lead = parseLead(body)
       lead.user_id = userId
       lead.agent_id = userId
-      lead.source = 'USHA Marketplace'
+      // Tag the source so we can tell worker-imported leads apart from
+      // manual-paste imports (Gmail Leads page). If a lead lands with source
+      // "USHA Marketplace" (no suffix) it came through manual paste, NOT here.
+      lead.source = 'USHA Marketplace (worker v4.13)'
       lead.stage = DEFAULT_STAGE
       lead.created_at = new Date().toISOString()
       lead.last_activity = lead.created_at

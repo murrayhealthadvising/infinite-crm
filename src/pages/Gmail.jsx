@@ -53,7 +53,10 @@ function parseUSHAEmail(body) {
     else if (householdRaw.toLowerCase() === 'couple') household = 2
   }
   return {
-    first_name: get('First Name') || 'Unknown',
+    // No 'Unknown' fallback — empty stays empty so a parse failure is visible
+    // as blank rather than masquerading as a real name. Helps diagnose where
+    // imports are actually coming from.
+    first_name: get('First Name') || '',
     last_name: get('Last Name') || '',
     phone: get('Primary Phone') || get('Phone') || '',
     email: get('Email') || '',
