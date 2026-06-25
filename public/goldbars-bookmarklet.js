@@ -280,11 +280,13 @@
     if (isFinite(h) && h > 0) raw.household = h; else delete raw.household
   }
 
-  // Default source: "GoldBar" matches the existing source the agent already
-  // has set up in the CRM, so leads from the bookmarklet land in the same
-  // bucket the rest of the GoldBar flow uses. Campaign (from Lead Source)
-  // keeps its marketplace branding e.g. "Sam Lamy Marketplace".
-  raw.source = 'GoldBar'
+  // Don't auto-fill the Source field in the dialog — VanillaSoft's "Lead
+  // Source" (e.g. "Sam Lamy Marketplace") kept ending up here and that's not
+  // what the agent wants the lead's Source column to say. We default to
+  // "GoldBar" in the SUBMIT payload only if the user leaves Source blank.
+  delete raw.source
+  delete raw.campaign
+  delete raw.tags
 
   // ── Dialog UI ──────────────────────────────────────────────────────────
   function el(tag, props, children) {
@@ -334,22 +336,18 @@
   ]))
 
   var rows = []
+  // Mirror the PitchPerfect dialog field set — simple, focused, no campaign
+  // auto-fill (VanillaSoft's Lead Source field is "Sam Lamy Marketplace" or
+  // similar and isn't what we want for the lead's Source column).
   var FIELDS = [
     ['first_name','First name'],
     ['last_name','Last name'],
     ['phone','Phone'],
     ['email','Email'],
-    ['address','Address'],
-    ['city','City'],
     ['state','State'],
     ['zip','ZIP'],
-    ['dob','DOB'],
     ['age','Age'],
-    ['gender','Gender'],
-    ['income','Income'],
-    ['household','Household size'],
-    ['price','Agent price ($)'],
-    ['campaign','Lead source (campaign)'],
+    ['source','Source'],
     ['notes','Notes'],
   ]
   FIELDS.forEach(function (pair) {
@@ -367,18 +365,9 @@
     dialog.appendChild(row)
   })
 
-  if (Array.isArray(raw.tags) && raw.tags.length) {
-    var tagsRow = el('div', { style: { marginBottom: '8px' }})
-    tagsRow.appendChild(el('label', { style: { display: 'block', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#5A6A7A', marginBottom: '3px' }}, 'Tags (chips)'))
-    var tagsInput = el('input', {
-      value: raw.tags.join(', '),
-      style: { width: '100%', boxSizing: 'border-box', padding: '6px 8px', borderRadius: '6px', border: '1px solid #1A2130', background: '#080B0F', color: '#fff', font: 'inherit' }
-    })
-    tagsInput.dataset.field = '_tags'
-    rows.push(tagsInput)
-    tagsRow.appendChild(tagsInput)
-    dialog.appendChild(tagsRow)
-  }
+  // (No tags input — user explicitly opted out. Source field above defaults
+  // to "GoldBar" in the payload if left blank, which is the side-tag label
+  // they wanted in the first place.)
 
   var status = el('div', { style: { fontSize: '11px', color: '#5A6A7A', marginTop: '4px', minHeight: '14px' }})
   dialog.appendChild(status)
@@ -430,33 +419,22 @@
   }
 
   submit.onclick = function () {
-    var payload = { stage: 'not-started', source: 'GoldBar' }
+    var payload = { stage: 'not-started' }
     rows.forEach(function (r) {
       var k = r.dataset.field
       var v = (r.value || '').trim()
       if (!v) return
-      // User opted out of Marketplace Network ID — never send it even if a
-      // future tweak accidentally re-introduces the input field.
-      if (k === 'external_id') return
-      // Tags input is rare — if the user typed something, lowercase and
-      // dedupe it. No auto GOLDBAR tag (source field already identifies
-      // these leads, and an open-field tag input doesn't enforce existing
-      // tag library anyway).
-      if (k === '_tags') {
-        payload.tags = v.split(/[,;|]/).map(function (s) { return s.trim().toLowerCase() }).filter(Boolean)
-        return
-      }
-      if (k === '_tags') payload.tags = v.split(/[,;|]/).map(function (s) { return s.trim().toLowerCase() }).filter(Boolean)
-      else if (k === 'price') {
-        var p = parseFloat(String(v).replace(/[^0-9.]/g, ''))
-        if (isFinite(p) && p > 0) payload.price = p
-      }
-      else if (k === 'age' || k === 'household') {
+      if (k === 'external_id') return  // opted out — never sent
+      if (k === 'age') {
         var n = parseInt(String(v).replace(/\D/g, ''))
         if (isFinite(n) && n > 0) payload[k] = n
+        return
       }
-      else payload[k] = v
+      payload[k] = v
     })
+    // Default source to "GoldBar" if the user left it blank. If they typed
+    // something else, respect that — never overwrite a manual value.
+    if (!payload.source) payload.source = 'GoldBar'
     if (!payload.phone && !payload.email) {
       status.textContent = 'Need a phone or email at minimum.'
       status.style.color = '#EF4444'
