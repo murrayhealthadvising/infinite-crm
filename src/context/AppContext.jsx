@@ -126,6 +126,11 @@ export function AppProvider({ children }) {
       if (error) console.error('refreshLeads error:', error)
       if (Array.isArray(data)) setLeads(data)
     } catch (e) { console.error('refreshLeads exception:', e) }
+    // Also refresh the pitch queue so countdown badges appear on freshly-
+    // arrived leads without requiring a full page reload. Realtime SHOULD
+    // catch these automatically, but the manual refresh is the user's "make
+    // sure everything's current" button — so it should be comprehensive.
+    try { await refreshPitchQueue() } catch (e) { console.error('refreshLeads → pitchQueue exception:', e) }
     setLoading(false)
   }
 
