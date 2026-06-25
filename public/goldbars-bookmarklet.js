@@ -437,6 +437,14 @@
       // User opted out of Marketplace Network ID — never send it even if a
       // future tweak accidentally re-introduces the input field.
       if (k === 'external_id') return
+      // Visible "GOLDBAR" side-tag on every routed lead — keep uppercase so
+      // it stands out from the normal lowercase tags. Merged with whatever
+      // the user typed in the Tags input.
+      if (k === '_tags') {
+        var typed = v.split(/[,;|]/).map(function (s) { return s.trim().toLowerCase() }).filter(Boolean)
+        payload.tags = ['GOLDBAR'].concat(typed)
+        return
+      }
       if (k === '_tags') payload.tags = v.split(/[,;|]/).map(function (s) { return s.trim().toLowerCase() }).filter(Boolean)
       else if (k === 'price') {
         var p = parseFloat(String(v).replace(/[^0-9.]/g, ''))
@@ -448,6 +456,13 @@
       }
       else payload[k] = v
     })
+    // GOLDBAR tag on every routed lead — always added even if the agent never
+    // saw a Tags input (most VanillaSoft leads ship without scraped tags).
+    // Dedupe case-insensitively so we never end up with both GOLDBAR + goldbar.
+    var existingTags = Array.isArray(payload.tags) ? payload.tags : []
+    payload.tags = ['GOLDBAR'].concat(
+      existingTags.filter(function (t) { return String(t).toLowerCase() !== 'goldbar' })
+    )
     if (!payload.phone && !payload.email) {
       status.textContent = 'Need a phone or email at minimum.'
       status.style.color = '#EF4444'
