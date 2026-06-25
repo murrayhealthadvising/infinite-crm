@@ -121,22 +121,65 @@ function silentRefresh() {
 }
 
 // ── RFC 2822 builder ─────────────────────────────────────────────────────
-// Gmail API wants the raw RFC 2822 message base64url-encoded. We construct
-// a minimal text/plain message — no attachments, no HTML, no MIME parts.
-// Headers we set: To, Subject, From (optional name), Date, MIME-Version,
-// Content-Type. Body is the plain text the agent typed.
-function rfc2822({ to, subject, body, fromName }) {
+// Builds either a plain-text message OR a multipart/alternative with BOTH
+// plain and HTML so the recipient's mail client shows the HTML version while
+// still having a usable plain-text fallback (good deliverability, accessible).
+//
+// When `html` is provided, plain is auto-derived from it for the alternative
+// part. We use quoted-printable for the HTML body so soft line wraps don't
+// corrupt URLs / inline styles.
+function rfc2822({ to, subject, html, body, fromName }) {
   const lines = []
-  lines.push('MIME-Version: 1.0')
-  lines.push('Content-Type: text/plain; charset=utf-8')
-  lines.push('Content-Transfer-Encoding: 7bit')
   if (fromName) lines.push(`From: ${fromName}`)
   lines.push(`To: ${to}`)
   lines.push(`Subject: ${encodeHeader(subject || '')}`)
   lines.push(`Date: ${new Date().toUTCString()}`)
-  lines.push('')
-  lines.push(String(body || '').replace(/\r?\n/g, '\r\n'))
+  lines.push('MIME-Version: 1.0')
+
+  if (html) {
+    const boundary = 'boundary-' + Math.random().toString(36).slice(2) + Date.now().toString(36)
+    const plain = body || htmlToPlain(html)
+    lines.push(`Content-Type: multipart/alternative; boundary="${boundary}"`)
+    lines.push('')
+    lines.push('--' + boundary)
+    lines.push('Content-Type: text/plain; charset=utf-8')
+    lines.push('Content-Transfer-Encoding: 8bit')
+    lines.push('')
+    lines.push(String(plain).replace(/\r?\n/g, '\r\n'))
+    lines.push('--' + boundary)
+    lines.push('Content-Type: text/html; charset=utf-8')
+    lines.push('Content-Transfer-Encoding: 8bit')
+    lines.push('')
+    lines.push(String(html).replace(/\r?\n/g, '\r\n'))
+    lines.push('--' + boundary + '--')
+  } else {
+    lines.push('Content-Type: text/plain; charset=utf-8')
+    lines.push('Content-Transfer-Encoding: 8bit')
+    lines.push('')
+    lines.push(String(body || '').replace(/\r?\n/g, '\r\n'))
+  }
   return lines.join('\r\n')
+}
+
+// Cheap HTML → plain-text fallback for the multipart/alternative plain part.
+// Doesn't need to be pretty; it's what gets shown only if the recipient's
+// mail client can't render HTML.
+function htmlToPlain(html) {
+  if (!html) return ''
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|li|tr|h[1-6])>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
 }
 
 // RFC 2047 encoding for non-ASCII subject lines. Gmail tolerates UTF-8 raw,
@@ -182,46 +225,24 @@ function decodeBase64Url(s) {
   } catch { return '' }
 }
 
-// Recursively walk a Gmail message payload to find the best text body.
-// Prefers text/plain, falls back to text/html stripped to text.
-function extractTextBody(payload) {
-  if (!payload) return ''
-  // Direct body
-  if (payload.body?.data) {
-    const text = decodeBase64Url(payload.body.data)
-    if (payload.mimeType === 'text/html') return stripHtmlToText(text)
-    return text
-  }
-  // Multipart — prefer text/plain, then text/html, then recurse
-  if (Array.isArray(payload.parts)) {
-    const plain = payload.parts.find(p => p.mimeType === 'text/plain' && p.body?.data)
-    if (plain) return decodeBase64Url(plain.body.data)
-    const html = payload.parts.find(p => p.mimeType === 'text/html' && p.body?.data)
-    if (html) return stripHtmlToText(decodeBase64Url(html.body.data))
-    for (const part of payload.parts) {
-      const inner = extractTextBody(part)
-      if (inner) return inner
+// Recursively walk a Gmail message payload and pull out BOTH text/plain and
+// text/html parts. Returns { plain, html }. Either or both may be empty.
+// We keep both so the compose modal can show a rendered HTML preview AND
+// fall back to plain when sending.
+function extractBodyParts(payload) {
+  let plain = ''
+  let html = ''
+  function walk(p) {
+    if (!p) return
+    if (p.body?.data) {
+      const text = decodeBase64Url(p.body.data)
+      if (p.mimeType === 'text/plain' && !plain) plain = text
+      else if (p.mimeType === 'text/html' && !html) html = text
     }
+    if (Array.isArray(p.parts)) p.parts.forEach(walk)
   }
-  return ''
-}
-
-function stripHtmlToText(html) {
-  if (!html) return ''
-  return html
-    .replace(/<style[\s\S]*?<\/style>/gi, '')
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/(p|div|li|tr|h[1-6])>/gi, '\n')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
+  walk(payload)
+  return { plain, html }
 }
 
 function getHeader(payload, name) {
@@ -279,8 +300,8 @@ export async function listGmailDrafts({ maxResults = 25 } = {}) {
         const j = await r.json()
         const payload = j?.message?.payload
         const subject = getHeader(payload, 'Subject') || '(no subject)'
-        const body = extractTextBody(payload)
-        return { id, subject, body }
+        const { plain, html } = extractBodyParts(payload)
+        return { id, subject, body: plain, html }
       } catch { return null }
     }))
     const drafts = fetched.filter(Boolean)
@@ -296,10 +317,14 @@ export async function listGmailDrafts({ maxResults = 25 } = {}) {
 // Returns { ok, error?, messageId? }
 //   to        — recipient email address
 //   subject   — plain string
-//   body      — plain text body (no HTML)
+//   body      — plain text body
+//   html      — optional HTML body. If provided, message is sent as
+//               multipart/alternative with both representations so the
+//               recipient sees the rich HTML AND fallback clients see plain.
 //   fromName  — optional "Display Name <email>" or just a display name
-export async function sendGmailMessage({ to, subject, body, fromName }) {
+export async function sendGmailMessage({ to, subject, body, html, fromName }) {
   if (!to || !subject) return { ok: false, error: 'Recipient and subject are required.' }
+  if (!body && !html)  return { ok: false, error: 'Message body is empty.' }
 
   let token = readToken()
   if (!token) token = await silentRefresh()
@@ -310,7 +335,7 @@ export async function sendGmailMessage({ to, subject, body, fromName }) {
     return { ok: false, error: 'Token refresh failed — open Settings and click Connect to re-authorize.' }
   }
 
-  const raw = toBase64Url(rfc2822({ to, subject, body, fromName }))
+  const raw = toBase64Url(rfc2822({ to, subject, body, html, fromName }))
   const send = async (tok) => fetch(
     'https://www.googleapis.com/gmail/v1/users/me/messages/send',
     {

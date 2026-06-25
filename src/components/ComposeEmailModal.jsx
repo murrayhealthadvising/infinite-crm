@@ -31,26 +31,30 @@ export default function ComposeEmailModal({ leadId, to: initialTo, onClose, defa
   const subjectRef = useRef(null)
   const bodyRef = useRef(null)
 
-  // Variable substitution — {first_name}, {last_name}, {name}, {email} etc.
-  // get replaced with the lead's values when a template is applied. Leaves
-  // unknown tokens alone so the user can spot them.
+  // Variable substitution — supports BOTH {first_name} AND {First Name}
+  // AND {firstname}. Key normalization: lowercase + strip spaces/underscores.
+  // Leaves unknown tokens alone so the user can spot them.
   const substituteVars = (text) => {
     if (!text || !lead) return text
     const vars = {
-      first_name: lead.first_name || '',
-      last_name: lead.last_name || '',
+      firstname: lead.first_name || '',
+      lastname: lead.last_name || '',
       name: (lead.name || `${lead.first_name || ''} ${lead.last_name || ''}`).trim(),
+      fullname: (lead.name || `${lead.first_name || ''} ${lead.last_name || ''}`).trim(),
       email: lead.email || '',
       phone: lead.phone || '',
       state: lead.state || '',
+      sc: lead.state || '',           // common alias for State Code
       city: lead.city || '',
-      agent_first_name: (user?.name || '').split(' ')[0] || '',
-      agent_name: user?.name || '',
-      agent_email: user?.email || '',
+      zip: lead.zip || '',
+      agentfirstname: (user?.name || '').split(' ')[0] || (user?.email || '').split('@')[0] || '',
+      agentname: user?.name || (user?.email || '').split('@')[0] || '',
+      agentemail: user?.email || '',
     }
-    return text.replace(/\{(\w+)\}/g, (m, key) => {
-      const k = key.toLowerCase()
-      return k in vars ? vars[k] : m  // unknown token → leave it
+    // Match anything inside braces (handles "{First Name}", "{State}", etc.)
+    return text.replace(/\{([^}]+)\}/g, (m, key) => {
+      const norm = String(key).toLowerCase().replace(/[\s_]/g, '')
+      return norm in vars ? vars[norm] : m
     })
   }
 
@@ -66,13 +70,24 @@ export default function ComposeEmailModal({ leadId, to: initialTo, onClose, defa
   // Load templates the first time the modal opens (if connected)
   useEffect(() => { if (connected && templates === null) loadTemplates() }, [connected])
 
+  // When a template is picked, we capture BOTH the plain and HTML versions
+  // (with variables substituted). If the template has an HTML version, we
+  // send it as HTML so the recipient sees the rich layout instead of the
+  // flattened plain text. The editable textarea below shows the plain
+  // version — agents can tweak the wording, and on send we re-apply that
+  // wording to the plain MIME part while sending the original HTML intact.
+  const [templateHtml, setTemplateHtml] = useState('')
   const applyTemplate = (tplId) => {
     setSelectedTpl(tplId)
-    if (!tplId) return
+    if (!tplId) {
+      setTemplateHtml('')
+      return
+    }
     const t = (templates || []).find(t => t.id === tplId)
     if (!t) return
     setSubject(substituteVars(t.subject || ''))
     setBody(substituteVars(t.body || ''))
+    setTemplateHtml(t.html ? substituteVars(t.html) : '')
   }
 
   // Auto-focus subject when modal opens (To is usually pre-filled)
@@ -114,7 +129,15 @@ export default function ComposeEmailModal({ leadId, to: initialTo, onClose, defa
       : user?.email
       ? `${user.email.split('@')[0]} <${user.email}>`
       : undefined
-    const res = await sendGmailMessage({ to, subject, body, fromName })
+    // If the picked template had an HTML version, send it as multipart/alt
+    // (rich HTML + plain fallback). Otherwise plain only — same as before.
+    const res = await sendGmailMessage({
+      to,
+      subject,
+      body,
+      html: templateHtml || undefined,
+      fromName,
+    })
     if (res.ok) {
       // Auto-log as 'email' activity so it shows up in the lead's Action Log.
       try {
@@ -220,12 +243,31 @@ export default function ComposeEmailModal({ leadId, to: initialTo, onClose, defa
           </div>
 
           <div>
-            <label className="block text-[10px] font-mono uppercase tracking-wider text-[#5A6A7A] mb-1">Body</label>
+            <label className="block text-[10px] font-mono uppercase tracking-wider text-[#5A6A7A] mb-1">
+              Body {templateHtml && <span className="text-[#3B82F6] normal-case">· HTML template — preview below</span>}
+            </label>
             <textarea ref={bodyRef} value={body} onChange={e => setBody(e.target.value)}
-              rows={10}
+              rows={templateHtml ? 4 : 10}
               placeholder="Hi —&#10;&#10;Wanted to follow up on…"
               className="w-full px-3 py-2.5 bg-[#080B0F] border border-[#1A2130] rounded-lg text-sm text-white focus:outline-none focus:border-[#3B82F6] resize-y" />
+            {templateHtml && (
+              <p className="text-[10px] text-[#5A6A7A] mt-1">
+                Editing the textarea changes the plain-text fallback only. The HTML version below is what most recipients will see.
+              </p>
+            )}
           </div>
+
+          {templateHtml && (
+            <div>
+              <label className="block text-[10px] font-mono uppercase tracking-wider text-[#5A6A7A] mb-1">Preview (what the recipient will see)</label>
+              <iframe
+                title="Email preview"
+                srcDoc={templateHtml}
+                sandbox=""
+                style={{ width: '100%', minHeight: '320px', maxHeight: '50vh', border: '1px solid #1A2130', borderRadius: '8px', background: 'white' }}
+              />
+            </div>
+          )}
 
           {status && (
             <div className={`px-3 py-2 rounded-lg text-xs border ${
