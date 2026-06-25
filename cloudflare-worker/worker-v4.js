@@ -1,4 +1,4 @@
-// Infinite CRM Email Worker — v4.16 (chunked raw email logging — captures full MIME past header bloat)
+// Infinite CRM Email Worker — v4.17 (content-sniff finalCleanup — fixes HTML/QP single-part emails from new USHA)
 //
 // Deploys via the Cloudflare Workers REST API with NO bundler — every helper
 // inlined here. Handles two paths:
@@ -102,13 +102,32 @@ function stripHtmlAndQp(s) {
 // can't parse, the new debug log line in email() prints the first 600 chars
 // of the body so we can diagnose without guessing.
 
+// Content-sniff final cleanup. v4.17 fix: the new USHA marketplace ships
+// emails as single-part HTML with QP encoding, but Cloudflare's added ARC/DKIM
+// headers push the original Content-Type/Content-Transfer-Encoding past where
+// our outer-header regex looks, so QP-decode + HTML-strip silently skipped.
+// Solution: always re-check the body content itself — if it LOOKS QP, decode;
+// if it LOOKS HTML, strip. Header-independent, defensive.
+function finalCleanup(body) {
+  if (!body) return ''
+  // QP heuristic: any =HH hex pair or =\n soft line break
+  if (/=[0-9A-F]{2}/i.test(body) || /=\r?\n/.test(body)) {
+    body = decodeQuotedPrintable(body)
+  }
+  // HTML heuristic: any opening or closing tag for common email-template tags
+  if (/<\/?(html|head|body|div|p|table|tr|td|span|br|h[1-6]|a|ul|ol|li|strong|b|i|em)\b/i.test(body)) {
+    body = stripHtmlAndQp(body)
+  }
+  return body
+}
+
 // Find the text/plain (preferred) or text/html part of a MIME message.
 // Returns the decoded body (plain text). Handles NESTED multipart by recursing
 // into any multipart/* child part — necessary for USHA Lead Arena emails that
 // ship multipart/mixed → multipart/alternative → html.
 function extractBody(raw) {
   const headerEnd = raw.indexOf('\r\n\r\n')
-  if (headerEnd < 0) return stripHtmlAndQp(raw)
+  if (headerEnd < 0) return finalCleanup(raw)
   const headers = raw.slice(0, headerEnd)
   let body = raw.slice(headerEnd + 4)
 
@@ -154,9 +173,11 @@ function extractBody(raw) {
       }
     }
     console.log('[extractBody] decision: plain=' + plain.length + ' chars, html=' + html.length + ' chars')
-    if (plain) return plain
-    if (html) return stripHtmlAndQp(html)
-    return stripHtmlAndQp(body)
+    // Run final content-sniff cleanup on every return path so QP/HTML get
+    // handled regardless of whether the headers correctly declared them.
+    if (plain) return finalCleanup(plain)
+    if (html) return finalCleanup(html)
+    return finalCleanup(body)
   }
 
   // Single-part
@@ -165,8 +186,7 @@ function extractBody(raw) {
   else if (cte.toLowerCase().includes('base64')) {
     try { body = atob(body.replace(/\s+/g, '')) } catch {}
   }
-  if (contentType.includes('html')) body = stripHtmlAndQp(body)
-  return body
+  return finalCleanup(body)
 }
 
 // ─── Field extraction from a normalized text body ──────────────────────────
@@ -820,9 +840,9 @@ export default {
     // every release so a stale deploy is immediately visible.
     if (req.method === 'GET' && url.pathname === '/version') {
       return new Response(JSON.stringify({
-        version: 'v4.16',
-        parser: 'chunked raw email logging',
-        deployed_check: 'if you see v4.16 here, the deploy succeeded',
+        version: 'v4.17',
+        parser: 'content-sniff cleanup — handles HTML/QP regardless of headers',
+        deployed_check: 'if you see v4.17 here, the deploy succeeded',
       }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
     }
     // Workflow-list proxy — lets the CRM Settings panel show a dropdown of the
@@ -993,7 +1013,7 @@ export default {
       lead.agent_id = userId
       // Tag the source so we can tell worker-imported leads apart from
       // manual-paste imports. v4.14 stamps a build id so we can verify deploys.
-      lead.source = 'USHA Marketplace (worker v4.16)'
+      lead.source = 'USHA Marketplace (worker v4.17)'
       lead.stage = DEFAULT_STAGE
       lead.created_at = new Date().toISOString()
       lead.last_activity = lead.created_at
