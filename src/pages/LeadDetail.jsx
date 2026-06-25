@@ -6,6 +6,7 @@ import PitchCountdown from '../components/PitchCountdown'
 import ManualEnrollButton from '../components/ManualEnrollButton'
 import SoldBadge from '../components/SoldBadge'
 import CalendlyButton from '../components/CalendlyButton'
+import ComposeEmailModal from '../components/ComposeEmailModal'
 import { Phone, Mail, MapPin, Calendar, ArrowLeft, MessageSquare, PhoneCall, AtSign, StickyNote, ChevronDown, Zap, Send, User, Users, Home, DollarSign, Heart, Pencil, Check, X, Clock } from 'lucide-react'
 import { normalizePhone, displayPhone } from '../lib/phone'
 import { localTimeFor, localHourFor } from '../lib/timezone'
@@ -351,6 +352,7 @@ export default function LeadDetail() {
   const navigate = useNavigate()
   const { leads, tags, updateLead, updateLeadStage, addActivity, getLeadActivities, deleteActivity, splitNotes, addReminder } = useApp()
   const [showRemindMe, setShowRemindMe] = useState(false)
+  const [showCompose, setShowCompose] = useState(false)
   const safeLeads = Array.isArray(leads) ? leads : []
   const lead = safeLeads.find(l => l.id === id)
   const [editStage, setEditStage] = useState(false)
@@ -487,6 +489,14 @@ export default function LeadDetail() {
               style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
               <PhoneCall size={14} /> Call {displayPhone(lead.phone)}
             </a>
+          )}
+          {lead.email && (
+            <button onClick={() => setShowCompose(true)}
+              title={`Compose email to ${lead.email}`}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-[8px] text-sm font-semibold text-white transition-opacity hover:opacity-90"
+              style={{ background: 'linear-gradient(135deg, #3B82F6, #8B5CF6)' }}>
+              <Mail size={13} /> Email
+            </button>
           )}
           <ManualEnrollButton lead={lead} />
           <CalendlyButton lead={lead} />
@@ -641,6 +651,11 @@ export default function LeadDetail() {
             await addReminder({ ...data, lead_id: id })
             setShowRemindMe(false)
           }} />
+      )}
+
+      {showCompose && (
+        <ComposeEmailModal leadId={id} to={lead.email}
+          onClose={() => setShowCompose(false)} />
       )}
     </div>
   )

@@ -6,10 +6,11 @@ import {
   Key, CheckCircle, XCircle, Eye, EyeOff, Copy,
   Plus, Trash2, Check, X, GripVertical, AlertTriangle, Tags as TagsIcon,
   UserPlus, Users as UsersIcon, RefreshCw, Calendar as CalendarIcon,
-  Link as LinkIcon, Unlink, Zap,
+  Link as LinkIcon, Unlink, Zap, Mail,
 } from 'lucide-react'
 import { format } from 'date-fns'
 import { connectGoogleCalendar, clearGcalToken, isGcalConnected, getGoogleClientId, createCalendarEvent } from '../lib/gcal'
+import { connectGmail, clearGmailToken, isGmailConnected, sendGmailMessage } from '../lib/gmail'
 
 // Headless secondary Supabase client — used to create a runner account
 // WITHOUT logging the current agent out. persistSession=false so it leaves
@@ -944,6 +945,126 @@ function CalendlyPanel() {
   )
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Gmail panel — connect/disconnect Gmail send permission. Once connected, the
+// Email button on any lead opens the Compose modal which sends through Gmail.
+// Test button fires a one-off email to the agent themselves so they can verify
+// without picking on a real lead.
+// ─────────────────────────────────────────────────────────────────────────────
+function GmailPanel() {
+  const { user } = useApp()
+  const [connected, setConnected] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState(null)
+  const clientId = getGoogleClientId()
+  const hasClientId = !!clientId
+  const refreshStatus = () => setConnected(isGmailConnected())
+  useEffect(() => { refreshStatus() }, [])
+
+  const handleConnect = async () => {
+    setBusy(true); setMsg(null)
+    try {
+      await connectGmail()
+      refreshStatus()
+      setMsg({ type: 'success', text: 'Gmail connected. Compose Email is live on every lead.' })
+    } catch (e) {
+      setMsg({ type: 'error', text: e?.message || 'Failed to connect.' })
+    } finally { setBusy(false) }
+  }
+
+  const handleDisconnect = () => {
+    if (!confirm('Disconnect Gmail? The Email button will fall back to mailto: until you reconnect.')) return
+    clearGmailToken()
+    refreshStatus()
+    setMsg({ type: 'info', text: 'Disconnected.' })
+  }
+
+  const handleTest = async () => {
+    if (!user?.email) { setMsg({ type: 'error', text: 'No email on file for your account.' }); return }
+    setBusy(true); setMsg(null)
+    try {
+      const res = await sendGmailMessage({
+        to: user.email,
+        subject: 'Infinite CRM · test email',
+        body: 'You can delete this — Infinite CRM is testing your Gmail connection.\n\nIf you got this, the Email button on every lead is ready to use.',
+        fromName: user?.name ? `${user.name} <${user.email}>` : undefined,
+      })
+      if (res.ok) setMsg({ type: 'success', text: `Test sent to ${user.email}. Check your inbox.` })
+      else setMsg({ type: 'error', text: `Test failed: ${res.error}` })
+    } catch (e) {
+      setMsg({ type: 'error', text: e?.message || 'Test failed' })
+    } finally { setBusy(false) }
+  }
+
+  return (
+    <div className="rounded-xl border border-[#1A2130] p-5" style={{ background: '#0D1117' }}>
+      <div className="flex items-start justify-between mb-3 gap-3">
+        <div>
+          <h2 className="text-xs font-mono uppercase tracking-wider text-[#5A6A7A] flex items-center gap-2">
+            <Mail size={12} /> Gmail
+            {connected && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded font-mono"
+                style={{ background: '#10B98115', color: '#10B981', border: '1px solid #10B98140' }}>
+                connected
+              </span>
+            )}
+          </h2>
+          <p className="text-xs text-[#3A4A5A] mt-1">
+            Connect Gmail to send emails straight from any lead — the Email button in the lead header opens a compose modal. Sent mail lands in your own Gmail Sent folder, and each send auto-logs as an activity row.
+          </p>
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {connected ? (
+            <>
+              <button onClick={handleTest} disabled={busy}
+                className="px-3 py-1.5 rounded-lg text-xs border border-[#1A2130] text-[#8899AA] hover:text-white hover:border-[#2A3547] disabled:opacity-40">
+                Send test email
+              </button>
+              <button onClick={handleDisconnect} disabled={busy}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border border-[#EF444440] text-[#EF4444] hover:bg-[#EF444415] disabled:opacity-40">
+                <X size={11} /> Disconnect
+              </button>
+            </>
+          ) : (
+            <button onClick={handleConnect} disabled={busy || !hasClientId}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white disabled:opacity-50"
+              style={{ background: 'linear-gradient(135deg, #3B82F6, #8B5CF6)' }}>
+              <Mail size={11} /> {busy ? 'Connecting…' : 'Connect Gmail'}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {!hasClientId && (
+        <div className="mb-3 rounded-lg border border-[#F59E0B40] px-3 py-2 text-xs text-[#F59E0B]" style={{ background: '#F59E0B08' }}>
+          <strong>Setup required.</strong> Google OAuth client ID is missing. Admin: set <code className="px-1 py-0.5 bg-black/30 rounded text-[10px] font-mono">VITE_GOOGLE_CLIENT_ID</code> in Vercel env vars and redeploy.
+        </div>
+      )}
+
+      {msg && (
+        <div className={`mb-3 px-3 py-2 rounded-lg text-xs flex items-start gap-2 ${
+          msg.type === 'success' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+          : msg.type === 'error' ? 'bg-red-500/10 text-red-400 border border-red-500/20'
+          : 'bg-blue-500/10 text-blue-400 border border-blue-500/20'
+        }`}>
+          <span className="flex-1">{msg.text}</span>
+          <button onClick={() => setMsg(null)}><X size={12} /></button>
+        </div>
+      )}
+
+      <div className="rounded-lg border border-[#1A2130] p-3" style={{ background: '#080B0F' }}>
+        <p className="text-[10px] font-mono uppercase tracking-wider text-[#5A6A7A] mb-2">How it works</p>
+        <ol className="text-xs text-[#8899AA] space-y-1 list-decimal ml-4">
+          <li>Click <span className="text-white font-mono">Connect Gmail</span> above — Google asks you to authorize. (Separate from Calendar; one-time per scope.)</li>
+          <li>Open any lead with an email address → click the new <span className="text-white font-mono">Email</span> button in the header.</li>
+          <li>Compose modal opens. Write subject + body, hit <span className="text-white font-mono">Send</span>.</li>
+          <li>Email goes through your Gmail account (shows in your Sent folder). An <code className="text-[#3B82F6]">Emailed: &lt;subject&gt;</code> entry auto-appears in the lead's Action Log.</li>
+        </ol>
+      </div>
+    </div>
+  )
+}
+
 function CalendarPanel() {
   const { reminders } = useApp()
   const [connected, setConnected] = useState(false)
@@ -1689,6 +1810,9 @@ export default function Settings() {
 
       {/* Calendar — Google Calendar shortcuts for reminders */}
       <CalendarPanel />
+
+      {/* Gmail — send emails directly from lead detail (auto-logs to Action Log) */}
+      <GmailPanel />
 
       {/* Preferences — per-user UI toggles */}
       <div className="rounded-xl border border-[#1A2130] p-5" style={{ background: '#0D1117' }}>
