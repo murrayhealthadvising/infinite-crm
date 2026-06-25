@@ -1,4 +1,4 @@
-// Infinite CRM Email Worker — v4.12 (parser hardening for HTML-only marketplace emails)
+// Infinite CRM Email Worker — v4.13 (adds GET /version for deploy verification)
 //
 // Deploys via the Cloudflare Workers REST API with NO bundler — every helper
 // inlined here. Handles two paths:
@@ -801,6 +801,16 @@ export default {
     // CORS preflight
     if (req.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: CORS })
+    }
+    // Version probe — lets us curl the deployed worker and confirm Cloudflare
+    // is actually running the code we think it is. Bump the version string
+    // every release so a stale deploy is immediately visible.
+    if (req.method === 'GET' && url.pathname === '/version') {
+      return new Response(JSON.stringify({
+        version: 'v4.13',
+        parser: 'tr-aware html stripping + plain-preferred MIME',
+        deployed_check: 'if you see v4.13 here, the deploy succeeded',
+      }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
     }
     // Workflow-list proxy — lets the CRM Settings panel show a dropdown of the
     // agent's real PitchPrfct workflows WITHOUT the API key ever touching the
