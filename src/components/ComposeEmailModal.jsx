@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
-import { Mail, Send, X, Check, AlertCircle, Loader } from 'lucide-react'
+import { Mail, Send, X, Check, AlertCircle, Loader, FileText, RefreshCw } from 'lucide-react'
 import { useApp } from '../context/AppContext'
-import { isGmailConnected, sendGmailMessage, connectGmail } from '../lib/gmail'
+import { isGmailConnected, sendGmailMessage, connectGmail, listGmailDrafts } from '../lib/gmail'
 
 // Quick compose modal — fires from the small email button on LeadDetail.
 // Sends through the Gmail API so the email lands in the agent's own Sent
@@ -14,7 +14,8 @@ import { isGmailConnected, sendGmailMessage, connectGmail } from '../lib/gmail'
 //   onClose  — close callback
 //   defaults — optional { subject, body, fromName }
 export default function ComposeEmailModal({ leadId, to: initialTo, onClose, defaults }) {
-  const { addActivity, user, profile } = useApp()
+  const { addActivity, user, profile, leads } = useApp()
+  const lead = (leads || []).find(l => l.id === leadId)
 
   const [to, setTo] = useState(initialTo || '')
   const [subject, setSubject] = useState(defaults?.subject || '')
@@ -22,9 +23,57 @@ export default function ComposeEmailModal({ leadId, to: initialTo, onClose, defa
   const [connected, setConnected] = useState(() => isGmailConnected())
   const [sending, setSending] = useState(false)
   const [connecting, setConnecting] = useState(false)
-  const [status, setStatus] = useState(null)  // { type: 'ok'|'err'|'info', text }
+  const [status, setStatus] = useState(null)
+  const [templates, setTemplates] = useState(null)  // null = not loaded, [] = loaded empty
+  const [loadingTpl, setLoadingTpl] = useState(false)
+  const [tplError, setTplError] = useState(null)
+  const [selectedTpl, setSelectedTpl] = useState('')
   const subjectRef = useRef(null)
   const bodyRef = useRef(null)
+
+  // Variable substitution — {first_name}, {last_name}, {name}, {email} etc.
+  // get replaced with the lead's values when a template is applied. Leaves
+  // unknown tokens alone so the user can spot them.
+  const substituteVars = (text) => {
+    if (!text || !lead) return text
+    const vars = {
+      first_name: lead.first_name || '',
+      last_name: lead.last_name || '',
+      name: (lead.name || `${lead.first_name || ''} ${lead.last_name || ''}`).trim(),
+      email: lead.email || '',
+      phone: lead.phone || '',
+      state: lead.state || '',
+      city: lead.city || '',
+      agent_first_name: (user?.name || '').split(' ')[0] || '',
+      agent_name: user?.name || '',
+      agent_email: user?.email || '',
+    }
+    return text.replace(/\{(\w+)\}/g, (m, key) => {
+      const k = key.toLowerCase()
+      return k in vars ? vars[k] : m  // unknown token → leave it
+    })
+  }
+
+  const loadTemplates = async () => {
+    if (!connected) return
+    setLoadingTpl(true); setTplError(null)
+    const res = await listGmailDrafts({ maxResults: 25 })
+    if (res.ok) setTemplates(res.drafts)
+    else { setTemplates([]); setTplError(res.error) }
+    setLoadingTpl(false)
+  }
+
+  // Load templates the first time the modal opens (if connected)
+  useEffect(() => { if (connected && templates === null) loadTemplates() }, [connected])
+
+  const applyTemplate = (tplId) => {
+    setSelectedTpl(tplId)
+    if (!tplId) return
+    const t = (templates || []).find(t => t.id === tplId)
+    if (!t) return
+    setSubject(substituteVars(t.subject || ''))
+    setBody(substituteVars(t.body || ''))
+  }
 
   // Auto-focus subject when modal opens (To is usually pre-filled)
   useEffect(() => {
@@ -127,6 +176,41 @@ export default function ComposeEmailModal({ leadId, to: initialTo, onClose, defa
               placeholder="lead@example.com"
               className="w-full px-3 py-2 bg-[#080B0F] border border-[#1A2130] rounded-lg text-sm text-white focus:outline-none focus:border-[#3B82F6]" />
           </div>
+
+          {connected && (
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-[10px] font-mono uppercase tracking-wider text-[#5A6A7A] inline-flex items-center gap-1.5">
+                  <FileText size={11} /> Template (from your Gmail drafts)
+                </label>
+                <button onClick={loadTemplates} disabled={loadingTpl}
+                  className="text-[10px] text-[#5A6A7A] hover:text-white inline-flex items-center gap-1 disabled:opacity-40"
+                  title="Reload templates from Gmail">
+                  <RefreshCw size={10} className={loadingTpl ? 'animate-spin' : ''} /> Refresh
+                </button>
+              </div>
+              <select value={selectedTpl} onChange={e => applyTemplate(e.target.value)}
+                disabled={loadingTpl}
+                className="w-full px-3 py-2 bg-[#080B0F] border border-[#1A2130] rounded-lg text-sm text-white focus:outline-none focus:border-[#3B82F6] disabled:opacity-50">
+                <option value="">— start blank or pick a template —</option>
+                {loadingTpl && <option disabled>Loading your Gmail drafts…</option>}
+                {templates && templates.length === 0 && !loadingTpl && (
+                  <option disabled>No drafts/templates found in your Gmail</option>
+                )}
+                {(templates || []).map(t => (
+                  <option key={t.id} value={t.id}>{t.subject}</option>
+                ))}
+              </select>
+              {tplError && (
+                <p className="text-[10px] text-[#EF4444] mt-1">{tplError}</p>
+              )}
+              {!tplError && lead && (
+                <p className="text-[10px] text-[#5A6A7A] mt-1">
+                  Variables auto-filled from the lead: <code className="text-[#8899AA]">{'{first_name}'}</code>, <code className="text-[#8899AA]">{'{last_name}'}</code>, <code className="text-[#8899AA]">{'{name}'}</code>, <code className="text-[#8899AA]">{'{state}'}</code>, <code className="text-[#8899AA]">{'{agent_name}'}</code>, etc.
+                </p>
+              )}
+            </div>
+          )}
 
           <div>
             <label className="block text-[10px] font-mono uppercase tracking-wider text-[#5A6A7A] mb-1">Subject</label>

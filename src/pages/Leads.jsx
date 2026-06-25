@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useApp } from '../context/AppContext'
 import PitchCountdown from '../components/PitchCountdown'
+import EmailButton from '../components/EmailButton'
 import SoldBadge from '../components/SoldBadge'
 import { normalizePhone, displayPhone, copyPhoneValue } from '../lib/phone'
 import { localTimeFor, localHourFor, timezoneFor } from '../lib/timezone'
@@ -922,6 +923,9 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
               style={{ background: `linear-gradient(135deg, ${safeColor}, ${safeColor}AA)` }}>
               <Phone size={12} /> Call
             </a>
+          )}
+          {lead.email && (
+            <EmailButton lead={lead} variant="pill" size="sm" />
           )}
           <TagPill stage={stageId} tags={safeTags} onChange={(s) => onStageChange(lead.id, s)} />
         </div>

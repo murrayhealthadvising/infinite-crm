@@ -10,7 +10,10 @@
 
 import { getGoogleClientId } from './gcal'
 
-const SCOPES = 'https://www.googleapis.com/auth/gmail.send'
+// gmail.compose covers send + read/list/edit drafts, which is how Gmail
+// templates are stored. Broader than gmail.send but lets us pull the agent's
+// existing templates into the Compose modal so they don't have to retype.
+const SCOPES = 'https://www.googleapis.com/auth/gmail.compose'
 const TOKEN_KEY = 'infinite_crm_gmail_token'
 const CONNECTED_KEY = 'infinite_crm_gmail_connected'
 
@@ -159,6 +162,122 @@ function toBase64Url(s) {
       .replace(/=+$/, '')
   } catch (e) {
     throw new Error('Failed to base64-encode message body: ' + (e?.message || e))
+  }
+}
+
+// ── Drafts / Templates ────────────────────────────────────────────────────
+// Gmail templates are stored as drafts. We list the agent's drafts and pull
+// out subject + body text so they can pick one in the Compose modal.
+//
+// Trade-off: this requires gmail.compose scope (we already have it). The
+// list-then-fetch-each-detail pattern is N+1 API calls but Gmail caps at
+// 20-50 drafts for most users so it's fine. We cache the result in-memory
+// for the modal's lifetime — refresh button forces a re-fetch.
+
+function decodeBase64Url(s) {
+  if (!s) return ''
+  try {
+    const b64 = s.replace(/-/g, '+').replace(/_/g, '/')
+    return decodeURIComponent(escape(atob(b64)))
+  } catch { return '' }
+}
+
+// Recursively walk a Gmail message payload to find the best text body.
+// Prefers text/plain, falls back to text/html stripped to text.
+function extractTextBody(payload) {
+  if (!payload) return ''
+  // Direct body
+  if (payload.body?.data) {
+    const text = decodeBase64Url(payload.body.data)
+    if (payload.mimeType === 'text/html') return stripHtmlToText(text)
+    return text
+  }
+  // Multipart — prefer text/plain, then text/html, then recurse
+  if (Array.isArray(payload.parts)) {
+    const plain = payload.parts.find(p => p.mimeType === 'text/plain' && p.body?.data)
+    if (plain) return decodeBase64Url(plain.body.data)
+    const html = payload.parts.find(p => p.mimeType === 'text/html' && p.body?.data)
+    if (html) return stripHtmlToText(decodeBase64Url(html.body.data))
+    for (const part of payload.parts) {
+      const inner = extractTextBody(part)
+      if (inner) return inner
+    }
+  }
+  return ''
+}
+
+function stripHtmlToText(html) {
+  if (!html) return ''
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|li|tr|h[1-6])>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+function getHeader(payload, name) {
+  const h = payload?.headers?.find(h => h.name.toLowerCase() === name.toLowerCase())
+  return h?.value || ''
+}
+
+// List the agent's drafts. Each returned entry: { id, subject, body }
+// maxResults caps at 50 to keep the fan-out reasonable.
+export async function listGmailDrafts({ maxResults = 25 } = {}) {
+  let token = readToken()
+  if (!token) token = await silentRefresh()
+  if (!token) return { ok: false, error: 'Gmail not connected', drafts: [] }
+
+  const auth = { 'Authorization': `Bearer ${token.access_token}` }
+  try {
+    const listRes = await fetch(
+      `https://www.googleapis.com/gmail/v1/users/me/drafts?maxResults=${maxResults}`,
+      { headers: auth }
+    )
+    if (listRes.status === 401) {
+      const fresh = await silentRefresh()
+      if (fresh) return listGmailDrafts({ maxResults })
+      return { ok: false, error: 'Connection expired — reconnect Gmail.', drafts: [] }
+    }
+    if (listRes.status === 403) {
+      // insufficient_scope — user connected with old gmail.send scope only.
+      return { ok: false, error: 'Reconnect Gmail to grant read access for templates.', drafts: [] }
+    }
+    if (!listRes.ok) {
+      const txt = await listRes.text().catch(() => '')
+      return { ok: false, error: `Drafts API error (${listRes.status}): ${txt.slice(0, 120)}`, drafts: [] }
+    }
+    const { drafts: ids = [] } = await listRes.json()
+    if (!ids.length) return { ok: true, drafts: [] }
+    // Fetch each draft in parallel — Gmail allows ~20 concurrent reads fine
+    const fetched = await Promise.all(ids.map(async ({ id }) => {
+      try {
+        const r = await fetch(
+          `https://www.googleapis.com/gmail/v1/users/me/drafts/${id}?format=full`,
+          { headers: auth }
+        )
+        if (!r.ok) return null
+        const j = await r.json()
+        const payload = j?.message?.payload
+        const subject = getHeader(payload, 'Subject') || '(no subject)'
+        const body = extractTextBody(payload)
+        return { id, subject, body }
+      } catch { return null }
+    }))
+    const drafts = fetched.filter(Boolean)
+    // Sort: drafts with subjects first, alphabetically
+    drafts.sort((a, b) => a.subject.localeCompare(b.subject))
+    return { ok: true, drafts }
+  } catch (e) {
+    return { ok: false, error: e?.message || 'Network error', drafts: [] }
   }
 }
 
