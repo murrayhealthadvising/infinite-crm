@@ -1205,16 +1205,16 @@ function IntegrationsPanel() {
         )}
       </div>
 
-      {/* GoldBars (VanillaSoft) bookmarklet — same loader, different scrape
+      {/* GoldBar (VanillaSoft) bookmarklet — same loader, different scrape
           dictionary tailored to VanillaSoft's lead view. Lands leads as
-          Not Started, source = "GoldBars (VanillaSoft)", no auto-enroll. */}
+          Not Started with source = "GoldBar", no auto-enroll. */}
       <div className="rounded-lg border border-[#F59E0B20] p-4 mt-3" style={{ background: '#F59E0B08' }}>
         <div className="flex items-start justify-between gap-3 mb-3">
           <div className="min-w-0">
-            <p className="text-sm font-semibold text-white">GoldBars (VanillaSoft) bookmarklet</p>
+            <p className="text-sm font-semibold text-white">GoldBar (VanillaSoft) bookmarklet</p>
             <p className="text-xs text-[#5A6A7A] mt-0.5">
-              Drag the <strong className="text-[#F59E0B]">Send GoldBars to CRM</strong> button onto your bookmarks bar.
-              Click it on any VanillaSoft lead → lead lands in <strong className="text-[#8899AA]">Not Started</strong>.
+              Drag the <strong className="text-[#F59E0B]">Send GoldBar to CRM</strong> button onto your bookmarks bar.
+              Click it on any VanillaSoft lead → lead lands in <strong className="text-[#8899AA]">Not Started</strong> with source <code className="text-[#F59E0B]">GoldBar</code>.
             </p>
           </div>
         </div>
@@ -1228,7 +1228,7 @@ function IntegrationsPanel() {
             className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold text-black cursor-grab active:cursor-grabbing select-none"
             style={{ background: 'linear-gradient(135deg, #F59E0B, #EF4444)' }}
             title="Drag me to your bookmarks bar">
-            🪙 Send GoldBars to CRM
+            🪙 Send GoldBar to CRM
           </a>
           <button onClick={copyGoldBarsSnippet}
             className="text-xs px-3 py-2 rounded-lg border border-[#1A2130] text-[#8899AA] hover:text-white">
@@ -1244,18 +1244,18 @@ function IntegrationsPanel() {
           <div className="mt-4 text-xs text-[#8899AA] leading-relaxed space-y-2">
             <p><strong className="text-white">Install (once):</strong></p>
             <ol className="list-decimal ml-5 space-y-1 text-[#8899AA]">
-              <li>Drag the orange <strong className="text-[#F59E0B]">🪙 Send GoldBars to CRM</strong> button above onto your bookmarks bar.</li>
+              <li>Drag the orange <strong className="text-[#F59E0B]">🪙 Send GoldBar to CRM</strong> button above onto your bookmarks bar.</li>
               <li>If the bar isn't visible: <kbd className="px-1 py-0.5 rounded bg-[#1A2130] font-mono text-[10px]">⌘+Shift+B</kbd> (Mac) / <kbd className="px-1 py-0.5 rounded bg-[#1A2130] font-mono text-[10px]">Ctrl+Shift+B</kbd> (Windows).</li>
             </ol>
             <p className="mt-3"><strong className="text-white">Use:</strong></p>
             <ol className="list-decimal ml-5 space-y-1 text-[#8899AA]">
               <li>Open a VanillaSoft lead — the Lead Info panel should be on screen with the name, phone, address, etc.</li>
-              <li>Click the GoldBars bookmarklet in your bar.</li>
+              <li>Click the GoldBar bookmarklet in your bar.</li>
               <li>An overlay opens with all scraped fields prefilled. Verify and edit anything off, hit <strong className="text-[#F59E0B]">Send to CRM</strong>.</li>
-              <li>Lead lands in <strong className="text-[#8899AA]">Not Started</strong> with source <code className="text-[#F59E0B]">GoldBars (VanillaSoft)</code>.</li>
+              <li>Lead lands in <strong className="text-[#8899AA]">Not Started</strong> with source <code className="text-[#F59E0B]">GoldBar</code>.</li>
             </ol>
             <p className="mt-3 text-[10px] text-[#5A6A7A]">
-              GoldBars imports do <strong>not</strong> auto-enroll in PitchPrfct workflows. Use the Enroll button on the lead if you want to trigger one manually.
+              GoldBar imports do <strong>not</strong> auto-enroll in PitchPrfct workflows. Use the Enroll button on the lead if you want to trigger one manually.
             </p>
           </div>
         )}

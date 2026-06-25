@@ -1,11 +1,11 @@
-// Infinite CRM — GoldBars (VanillaSoft) bookmarklet
+// Infinite CRM — GoldBar (VanillaSoft) bookmarklet
 //
-// Click on a VanillaSoft "GoldBars" lead view → a native <dialog> opens with
+// Click on a VanillaSoft "GoldBar" lead view → a native <dialog> opens with
 // the lead's info prefilled. Submit pushes to the CRM via worker /leads.
 //
-// Defaults: stage = not-started, source = "GoldBars (VanillaSoft)".
-// No PitchPrfct auto-enroll on this path — these leads land silently so the
-// agent can decide whether to enroll manually.
+// Defaults: stage = not-started, source = "GoldBar" (matches the agent's
+// existing source label in the CRM). No PitchPrfct auto-enroll on this path —
+// these leads land silently so the agent can decide whether to enroll manually.
 
 ;(function () {
   if (window.__INFINITE_BOOKMARKLET_OPEN) return
@@ -280,10 +280,11 @@
     if (isFinite(h) && h > 0) raw.household = h; else delete raw.household
   }
 
-  // Default source: tag as GoldBars so we can tell these apart from email
-  // imports and PitchPerfect bookmarklet imports. campaign (from Lead Source)
-  // gets to keep marketplace branding e.g. "Sam Lamy Marketplace".
-  raw.source = 'GoldBars (VanillaSoft)'
+  // Default source: "GoldBar" matches the existing source the agent already
+  // has set up in the CRM, so leads from the bookmarklet land in the same
+  // bucket the rest of the GoldBar flow uses. Campaign (from Lead Source)
+  // keeps its marketplace branding e.g. "Sam Lamy Marketplace".
+  raw.source = 'GoldBar'
 
   // ── Dialog UI ──────────────────────────────────────────────────────────
   function el(tag, props, children) {
@@ -327,7 +328,7 @@
   dialog.appendChild(el('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}, [
     el('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' }}, [
       el('div', { style: { width: '20px', height: '20px', borderRadius: '6px', background: 'linear-gradient(135deg,#F59E0B,#EF4444)' }}),
-      el('strong', null, 'Send GoldBars lead to CRM'),
+      el('strong', null, 'Send GoldBar lead to CRM'),
     ]),
     el('button', { type: 'button', style: { background: 'transparent', border: '0', color: '#8899AA', cursor: 'pointer', fontSize: '20px', lineHeight: '1' }, onclick: close }, '×'),
   ]))
@@ -412,7 +413,7 @@
     return false
   }
   if (!safeMount(dialog)) {
-    alert('GoldBars: could not attach the lead overlay to this page. The data was still scraped — refresh and try again.')
+    alert('GoldBar: could not attach the lead overlay to this page. The data was still scraped — refresh and try again.')
     window.__INFINITE_BOOKMARKLET_OPEN = false
     return
   }
@@ -429,7 +430,7 @@
   }
 
   submit.onclick = function () {
-    var payload = { stage: 'not-started', source: 'GoldBars (VanillaSoft)' }
+    var payload = { stage: 'not-started', source: 'GoldBar' }
     rows.forEach(function (r) {
       var k = r.dataset.field
       var v = (r.value || '').trim()
@@ -437,12 +438,12 @@
       // User opted out of Marketplace Network ID — never send it even if a
       // future tweak accidentally re-introduces the input field.
       if (k === 'external_id') return
-      // Visible "GOLDBAR" side-tag on every routed lead — keep uppercase so
-      // it stands out from the normal lowercase tags. Merged with whatever
-      // the user typed in the Tags input.
+      // Tags input is rare — if the user typed something, lowercase and
+      // dedupe it. No auto GOLDBAR tag (source field already identifies
+      // these leads, and an open-field tag input doesn't enforce existing
+      // tag library anyway).
       if (k === '_tags') {
-        var typed = v.split(/[,;|]/).map(function (s) { return s.trim().toLowerCase() }).filter(Boolean)
-        payload.tags = ['GOLDBAR'].concat(typed)
+        payload.tags = v.split(/[,;|]/).map(function (s) { return s.trim().toLowerCase() }).filter(Boolean)
         return
       }
       if (k === '_tags') payload.tags = v.split(/[,;|]/).map(function (s) { return s.trim().toLowerCase() }).filter(Boolean)
@@ -456,13 +457,6 @@
       }
       else payload[k] = v
     })
-    // GOLDBAR tag on every routed lead — always added even if the agent never
-    // saw a Tags input (most VanillaSoft leads ship without scraped tags).
-    // Dedupe case-insensitively so we never end up with both GOLDBAR + goldbar.
-    var existingTags = Array.isArray(payload.tags) ? payload.tags : []
-    payload.tags = ['GOLDBAR'].concat(
-      existingTags.filter(function (t) { return String(t).toLowerCase() !== 'goldbar' })
-    )
     if (!payload.phone && !payload.email) {
       status.textContent = 'Need a phone or email at minimum.'
       status.style.color = '#EF4444'
@@ -482,7 +476,7 @@
           var name = [payload.first_name, payload.last_name].filter(Boolean).join(' ') || payload.phone || 'Lead'
           var msg = res.body && res.body.duplicate
             ? '↺ Already in CRM — bumped ' + name
-            : '✓ Imported ' + name + ' from GoldBars'
+            : '✓ Imported ' + name + ' from GoldBar'
           close()
           showToast(msg)
         } else {
