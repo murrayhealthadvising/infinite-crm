@@ -105,6 +105,23 @@
     return docs
   }
 
+  // Buttons / icons / nav links have text that looks like a value but isn't.
+  // VanillaSoft has small "SMS", "EMAIL", "DNC ON", "CALL" buttons next to the
+  // phone and email fields — without filtering them we end up scraping "SMS"
+  // as the phone number. Skip text nodes whose nearest interactive ancestor
+  // is a button/link/role=button.
+  function isInsideClickable(node) {
+    var p = node && node.parentNode
+    while (p && p !== document) {
+      var tag = (p.tagName || '').toLowerCase()
+      if (tag === 'button' || tag === 'a' || tag === 'nav') return true
+      var role = p.getAttribute && p.getAttribute('role')
+      if (role === 'button' || role === 'link' || role === 'menuitem') return true
+      if (p.classList && (p.classList.contains('btn') || p.classList.contains('button') || p.classList.contains('icon'))) return true
+      p = p.parentNode
+    }
+    return false
+  }
   function collectTextNodes(root) {
     var out = []
     if (!root || !root.createTreeWalker) return out
@@ -112,6 +129,7 @@
       var walker = root.createTreeWalker(root.body || root.documentElement || root, NodeFilter.SHOW_TEXT, null)
       var n
       while ((n = walker.nextNode())) {
+        if (isInsideClickable(n)) continue
         var t = (n.nodeValue || '').replace(/\s+/g, ' ').trim()
         if (t) out.push({ node: n, text: t })
       }
@@ -125,11 +143,16 @@
     for (var i = 0; i < nodes.length; i++) {
       var key = fieldForLabel(nodes[i].text)
       if (!key) continue
-      for (var j = i + 1; j < Math.min(i + 5, nodes.length); j++) {
+      for (var j = i + 1; j < Math.min(i + 8, nodes.length); j++) {
         var v = nodes[j].text
         if (!v) continue
         if (fieldForLabel(v)) break
         if (v === '-' || v === '—' || v === ':') continue
+        // Reject obvious button/short-uppercase noise (e.g. "SMS", "DNC", "ON")
+        if (/^[A-Z]{2,4}$/.test(v) && v.length <= 4) continue
+        // Per-field sanity — same as scrapeByInputs
+        if (key === 'phone' && !/\d{3,}/.test(v)) continue
+        if (key === 'email' && v.indexOf('@') < 0) continue
         if (data[key] == null) data[key] = v
         break
       }
@@ -137,6 +160,28 @@
     return data
   }
 
+  // Treat input/textarea type + name patterns as authoritative when the input
+  // has a recognizable shape. type=email / type=tel are the cleanest signals.
+  function keyFromInput(inp) {
+    var typ = (inp.type || '').toLowerCase()
+    var name = (inp.getAttribute('name') || '').toLowerCase()
+    var id = (inp.id || '').toLowerCase()
+    var combo = name + ' ' + id
+    if (typ === 'email' || /email|e-?mail/.test(combo)) return 'email'
+    if (typ === 'tel' || /\b(phone|tel|mobile|primary)/.test(combo)) return 'phone'
+    if (/\b(first[\s_-]*name|firstname|fname)/.test(combo)) return 'first_name'
+    if (/\b(last[\s_-]*name|lastname|lname)/.test(combo)) return 'last_name'
+    if (/\b(address|street)/.test(combo)) return 'address'
+    if (/\bcity/.test(combo)) return 'city'
+    if (/\bstate/.test(combo)) return 'state'
+    if (/\b(zip|postal)/.test(combo)) return 'zip'
+    if (/\b(dob|birth)/.test(combo)) return 'dob'
+    if (/\bage\b/.test(combo)) return 'age'
+    if (/\b(gender|sex)/.test(combo)) return 'gender'
+    if (/\bincome/.test(combo)) return 'income'
+    if (/\bhousehold/.test(combo)) return 'household'
+    return null
+  }
   function scrapeByInputs(doc) {
     var data = {}
     if (!doc || !doc.querySelectorAll) return data
@@ -147,22 +192,30 @@
       if (!inp || inp.type === 'hidden' || inp.type === 'submit' || inp.type === 'button') return
       var val = (inp.value || '').trim()
       if (!val) return
-      var label = ''
-      if (inp.id) {
-        try {
-          var lbl = doc.querySelector('label[for="' + inp.id.replace(/"/g, '\\"') + '"]')
-          if (lbl) label = lbl.textContent || ''
-        } catch (e) {}
+      // 1) Type/name pattern first — most reliable
+      var key = keyFromInput(inp)
+      // 2) Then label-based matching
+      if (!key) {
+        var label = ''
+        if (inp.id) {
+          try {
+            var lbl = doc.querySelector('label[for="' + inp.id.replace(/"/g, '\\"') + '"]')
+            if (lbl) label = lbl.textContent || ''
+          } catch (e) {}
+        }
+        if (!label && inp.closest) {
+          var parentLbl = inp.closest('label')
+          if (parentLbl) label = parentLbl.textContent || ''
+        }
+        if (!label) label = inp.getAttribute('aria-label') || ''
+        if (!label) label = inp.getAttribute('placeholder') || ''
+        if (!label) label = inp.getAttribute('name') || ''
+        key = fieldForLabel(label)
       }
-      if (!label && inp.closest) {
-        var parentLbl = inp.closest('label')
-        if (parentLbl) label = parentLbl.textContent || ''
-      }
-      if (!label) label = inp.getAttribute('aria-label') || ''
-      if (!label) label = inp.getAttribute('placeholder') || ''
-      if (!label) label = inp.getAttribute('name') || ''
-      var key = fieldForLabel(label)
       if (!key) return
+      // Per-field sanity: don't accept clearly-bad values
+      if (key === 'phone' && !/\d{3,}/.test(val)) return  // need at least 3 digits
+      if (key === 'email' && val.indexOf('@') < 0) return  // need an @
       if (data[key] == null) data[key] = val
     })
     return data
@@ -207,22 +260,11 @@
     else delete raw.price
   }
 
-  // Roll medical fields + landing page + carrier into Notes so the agent
-  // still has them on the lead even though we have no schema for them.
-  var auxLines = []
-  if (raw._conditions)   auxLines.push('Conditions: '   + raw._conditions)
-  if (raw._medications)  auxLines.push('Medications: '  + raw._medications)
-  if (raw._height)       auxLines.push('Height: '       + raw._height)
-  if (raw._weight)       auxLines.push('Weight: '       + raw._weight)
-  if (raw._quoted_price) auxLines.push('Quoted Price: ' + raw._quoted_price)
-  if (raw._price_range)  auxLines.push('Price Range: '  + raw._price_range)
-  if (raw._landing_page) auxLines.push('Landing Page: ' + raw._landing_page)
-  if (raw._carrier)      auxLines.push('Carrier: '      + raw._carrier)
-  ;['_conditions','_medications','_height','_weight','_quoted_price','_price_range','_landing_page','_carrier','_contact_id'].forEach(function (k) { delete raw[k] })
-  if (auxLines.length) {
-    var auxText = auxLines.join('\n')
-    raw.notes = raw.notes ? (raw.notes + '\n\n' + auxText) : auxText
-  }
+  // User explicitly does NOT want auxiliary fields (Conditions/Medications/
+  // Height/Weight/Landing Page/Carrier/Quoted Price/Price Range/Marketplace
+  // Network ID) auto-rolled into Notes — the text-walk was grabbing other
+  // field labels as values and producing garbage. Drop them all.
+  ;['_conditions','_medications','_height','_weight','_quoted_price','_price_range','_landing_page','_carrier','_contact_id','external_id'].forEach(function (k) { delete raw[k] })
 
   if (raw._tags) {
     raw.tags = String(raw._tags).split(/[,;|]/).map(function (s) { return s.trim().toLowerCase() }).filter(Boolean)
@@ -307,7 +349,6 @@
     ['household','Household size'],
     ['price','Agent price ($)'],
     ['campaign','Lead source (campaign)'],
-    ['external_id','Marketplace network ID'],
     ['notes','Notes'],
   ]
   FIELDS.forEach(function (pair) {
@@ -393,6 +434,9 @@
       var k = r.dataset.field
       var v = (r.value || '').trim()
       if (!v) return
+      // User opted out of Marketplace Network ID — never send it even if a
+      // future tweak accidentally re-introduces the input field.
+      if (k === 'external_id') return
       if (k === '_tags') payload.tags = v.split(/[,;|]/).map(function (s) { return s.trim().toLowerCase() }).filter(Boolean)
       else if (k === 'price') {
         var p = parseFloat(String(v).replace(/[^0-9.]/g, ''))
