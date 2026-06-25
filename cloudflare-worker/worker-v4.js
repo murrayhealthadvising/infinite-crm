@@ -1,4 +1,4 @@
-// Infinite CRM Email Worker — v4.18 (adds GET /pp-conversation for in-app message scan)
+// Infinite CRM Email Worker — v4.19 (parallel /pp-conversation fan-out — ~3x faster)
 //
 // Deploys via the Cloudflare Workers REST API with NO bundler — every helper
 // inlined here. Handles two paths:
@@ -840,9 +840,9 @@ export default {
     // every release so a stale deploy is immediately visible.
     if (req.method === 'GET' && url.pathname === '/version') {
       return new Response(JSON.stringify({
-        version: 'v4.18',
-        parser: 'content-sniff cleanup + /pp-conversation scan',
-        deployed_check: 'if you see v4.18 here, the deploy succeeded',
+        version: 'v4.19',
+        parser: 'parallel /pp-conversation fan-out',
+        deployed_check: 'if you see v4.19 here, the deploy succeeded',
       }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
     }
     // Workflow-list proxy — lets the CRM Settings panel show a dropdown of the
@@ -909,28 +909,33 @@ export default {
         })
       }
       // PitchPrfct's messages-list endpoint isn't in their public OpenAPI spec
-      // (only POST /messages is documented). Try the most likely REST patterns
-      // in order and use whichever responds 200. Log every attempt so we can
-      // adjust if the prod endpoint differs from these guesses.
+      // (only POST /messages is documented). Fire ALL likely REST patterns in
+      // PARALLEL — first 200 response wins. Saves ~3 round-trips of sequential
+      // wait vs. trying them in order. PP gets a few extra 404s but no real
+      // load impact since they're one-shot per scan click.
       const attempts = [
         `${PITCHPRFCT_API}/contacts/${encodeURIComponent(cUuid)}/messages?take=${cLimit}`,
         `${PITCHPRFCT_API}/messages?contactUuid=${encodeURIComponent(cUuid)}&take=${cLimit}`,
         `${PITCHPRFCT_API}/messages?contact_id=${encodeURIComponent(cUuid)}&take=${cLimit}`,
         `${PITCHPRFCT_API}/conversations/${encodeURIComponent(cUuid)}?take=${cLimit}`,
       ]
-      let upstreamStatus = 0
-      let rawText = ''
-      for (const u of attempts) {
+      const settled = await Promise.allSettled(attempts.map(async (u) => {
         try {
           const r = await fetch(u, { headers: { 'x-api-key': cKey } })
-          upstreamStatus = r.status
-          rawText = await r.text()
-          console.log('[pp-conv] tried', u, '→', r.status, rawText.slice(0, 200))
-          if (r.ok) break
+          const text = await r.text()
+          console.log('[pp-conv] tried', u, '→', r.status, text.slice(0, 160))
+          return { url: u, status: r.status, ok: r.ok, text }
         } catch (e) {
           console.error('[pp-conv] threw on', u, String(e))
+          throw e
         }
-      }
+      }))
+      // Pick the first 200 in the original order so the most-likely-correct
+      // pattern wins ties (Promise.allSettled preserves input order).
+      const winner = settled.find(s => s.status === 'fulfilled' && s.value.ok)
+      const lastFail = settled.find(s => s.status === 'fulfilled' && !s.value.ok)
+      const upstreamStatus = winner ? winner.value.status : (lastFail ? lastFail.value.status : 0)
+      const rawText = winner ? winner.value.text : (lastFail ? lastFail.value.text : '')
       if (upstreamStatus < 200 || upstreamStatus >= 300) {
         return new Response(JSON.stringify({
           error: 'PitchPrfct messages endpoint not reachable',
@@ -1100,7 +1105,7 @@ export default {
       lead.agent_id = userId
       // Tag the source so we can tell worker-imported leads apart from
       // manual-paste imports. v4.14 stamps a build id so we can verify deploys.
-      lead.source = 'USHA Marketplace (worker v4.18)'
+      lead.source = 'USHA Marketplace (worker v4.19)'
       lead.stage = DEFAULT_STAGE
       lead.created_at = new Date().toISOString()
       lead.last_activity = lead.created_at
