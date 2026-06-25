@@ -1,4 +1,4 @@
-// Infinite CRM Email Worker — v4.11 (per-agent PP + manual enroll + TZ window + auto-log entry)
+// Infinite CRM Email Worker — v4.12 (parser hardening for HTML-only marketplace emails)
 //
 // Deploys via the Cloudflare Workers REST API with NO bundler — every helper
 // inlined here. Handles two paths:
@@ -54,6 +54,12 @@ function decodeQuotedPrintable(s) {
 
 // Strip HTML tags + leftover quoted-printable artifacts. Safety net used both
 // when finalizing the extracted body AND on each individual captured field.
+//
+// v4.12 hardening: the new "Dynasty" marketplace template sends HTML where
+// label/value pairs live in <tr><td>Label:</td><td>Value</td></tr> rows with
+// no <br>. The old stripping ran them all together into one giant line and
+// only the first "Name:" managed to match (anchored at start of string).
+// Insert newlines for closing block tags so each row ends on its own line.
 function stripHtmlAndQp(s) {
   if (!s) return ''
   return String(s)
@@ -61,12 +67,20 @@ function stripHtmlAndQp(s) {
     .replace(/=\r?\n/g, '')
     // QP hex sequences (=3D → =, =20 → space, etc.)
     .replace(/=([0-9A-F]{2})/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
-    // Drop <style>/<script> blocks
+    // Drop <style>/<script> blocks entirely (their contents are not text)
     .replace(/<style[\s\S]*?<\/style>/gi, '')
     .replace(/<script[\s\S]*?<\/script>/gi, '')
-    // Convert <br> to newline, then strip every other tag (no leftover <
-    // even if the tag is unterminated)
+    // Convert <br> to newline
     .replace(/<br\s*\/?>/gi, '\n')
+    // Closing ROW-level tags produce a newline so each row ends up on its
+    // own line. Crucial for marketplace emails that ship as
+    //   <tr><td>Label:</td><td>Value</td></tr>
+    // Note: </td> intentionally does NOT trigger a newline — we want the
+    // label and its value to stay on the SAME line so the parseLead regex
+    // (which captures everything after the colon up to the next \n) can grab
+    // the value. Only the row-boundary tags get \n.
+    .replace(/<\/(?:tr|p|div|li|table|thead|tbody|tfoot|h[1-6]|article|section|header|footer|nav)\s*>/gi, '\n')
+    // Strip every remaining tag
     .replace(/<[^>]*>?/g, '')
     // Common HTML entities seen in marketplace emails
     .replace(/&nbsp;/gi, ' ')
@@ -75,7 +89,18 @@ function stripHtmlAndQp(s) {
     .replace(/&gt;/gi, '>')
     .replace(/&quot;/gi, '"')
     .replace(/&#39;/g, "'")
+    // Collapse triple+ newlines to double — keeps the body readable for the
+    // regex anchors without losing label/value pair separation.
+    .replace(/\n{3,}/g, '\n\n')
 }
+
+// Note: an earlier rev had a normalizeLabelLines() helper that inserted \n
+// before known USHA labels mid-line. It was buggy for substring-overlapping
+// labels (matched "Name" inside "First Name" and broke it into two lines).
+// We now rely entirely on stripHtmlAndQp's improved block-tag-to-\n handling
+// to give us proper line breaks. If a future marketplace ships a format we
+// can't parse, the new debug log line in email() prints the first 600 chars
+// of the body so we can diagnose without guessing.
 
 // Find the text/plain (preferred) or text/html part of a MIME message.
 // Returns the decoded body (plain text). Handles NESTED multipart by recursing
@@ -922,6 +947,10 @@ export default {
         console.error('[email] no AGENT_ROUTING entry for', recipient)
         return
       }
+      // Debug: dump the first 600 chars of the extracted body so we can see
+      // EXACTLY what the parser is working from when a new marketplace format
+      // misbehaves. \n shown literally so log lines stay readable.
+      console.log('[email] body preview:', body.slice(0, 600).replace(/\n/g, '\\n'))
       const lead = parseLead(body)
       lead.user_id = userId
       lead.agent_id = userId
