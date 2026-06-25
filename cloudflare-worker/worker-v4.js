@@ -1,4 +1,4 @@
-// Infinite CRM Email Worker — v4.14 (verbose parse diagnostics + per-lead source tag)
+// Infinite CRM Email Worker — v4.15 (full MIME-level diagnostics: raw + per-part headers logged)
 //
 // Deploys via the Cloudflare Workers REST API with NO bundler — every helper
 // inlined here. Handles two paths:
@@ -117,18 +117,23 @@ function extractBody(raw) {
   const boundary = ctMatch && ctMatch[3]
 
   if (boundary && contentType.startsWith('multipart/')) {
+    console.log('[extractBody] multipart detected, boundary:', boundary, 'contentType:', contentType)
     const parts = body.split('--' + boundary)
+    console.log('[extractBody] parts count:', parts.length)
     let plain = '', html = ''
-    for (const part of parts) {
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i]
       const pHeaderEnd = part.indexOf('\r\n\r\n')
-      if (pHeaderEnd < 0) continue
+      if (pHeaderEnd < 0) {
+        console.log('[extractBody] part', i, 'has no \\r\\n\\r\\n — skipping (len', part.length, ')')
+        continue
+      }
       const pHeadersRaw = part.slice(0, pHeaderEnd)
       const pHeaders = pHeadersRaw.toLowerCase()
       let pBody = part.slice(pHeaderEnd + 4)
       const cte = (pHeaders.match(/content-transfer-encoding:\s*([^\r\n]+)/) || [])[1] || ''
-      // Recurse into nested multipart — common in marketplace emails where the
-      // outer is multipart/mixed and the actual text lives inside an inner
-      // multipart/alternative.
+      console.log('[extractBody] part', i, 'headers:', pHeadersRaw.slice(0, 200).replace(/\r/g, '\\r').replace(/\n/g, '\\n'), '| cte:', cte, '| bodyLen:', pBody.length)
+      // Recurse into nested multipart
       if (pHeaders.match(/content-type:\s*multipart\//)) {
         const inner = extractBody(part)
         if (inner) plain += inner + '\n'
@@ -138,9 +143,17 @@ function extractBody(raw) {
       else if (cte.includes('base64')) {
         try { pBody = atob(pBody.replace(/\s+/g, '')) } catch {}
       }
-      if (pHeaders.includes('text/plain')) plain += pBody + '\n'
-      else if (pHeaders.includes('text/html')) html += pBody + '\n'
+      if (pHeaders.includes('text/plain')) {
+        plain += pBody + '\n'
+        console.log('[extractBody] part', i, '→ PLAIN (+' + pBody.length + ' chars)')
+      } else if (pHeaders.includes('text/html')) {
+        html += pBody + '\n'
+        console.log('[extractBody] part', i, '→ HTML (+' + pBody.length + ' chars)')
+      } else {
+        console.log('[extractBody] part', i, '→ UNCLASSIFIED, no text/plain or text/html in headers')
+      }
     }
+    console.log('[extractBody] decision: plain=' + plain.length + ' chars, html=' + html.length + ' chars')
     if (plain) return plain
     if (html) return stripHtmlAndQp(html)
     return stripHtmlAndQp(body)
@@ -807,9 +820,9 @@ export default {
     // every release so a stale deploy is immediately visible.
     if (req.method === 'GET' && url.pathname === '/version') {
       return new Response(JSON.stringify({
-        version: 'v4.14',
-        parser: 'tr-aware html stripping + verbose diagnostics',
-        deployed_check: 'if you see v4.14 here, the deploy succeeded',
+        version: 'v4.15',
+        parser: 'full MIME-level diagnostics enabled',
+        deployed_check: 'if you see v4.15 here, the deploy succeeded',
       }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
     }
     // Workflow-list proxy — lets the CRM Settings panel show a dropdown of the
@@ -951,6 +964,14 @@ export default {
     console.log('[email] received', { recipient, from: message.from, subject: message.headers?.get?.('subject') || '' })
     try {
       const raw = await streamToString(message.raw)
+      // CRITICAL DEBUG: dump the RAW message structure so we can see exactly
+      // what MIME parts Cloudflare is handing the worker. The previous version
+      // only logged the post-extracted body, which made it impossible to tell
+      // if extractBody was failing because the email had no text/plain part
+      // OR because our multipart split was wrong.
+      console.log('[email] raw length:', raw.length, 'chars')
+      console.log('[email] raw first 1500:', raw.slice(0, 1500).replace(/\r/g, '\\r').replace(/\n/g, '\\n'))
+      console.log('[email] raw last 500:', raw.slice(-500).replace(/\r/g, '\\r').replace(/\n/g, '\\n'))
       const body = extractBody(raw)
       const userId = AGENT_ROUTING[recipient]
       if (!userId) {
@@ -968,7 +989,7 @@ export default {
       lead.agent_id = userId
       // Tag the source so we can tell worker-imported leads apart from
       // manual-paste imports. v4.14 stamps a build id so we can verify deploys.
-      lead.source = 'USHA Marketplace (worker v4.14)'
+      lead.source = 'USHA Marketplace (worker v4.15)'
       lead.stage = DEFAULT_STAGE
       lead.created_at = new Date().toISOString()
       lead.last_activity = lead.created_at
