@@ -1,4 +1,4 @@
-// Infinite CRM Email Worker — v4.19 (parallel /pp-conversation fan-out — ~3x faster)
+// Infinite CRM Email Worker — v4.20 (/pp-conversation: merge results + 1 retry — first-try reliable)
 //
 // Deploys via the Cloudflare Workers REST API with NO bundler — every helper
 // inlined here. Handles two paths:
@@ -840,9 +840,9 @@ export default {
     // every release so a stale deploy is immediately visible.
     if (req.method === 'GET' && url.pathname === '/version') {
       return new Response(JSON.stringify({
-        version: 'v4.19',
-        parser: 'parallel /pp-conversation fan-out',
-        deployed_check: 'if you see v4.19 here, the deploy succeeded',
+        version: 'v4.20',
+        parser: '/pp-conversation merge + retry',
+        deployed_check: 'if you see v4.20 here, the deploy succeeded',
       }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
     }
     // Workflow-list proxy — lets the CRM Settings panel show a dropdown of the
@@ -910,59 +910,92 @@ export default {
       }
       // PitchPrfct's messages-list endpoint isn't in their public OpenAPI spec
       // (only POST /messages is documented). Fire ALL likely REST patterns in
-      // PARALLEL — first 200 response wins. Saves ~3 round-trips of sequential
-      // wait vs. trying them in order. PP gets a few extra 404s but no real
-      // load impact since they're one-shot per scan click.
+      // PARALLEL, then MERGE messages from every successful response — some
+      // endpoints return empty 200 while others return the data, so picking
+      // the "first 200" was making us miss messages and need a retry.
       const attempts = [
-        `${PITCHPRFCT_API}/contacts/${encodeURIComponent(cUuid)}/messages?take=${cLimit}`,
-        `${PITCHPRFCT_API}/messages?contactUuid=${encodeURIComponent(cUuid)}&take=${cLimit}`,
-        `${PITCHPRFCT_API}/messages?contact_id=${encodeURIComponent(cUuid)}&take=${cLimit}`,
-        `${PITCHPRFCT_API}/conversations/${encodeURIComponent(cUuid)}?take=${cLimit}`,
+        `${PITCHPRFCT_API}/contacts/${encodeURIComponent(cUuid)}/messages?take=${cLimit * 3}`,
+        `${PITCHPRFCT_API}/messages?contactUuid=${encodeURIComponent(cUuid)}&take=${cLimit * 3}`,
+        `${PITCHPRFCT_API}/messages?contact_id=${encodeURIComponent(cUuid)}&take=${cLimit * 3}`,
+        `${PITCHPRFCT_API}/conversations/${encodeURIComponent(cUuid)}?take=${cLimit * 3}`,
       ]
-      const settled = await Promise.allSettled(attempts.map(async (u) => {
-        try {
-          const r = await fetch(u, { headers: { 'x-api-key': cKey } })
-          const text = await r.text()
-          console.log('[pp-conv] tried', u, '→', r.status, text.slice(0, 160))
-          return { url: u, status: r.status, ok: r.ok, text }
-        } catch (e) {
-          console.error('[pp-conv] threw on', u, String(e))
-          throw e
-        }
-      }))
-      // Pick the first 200 in the original order so the most-likely-correct
-      // pattern wins ties (Promise.allSettled preserves input order).
-      const winner = settled.find(s => s.status === 'fulfilled' && s.value.ok)
-      const lastFail = settled.find(s => s.status === 'fulfilled' && !s.value.ok)
-      const upstreamStatus = winner ? winner.value.status : (lastFail ? lastFail.value.status : 0)
-      const rawText = winner ? winner.value.text : (lastFail ? lastFail.value.text : '')
-      if (upstreamStatus < 200 || upstreamStatus >= 300) {
+      // Walk a PP API response of any shape and pull the messages array.
+      const extractList = (rawText) => {
+        let raw
+        try { raw = JSON.parse(rawText) } catch { return [] }
+        const list = (raw && raw.data && (raw.data.rows || raw.data.messages || raw.data)) ||
+                     (raw && raw.messages) ||
+                     (Array.isArray(raw) ? raw : [])
+        return Array.isArray(list) ? list : []
+      }
+      // Run all 4 attempts in parallel. Returns merged + normalized message
+      // array from every 200 response.
+      const runRound = async (pass) => {
+        const settled = await Promise.allSettled(attempts.map(async (u) => {
+          try {
+            const r = await fetch(u, { headers: { 'x-api-key': cKey } })
+            const text = await r.text()
+            console.log(`[pp-conv] pass${pass}`, u, '→', r.status, text.slice(0, 140))
+            return { url: u, status: r.status, ok: r.ok, text }
+          } catch (e) {
+            console.error('[pp-conv] threw on', u, String(e))
+            throw e
+          }
+        }))
+        const ok200s = settled.filter(s => s.status === 'fulfilled' && s.value.ok).map(s => s.value)
+        const lastFail = settled.find(s => s.status === 'fulfilled' && !s.value.ok)
+        return { ok200s, lastFail: lastFail ? lastFail.value : null }
+      }
+      const round1 = await runRound(1)
+      let merged = round1.ok200s.flatMap(r => extractList(r.text))
+      // Eventual-consistency retry: if every endpoint returned empty on pass 1
+      // (but the contact exists), wait briefly and try once more. Cheap
+      // insurance against "needed two clicks to find" behavior.
+      if (merged.length === 0 && round1.ok200s.length > 0) {
+        await new Promise(res => setTimeout(res, 600))
+        const round2 = await runRound(2)
+        merged = round2.ok200s.flatMap(r => extractList(r.text))
+      }
+      // No 200 at all → real upstream failure
+      if (round1.ok200s.length === 0) {
+        const status = round1.lastFail ? round1.lastFail.status : 0
+        const body = round1.lastFail ? round1.lastFail.text : ''
         return new Response(JSON.stringify({
           error: 'PitchPrfct messages endpoint not reachable',
           tried: attempts,
-          upstream_status: upstreamStatus,
-          upstream_body: rawText.slice(0, 400),
+          upstream_status: status,
+          upstream_body: body.slice(0, 400),
         }), { status: 502, headers: { 'content-type': 'application/json', ...CORS } })
       }
-      // Normalize the message list across the variants we might hit.
-      // PitchPrfct response shapes seen elsewhere: { data: { rows: [...] } },
-      // bare array, or { messages: [...] }.
-      let raw
-      try { raw = JSON.parse(rawText) } catch { raw = null }
-      const list = (raw && raw.data && (raw.data.rows || raw.data.messages || raw.data)) ||
-                   (raw && raw.messages) ||
-                   (Array.isArray(raw) ? raw : [])
-      const arr = Array.isArray(list) ? list : []
-      const messages = arr.slice(0, cLimit).map(m => ({
-        id: m.id || m.uuid || null,
-        body: m.body || m.message || m.text || m.content || '',
-        direction:
-          (m.direction || m.type ||
-           (m.outbound || m.isOutbound || m.fromMe ? 'outbound' : 'inbound')).toString().toLowerCase(),
-        sent_at: m.sentAt || m.createdAt || m.created_at || m.date || null,
-        status: m.status || m.deliveryStatus || null,
-      }))
-      return new Response(JSON.stringify({ ok: true, contact_uuid: cUuid, messages }), {
+      // Dedupe by id, then by composite (body+sent_at). Sort newest first.
+      const seen = new Set()
+      const messages = []
+      for (const m of merged) {
+        const id = m.id || m.uuid || null
+        const body = (m.body || m.message || m.text || m.content || '').trim()
+        const sentAt = m.sentAt || m.createdAt || m.created_at || m.date || null
+        const dedupeKey = id ? `id:${id}` : `c:${sentAt || ''}|${body}`
+        if (seen.has(dedupeKey)) continue
+        seen.add(dedupeKey)
+        messages.push({
+          id,
+          body,
+          direction:
+            (m.direction || m.type ||
+             (m.outbound || m.isOutbound || m.fromMe ? 'outbound' : 'inbound')).toString().toLowerCase(),
+          sent_at: sentAt,
+          status: m.status || m.deliveryStatus || null,
+        })
+      }
+      // Sort newest → oldest, then slice to requested limit
+      messages.sort((a, b) => {
+        const ta = a.sent_at ? new Date(a.sent_at).getTime() : 0
+        const tb = b.sent_at ? new Date(b.sent_at).getTime() : 0
+        return tb - ta
+      })
+      const trimmed = messages.slice(0, cLimit)
+      console.log('[pp-conv] returning', trimmed.length, 'messages (merged from', round1.ok200s.length, '2xx responses)')
+      return new Response(JSON.stringify({ ok: true, contact_uuid: cUuid, messages: trimmed }), {
         status: 200, headers: { 'content-type': 'application/json', ...CORS },
       })
     }
@@ -1105,7 +1138,7 @@ export default {
       lead.agent_id = userId
       // Tag the source so we can tell worker-imported leads apart from
       // manual-paste imports. v4.14 stamps a build id so we can verify deploys.
-      lead.source = 'USHA Marketplace (worker v4.19)'
+      lead.source = 'USHA Marketplace (worker v4.20)'
       lead.stage = DEFAULT_STAGE
       lead.created_at = new Date().toISOString()
       lead.last_activity = lead.created_at
