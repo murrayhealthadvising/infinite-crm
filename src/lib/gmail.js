@@ -248,12 +248,23 @@ export async function listGmailDrafts({ maxResults = 25 } = {}) {
       return { ok: false, error: 'Connection expired — reconnect Gmail.', drafts: [] }
     }
     if (listRes.status === 403) {
-      // insufficient_scope — user connected with old gmail.send scope only.
+      // Two common 403 causes: API not enabled in the Google Cloud project,
+      // OR the user authorized with an older narrower scope. Differentiate
+      // by looking at the response body — SERVICE_DISABLED means the API
+      // itself isn't turned on for the project, NOT a token issue.
+      const txt = await listRes.text().catch(() => '')
+      if (/SERVICE_DISABLED|accessNotConfigured|gmail\.googleapis\.com/i.test(txt)) {
+        return {
+          ok: false,
+          error: 'Gmail API is disabled for your Google Cloud project. Admin: enable it at console.developers.google.com → APIs & Services → Enable APIs → Gmail API, then retry.',
+          drafts: [],
+        }
+      }
       return { ok: false, error: 'Reconnect Gmail to grant read access for templates.', drafts: [] }
     }
     if (!listRes.ok) {
       const txt = await listRes.text().catch(() => '')
-      return { ok: false, error: `Drafts API error (${listRes.status}): ${txt.slice(0, 120)}`, drafts: [] }
+      return { ok: false, error: `Drafts API error (${listRes.status}): ${txt.slice(0, 160)}`, drafts: [] }
     }
     const { drafts: ids = [] } = await listRes.json()
     if (!ids.length) return { ok: true, drafts: [] }
@@ -322,8 +333,11 @@ export async function sendGmailMessage({ to, subject, body, fromName }) {
     }
     if (!res.ok) {
       const txt = await res.text().catch(() => '')
-      // 403 insufficient_scope → user authorized Calendar previously and
-      // doesn't have the gmail.send grant. Tell them to reconnect.
+      // SERVICE_DISABLED — Gmail API not enabled on the Google Cloud project
+      if (res.status === 403 && /SERVICE_DISABLED|accessNotConfigured/i.test(txt)) {
+        return { ok: false, error: 'Gmail API is disabled for your Google Cloud project. Admin: enable it at console.developers.google.com → APIs & Services → Enable APIs → Gmail API, then retry.' }
+      }
+      // Insufficient scope — user authorized with a narrower scope earlier
       if (res.status === 403 && /scope/i.test(txt)) {
         return { ok: false, error: 'Gmail send permission missing — reconnect Gmail in Settings.' }
       }
