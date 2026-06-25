@@ -7,6 +7,7 @@ import ManualEnrollButton from '../components/ManualEnrollButton'
 import SoldBadge from '../components/SoldBadge'
 import CalendlyButton from '../components/CalendlyButton'
 import ComposeEmailModal from '../components/ComposeEmailModal'
+import ConversationPanel from '../components/ConversationPanel'
 import { Phone, Mail, MapPin, Calendar, ArrowLeft, MessageSquare, PhoneCall, AtSign, StickyNote, ChevronDown, Zap, Send, User, Users, Home, DollarSign, Heart, Pencil, Check, X, Clock } from 'lucide-react'
 import { normalizePhone, displayPhone } from '../lib/phone'
 import { localTimeFor, localHourFor } from '../lib/timezone'
@@ -291,7 +292,7 @@ function ActionLogPanel({ activities, leadId, addActivity, deleteActivity, setLe
           </button>
         </div>
       </div>
-      <div className="flex-1 overflow-y-auto p-4 space-y-2.5" style={{ maxHeight: '380px', minHeight: '220px' }}>
+      <div className="flex-1 overflow-y-auto p-4 space-y-2.5" style={{ maxHeight: '190px', minHeight: '160px' }}>
         {list.length === 0 ? (
           <p className="text-xs text-[#3A4A5A] text-center py-8 px-4">
             Every call you make is auto-logged here with the exact time of day, so you can see when they don't pick up.
@@ -554,9 +555,15 @@ export default function LeadDetail() {
             <NotesEditor value={lead.notes}
               onSave={(v) => typeof updateLead === 'function' ? updateLead(id, { notes: v }) : Promise.resolve()} />
           )}
-          <ActionLogPanel activities={leadActivities} leadId={id}
-            addActivity={addActivity} deleteActivity={deleteActivity}
-            setLeadActivities={setLeadActivities} />
+          {/* Right column stacks: Action log on top, PitchPrfct conversation
+              scan below. Each panel ~190px tall so the pair matches the old
+              full-height action log. Both scrollable internally. */}
+          <div className="flex flex-col gap-4">
+            <ActionLogPanel activities={leadActivities} leadId={id}
+              addActivity={addActivity} deleteActivity={deleteActivity}
+              setLeadActivities={setLeadActivities} />
+            <ConversationPanel lead={lead} />
+          </div>
         </div>
 
         {/* CONTACT — always visible. Hover any cell to edit. */}

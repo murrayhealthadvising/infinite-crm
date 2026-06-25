@@ -1,4 +1,4 @@
-// Infinite CRM Email Worker — v4.17 (content-sniff finalCleanup — fixes HTML/QP single-part emails from new USHA)
+// Infinite CRM Email Worker — v4.18 (adds GET /pp-conversation for in-app message scan)
 //
 // Deploys via the Cloudflare Workers REST API with NO bundler — every helper
 // inlined here. Handles two paths:
@@ -840,9 +840,9 @@ export default {
     // every release so a stale deploy is immediately visible.
     if (req.method === 'GET' && url.pathname === '/version') {
       return new Response(JSON.stringify({
-        version: 'v4.17',
-        parser: 'content-sniff cleanup — handles HTML/QP regardless of headers',
-        deployed_check: 'if you see v4.17 here, the deploy succeeded',
+        version: 'v4.18',
+        parser: 'content-sniff cleanup + /pp-conversation scan',
+        deployed_check: 'if you see v4.18 here, the deploy succeeded',
       }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
     }
     // Workflow-list proxy — lets the CRM Settings panel show a dropdown of the
@@ -875,6 +875,93 @@ export default {
         })
       }
     }
+    // Conversation scan — pull the most recent N messages between the agent's
+    // PitchPrfct account and a given phone number, so the LeadDetail can show
+    // a quick "have we already talked / did they opt out" summary without the
+    // agent having to flip over to PitchPrfct in another tab.
+    //   GET /pp-conversation?agent_id=UUID&phone=+1...&limit=5
+    if (req.method === 'GET' && url.pathname === '/pp-conversation') {
+      const cAgent = url.searchParams.get('agent_id')
+      const cPhoneRaw = url.searchParams.get('phone') || ''
+      const cLimit = Math.max(1, Math.min(50, parseInt(url.searchParams.get('limit'), 10) || 5))
+      if (!cAgent || !cPhoneRaw) {
+        return new Response(JSON.stringify({ error: 'missing agent_id or phone' }), {
+          status: 400, headers: { 'content-type': 'application/json', ...CORS },
+        })
+      }
+      const cPhone = coercePhoneE164(cPhoneRaw)
+      if (!cPhone) {
+        return new Response(JSON.stringify({ error: `phone "${cPhoneRaw}" doesn't look like a US number` }), {
+          status: 400, headers: { 'content-type': 'application/json', ...CORS },
+        })
+      }
+      const cKey = await getAgentApiKey(env, cAgent)
+      if (!cKey) {
+        return new Response(JSON.stringify({ error: 'no PitchPrfct API key saved for this agent' }), {
+          status: 404, headers: { 'content-type': 'application/json', ...CORS },
+        })
+      }
+      // Find the contact UUID first — most messages-API patterns key off it.
+      const cUuid = await findContactByPhone(cKey, cPhone)
+      if (!cUuid) {
+        return new Response(JSON.stringify({ ok: true, messages: [], note: 'no PitchPrfct contact found for this phone' }), {
+          status: 200, headers: { 'content-type': 'application/json', ...CORS },
+        })
+      }
+      // PitchPrfct's messages-list endpoint isn't in their public OpenAPI spec
+      // (only POST /messages is documented). Try the most likely REST patterns
+      // in order and use whichever responds 200. Log every attempt so we can
+      // adjust if the prod endpoint differs from these guesses.
+      const attempts = [
+        `${PITCHPRFCT_API}/contacts/${encodeURIComponent(cUuid)}/messages?take=${cLimit}`,
+        `${PITCHPRFCT_API}/messages?contactUuid=${encodeURIComponent(cUuid)}&take=${cLimit}`,
+        `${PITCHPRFCT_API}/messages?contact_id=${encodeURIComponent(cUuid)}&take=${cLimit}`,
+        `${PITCHPRFCT_API}/conversations/${encodeURIComponent(cUuid)}?take=${cLimit}`,
+      ]
+      let upstreamStatus = 0
+      let rawText = ''
+      for (const u of attempts) {
+        try {
+          const r = await fetch(u, { headers: { 'x-api-key': cKey } })
+          upstreamStatus = r.status
+          rawText = await r.text()
+          console.log('[pp-conv] tried', u, '→', r.status, rawText.slice(0, 200))
+          if (r.ok) break
+        } catch (e) {
+          console.error('[pp-conv] threw on', u, String(e))
+        }
+      }
+      if (upstreamStatus < 200 || upstreamStatus >= 300) {
+        return new Response(JSON.stringify({
+          error: 'PitchPrfct messages endpoint not reachable',
+          tried: attempts,
+          upstream_status: upstreamStatus,
+          upstream_body: rawText.slice(0, 400),
+        }), { status: 502, headers: { 'content-type': 'application/json', ...CORS } })
+      }
+      // Normalize the message list across the variants we might hit.
+      // PitchPrfct response shapes seen elsewhere: { data: { rows: [...] } },
+      // bare array, or { messages: [...] }.
+      let raw
+      try { raw = JSON.parse(rawText) } catch { raw = null }
+      const list = (raw && raw.data && (raw.data.rows || raw.data.messages || raw.data)) ||
+                   (raw && raw.messages) ||
+                   (Array.isArray(raw) ? raw : [])
+      const arr = Array.isArray(list) ? list : []
+      const messages = arr.slice(0, cLimit).map(m => ({
+        id: m.id || m.uuid || null,
+        body: m.body || m.message || m.text || m.content || '',
+        direction:
+          (m.direction || m.type ||
+           (m.outbound || m.isOutbound || m.fromMe ? 'outbound' : 'inbound')).toString().toLowerCase(),
+        sent_at: m.sentAt || m.createdAt || m.created_at || m.date || null,
+        status: m.status || m.deliveryStatus || null,
+      }))
+      return new Response(JSON.stringify({ ok: true, contact_uuid: cUuid, messages }), {
+        status: 200, headers: { 'content-type': 'application/json', ...CORS },
+      })
+    }
+
     // Manual workflow enrollment — used occasionally from the LeadDetail UI when
     // an agent wants to drop a specific lead into a specific workflow on demand.
     // Fires IMMEDIATELY (no delay, no queue) — manual means manual.
@@ -1013,7 +1100,7 @@ export default {
       lead.agent_id = userId
       // Tag the source so we can tell worker-imported leads apart from
       // manual-paste imports. v4.14 stamps a build id so we can verify deploys.
-      lead.source = 'USHA Marketplace (worker v4.17)'
+      lead.source = 'USHA Marketplace (worker v4.18)'
       lead.stage = DEFAULT_STAGE
       lead.created_at = new Date().toISOString()
       lead.last_activity = lead.created_at
