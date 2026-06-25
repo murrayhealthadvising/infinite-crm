@@ -1,4 +1,4 @@
-// Infinite CRM Email Worker — v4.13 (adds GET /version + sources tagged "USHA Marketplace (worker v4.13)")
+// Infinite CRM Email Worker — v4.14 (verbose parse diagnostics + per-lead source tag)
 //
 // Deploys via the Cloudflare Workers REST API with NO bundler — every helper
 // inlined here. Handles two paths:
@@ -807,9 +807,9 @@ export default {
     // every release so a stale deploy is immediately visible.
     if (req.method === 'GET' && url.pathname === '/version') {
       return new Response(JSON.stringify({
-        version: 'v4.13',
-        parser: 'tr-aware html stripping + plain-preferred MIME',
-        deployed_check: 'if you see v4.13 here, the deploy succeeded',
+        version: 'v4.14',
+        parser: 'tr-aware html stripping + verbose diagnostics',
+        deployed_check: 'if you see v4.14 here, the deploy succeeded',
       }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
     }
     // Workflow-list proxy — lets the CRM Settings panel show a dropdown of the
@@ -957,22 +957,23 @@ export default {
         console.error('[email] no AGENT_ROUTING entry for', recipient)
         return
       }
-      // Debug: dump the first 600 chars of the extracted body so we can see
-      // EXACTLY what the parser is working from when a new marketplace format
-      // misbehaves. \n shown literally so log lines stay readable.
-      console.log('[email] body preview:', body.slice(0, 600).replace(/\n/g, '\\n'))
+      // Verbose diagnostic logging — every step of the parse is traced. With
+      // these in Cloudflare Logs we can pinpoint exactly where a misparse goes
+      // wrong (body content, regex result, sanitization, insert).
+      console.log('[email] body length:', body.length, 'chars')
+      console.log('[email] body preview (first 800):', body.slice(0, 800).replace(/\n/g, '\\n'))
       const lead = parseLead(body)
+      console.log('[email] parsed lead:', JSON.stringify(lead))
       lead.user_id = userId
       lead.agent_id = userId
       // Tag the source so we can tell worker-imported leads apart from
-      // manual-paste imports (Gmail Leads page). If a lead lands with source
-      // "USHA Marketplace" (no suffix) it came through manual paste, NOT here.
-      lead.source = 'USHA Marketplace (worker v4.13)'
+      // manual-paste imports. v4.14 stamps a build id so we can verify deploys.
+      lead.source = 'USHA Marketplace (worker v4.14)'
       lead.stage = DEFAULT_STAGE
       lead.created_at = new Date().toISOString()
       lead.last_activity = lead.created_at
 
-      console.log('[email] parsed lead fields:', Object.keys(lead).join(','))
+      console.log('[email] final lead to insert:', JSON.stringify(lead))
       const result = await insertLead(env, lead)
       if (result.ok) {
         console.log('[email] INSERTED ok', { fields: Object.keys(lead) })
