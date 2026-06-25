@@ -1088,7 +1088,9 @@ function CalendarPanel() {
 function IntegrationsPanel() {
   const { user, leadEmail } = useApp()
   const [showInstructions, setShowInstructions] = useState(false)
+  const [showGoldBarsSteps, setShowGoldBarsSteps] = useState(false)
   const [copyHit, setCopyHit] = useState(false)
+  const [goldBarsCopyHit, setGoldBarsCopyHit] = useState(false)
   const [leadCopyHit, setLeadCopyHit] = useState(false)
   const agentId = user?.id || ''
   const appOrigin = typeof window !== 'undefined' ? window.location.origin : ''
@@ -1097,9 +1099,17 @@ function IntegrationsPanel() {
   // which does the scrape + overlay + POST.
   const snippet = `javascript:(function(){window.__INFINITE_AGENT_ID=${JSON.stringify(agentId)};window.__INFINITE_WORKER=${JSON.stringify(WORKER_URL)};var s=document.createElement('script');s.src=${JSON.stringify(appOrigin + '/bookmarklet.js')}+'?'+Date.now();s.onerror=function(){alert('Could not load CRM bookmarklet — check internet connection.')};document.body.appendChild(s)})();`
 
+  // GoldBars (VanillaSoft) bookmarklet — same loader pattern, different script
+  // so the field dictionary + UI colors are tailored to VanillaSoft.
+  const goldBarsSnippet = `javascript:(function(){window.__INFINITE_AGENT_ID=${JSON.stringify(agentId)};window.__INFINITE_WORKER=${JSON.stringify(WORKER_URL)};var s=document.createElement('script');s.src=${JSON.stringify(appOrigin + '/goldbars-bookmarklet.js')}+'?'+Date.now();s.onerror=function(){alert('Could not load GoldBars bookmarklet — check internet connection.')};document.body.appendChild(s)})();`
+
   const copySnippet = () => {
     navigator.clipboard.writeText(snippet)
     setCopyHit(true); setTimeout(() => setCopyHit(false), 1500)
+  }
+  const copyGoldBarsSnippet = () => {
+    navigator.clipboard.writeText(goldBarsSnippet)
+    setGoldBarsCopyHit(true); setTimeout(() => setGoldBarsCopyHit(false), 1500)
   }
 
   return (
@@ -1187,6 +1197,62 @@ function IntegrationsPanel() {
             </ol>
             <p className="mt-3 text-[10px] text-[#5A6A7A]">
               Personal to your account (agent id is baked into the snippet). Don't share with other agents — they'd want their own from their Settings page.
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* GoldBars (VanillaSoft) bookmarklet — same loader, different scrape
+          dictionary tailored to VanillaSoft's lead view. Lands leads as
+          Not Started, source = "GoldBars (VanillaSoft)", no auto-enroll. */}
+      <div className="rounded-lg border border-[#F59E0B20] p-4 mt-3" style={{ background: '#F59E0B08' }}>
+        <div className="flex items-start justify-between gap-3 mb-3">
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-white">GoldBars (VanillaSoft) bookmarklet</p>
+            <p className="text-xs text-[#5A6A7A] mt-0.5">
+              Drag the <strong className="text-[#F59E0B]">Send GoldBars to CRM</strong> button onto your bookmarks bar.
+              Click it on any VanillaSoft lead → lead lands in <strong className="text-[#8899AA]">Not Started</strong>.
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3 flex-wrap">
+          {/* eslint-disable-next-line jsx-a11y/anchor-is-valid */}
+          <a
+            href={goldBarsSnippet}
+            onClick={(e) => e.preventDefault()}
+            draggable={true}
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold text-black cursor-grab active:cursor-grabbing select-none"
+            style={{ background: 'linear-gradient(135deg, #F59E0B, #EF4444)' }}
+            title="Drag me to your bookmarks bar">
+            🪙 Send GoldBars to CRM
+          </a>
+          <button onClick={copyGoldBarsSnippet}
+            className="text-xs px-3 py-2 rounded-lg border border-[#1A2130] text-[#8899AA] hover:text-white">
+            {goldBarsCopyHit ? <span className="inline-flex items-center gap-1 text-[#F59E0B]"><Check size={11} /> copied</span> : 'Copy snippet'}
+          </button>
+          <button onClick={() => setShowGoldBarsSteps(v => !v)}
+            className="text-xs text-[#F59E0B] hover:underline">
+            {showGoldBarsSteps ? 'Hide' : 'Show'} install steps
+          </button>
+        </div>
+
+        {showGoldBarsSteps && (
+          <div className="mt-4 text-xs text-[#8899AA] leading-relaxed space-y-2">
+            <p><strong className="text-white">Install (once):</strong></p>
+            <ol className="list-decimal ml-5 space-y-1 text-[#8899AA]">
+              <li>Drag the orange <strong className="text-[#F59E0B]">🪙 Send GoldBars to CRM</strong> button above onto your bookmarks bar.</li>
+              <li>If the bar isn't visible: <kbd className="px-1 py-0.5 rounded bg-[#1A2130] font-mono text-[10px]">⌘+Shift+B</kbd> (Mac) / <kbd className="px-1 py-0.5 rounded bg-[#1A2130] font-mono text-[10px]">Ctrl+Shift+B</kbd> (Windows).</li>
+            </ol>
+            <p className="mt-3"><strong className="text-white">Use:</strong></p>
+            <ol className="list-decimal ml-5 space-y-1 text-[#8899AA]">
+              <li>Open a VanillaSoft lead — the Lead Info panel should be on screen with the name, phone, address, etc.</li>
+              <li>Click the GoldBars bookmarklet in your bar.</li>
+              <li>An overlay opens with all scraped fields prefilled. Verify and edit anything off, hit <strong className="text-[#F59E0B]">Send to CRM</strong>.</li>
+              <li>Lead lands in <strong className="text-[#8899AA]">Not Started</strong> with source <code className="text-[#F59E0B]">GoldBars (VanillaSoft)</code>.</li>
+            </ol>
+            <p className="mt-3 text-[10px] text-[#5A6A7A]">
+              GoldBars imports do <strong>not</strong> auto-enroll in PitchPrfct workflows. Use the Enroll button on the lead if you want to trigger one manually.
             </p>
           </div>
         )}
