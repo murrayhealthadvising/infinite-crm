@@ -33,6 +33,7 @@ import {
   Search, Plus, LayoutList, Columns, Phone, Copy, Home, DollarSign, Calendar,
   ExternalLink, ChevronDown, ChevronUp, X, Users, Check, Download, Upload,
   Square, CheckSquare, AlertCircle, CheckCircle, Trash2, AlertTriangle, RefreshCw,
+  MessageSquare, StickyNote, AtSign, Zap,
 } from 'lucide-react'
 import { format, formatDistanceToNow, differenceInYears, parseISO } from 'date-fns'
 import clsx from 'clsx'
@@ -816,8 +817,31 @@ function NotesField({ value, onSave, placeholder }) {
 // ───────────────────────────────────────────────────────────────────────────
 // Lead card
 // ───────────────────────────────────────────────────────────────────────────
+// Tiny most-recent-action chip — shows the agent's last logged activity for
+// this lead (Called / Texted / Emailed / Note / etc) with a relative time so
+// they don't have to click into LeadDetail to remember what they last did.
+function RecentActionChip({ entry }) {
+  if (!entry || !entry.created_at) return null
+  const ICONS = { call: Phone, text: MessageSquare, email: AtSign, note: StickyNote, status: Zap, apt: Calendar }
+  const COLORS = { call: '#10B981', text: '#3B82F6', email: '#8B5CF6', note: '#F59E0B', status: '#00E5C3', apt: '#F97316' }
+  const Icon = ICONS[entry.type] || StickyNote
+  const color = COLORS[entry.type] || '#5A6A7A'
+  let ago = ''
+  try { ago = formatDistanceToNow(new Date(entry.created_at), { addSuffix: true }) } catch {}
+  const note = String(entry.note || '').slice(0, 60)
+  return (
+    <span className="inline-flex items-center gap-1 text-[10px] font-mono"
+      style={{ color: '#5A6A7A' }}
+      title={`${entry.type} · ${entry.note || ''} · ${ago}`}>
+      <Icon size={10} style={{ color }} className="flex-shrink-0" />
+      <span className="truncate max-w-[180px]">{note}</span>
+      <span className="opacity-60 flex-shrink-0">· {ago}</span>
+    </span>
+  )
+}
+
 function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNoteBChange, onNavigate, onDelete, onPriceChange, onCampaignChange, onRunnerChange, onTagsChange, runnerSuggestions, tagSuggestions, canDelete = true }) {
-  const { tags, getTag, splitNotes, pipelineCardFields } = useApp()
+  const { tags, getTag, splitNotes, pipelineCardFields, lastActivityByLead } = useApp()
   const showRunner = pipelineCardFields?.runner !== false
   const [copied, setCopied] = useState(false)
   const [nameCopied, setNameCopied] = useState(false)
@@ -899,6 +923,11 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
             </button>
           )}
           <SoldBadge lead={lead} />
+          {lastActivityByLead && lastActivityByLead[lead.id] && (
+            <div className="mt-1">
+              <RecentActionChip entry={lastActivityByLead[lead.id]} />
+            </div>
+          )}
           <div className="flex items-center gap-1.5 mt-1 flex-wrap">
             <PitchCountdown leadId={lead.id} />
             <span className="text-xs text-[#5A6A7A]">{[lead.state, lead.zip].filter(Boolean).join(' ')}</span>
@@ -1526,13 +1555,26 @@ function exportCSV(leads) {
 export default function Leads() {
   const { user, leads, tags, updateLeadStage, updateLead, refreshLeads, deleteLead, deleteLeads, deleteAllLeadsForUser, isRunner, can, sideTagStyles } = useApp()
   const navigate = useNavigate()
-  const [view, setView] = useState('list')
-  const [search, setSearch] = useState('')
-  const [stageFilter, setStageFilter] = useState('')
-  const [tagFilters, setTagFilters] = useState(() => new Set())  // multi-select side-tag filter
-  const [tzFilters, setTzFilters] = useState(() => new Set())    // multi-select TZ filter
-  const [campaignFilters, setCampaignFilters] = useState(() => new Set())  // multi-select campaign filter
-  const [sortBy, setSortBy] = useState('created_desc')
+
+  // Filter persistence — survives clicking into a lead and coming back, OR a
+  // full tab reload, by stashing the entire filter state under a single
+  // sessionStorage key. Sets are serialized as arrays.
+  const LEADS_STATE_KEY = 'leads:viewState'
+  const initialState = (() => {
+    try {
+      const raw = sessionStorage.getItem(LEADS_STATE_KEY)
+      if (raw) return JSON.parse(raw)
+    } catch {}
+    return {}
+  })()
+
+  const [view, setView] = useState(initialState.view || 'list')
+  const [search, setSearch] = useState(initialState.search || '')
+  const [stageFilter, setStageFilter] = useState(initialState.stageFilter || '')
+  const [tagFilters, setTagFilters] = useState(() => new Set(initialState.tagFilters || []))
+  const [tzFilters, setTzFilters] = useState(() => new Set(initialState.tzFilters || []))
+  const [campaignFilters, setCampaignFilters] = useState(() => new Set(initialState.campaignFilters || []))
+  const [sortBy, setSortBy] = useState(initialState.sortBy || 'created_desc')
   const [showAdd, setShowAdd] = useState(false)
   const [selected, setSelected] = useState(new Set())
   const [dragLeadId, setDragLeadId] = useState(null)
@@ -1542,6 +1584,19 @@ export default function Leads() {
   const [importPreview, setImportPreview] = useState(null)
   const [unmappedCols, setUnmappedCols] = useState([])
   const [importResult, setImportResult] = useState(null)
+
+  // Write filter state back to sessionStorage whenever any of it changes so a
+  // round-trip into LeadDetail and back doesn't blow away the agent's view.
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(LEADS_STATE_KEY, JSON.stringify({
+        view, search, stageFilter, sortBy,
+        tagFilters: Array.from(tagFilters),
+        tzFilters: Array.from(tzFilters),
+        campaignFilters: Array.from(campaignFilters),
+      }))
+    } catch {}
+  }, [view, search, stageFilter, sortBy, tagFilters, tzFilters, campaignFilters])
 
   // Scroll-position preservation. When the agent clicks into a lead and comes
   // back, we want them dropped right where they were — not jumped to the top.

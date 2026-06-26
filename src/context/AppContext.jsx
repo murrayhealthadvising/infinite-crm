@@ -131,7 +131,37 @@ export function AppProvider({ children }) {
     // catch these automatically, but the manual refresh is the user's "make
     // sure everything's current" button — so it should be comprehensive.
     try { await refreshPitchQueue() } catch (e) { console.error('refreshLeads → pitchQueue exception:', e) }
+    try { await refreshLastActivities() } catch (e) { console.error('refreshLeads → lastActivities exception:', e) }
     setLoading(false)
+  }
+
+  // Last-activity map for the Leads list cards. One row per lead — the most
+  // recent activity. Pull the latest ~500 rows for this user and group by
+  // lead_id in JS (faster than a per-lead query and Supabase's PostgREST
+  // doesn't expose `DISTINCT ON`). Refreshed on mount and after every
+  // addActivity/deleteActivity so the card preview stays current.
+  const [lastActivityByLead, setLastActivityByLead] = useState({})
+  const refreshLastActivities = async () => {
+    if (!session?.user?.id) { setLastActivityByLead({}); return }
+    const targetId = (profile?.role === 'runner' && profile?.lead_agent_id)
+      ? profile.lead_agent_id
+      : session.user.id
+    try {
+      const { data, error } = await supabase
+        .from('activities')
+        .select('lead_id, type, note, created_at')
+        .eq('user_id', targetId)
+        .order('created_at', { ascending: false })
+        .limit(500)
+      if (error) { console.error('[lastActivities] fetch failed:', error); return }
+      const map = {}
+      for (const row of (data || [])) {
+        if (!row.lead_id) continue
+        if (map[row.lead_id]) continue  // first one (newest) wins
+        map[row.lead_id] = { type: row.type, note: row.note, created_at: row.created_at }
+      }
+      setLastActivityByLead(map)
+    } catch (e) { console.error('[lastActivities] threw:', e) }
   }
 
   // Tags (pipeline stages) — every agent owns a personal copy of the 8 defaults
@@ -392,6 +422,12 @@ export function AppProvider({ children }) {
       }
       const saved = data || { ...entry, id: 'tmp-' + Date.now() }
       setActivities(prev => ({ ...prev, [leadId]: [saved, ...(prev[leadId] || [])] }))
+      // Bump the last-activity card preview immediately so the Leads list
+      // shows the latest action without a refresh round-trip.
+      setLastActivityByLead(prev => ({
+        ...prev,
+        [leadId]: { type: saved.type, note: saved.note, created_at: saved.created_at },
+      }))
       return saved
     } catch (e) {
       console.error('[addActivity] insert THREW for lead', leadId, 'type', type, '— exception:', e)
@@ -812,6 +848,7 @@ export function AppProvider({ children }) {
       addLead, bulkAddLeads, updateLead, updateLeadStage,
       deleteLead, deleteLeads, deleteAllLeadsForUser,
       addActivity, getLeadActivities, deleteActivity,
+      lastActivityByLead, refreshLastActivities,
       dialsToday, refreshDialsToday,
       addTag, updateTag, deleteTag, reorderTags,
       // sold-prompt globals
