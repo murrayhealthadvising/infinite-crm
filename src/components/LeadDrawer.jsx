@@ -2,8 +2,8 @@ import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useApp } from '../context/AppContext'
 import StatusTag from './StatusTag'
-import { X, Phone, PhoneCall, ChevronDown, ChevronRight, ChevronUp, Maximize2, Check, Calendar, MapPin, Pencil, Plus } from 'lucide-react'
-import { format, formatDistanceToNow } from 'date-fns'
+import { X, Phone, PhoneCall, ChevronDown, ChevronRight, ChevronUp, Maximize2, Check, Calendar, MapPin, Pencil, Plus, MessageSquare, AtSign, StickyNote, Zap } from 'lucide-react'
+import { format, formatDistanceToNow, formatDistanceToNowStrict } from 'date-fns'
 import clsx from 'clsx'
 import { displayPhone } from '../lib/phone'
 import { localTimeFor, localHourFor, tzLabelFor } from '../lib/timezone'
@@ -317,86 +317,86 @@ export default function LeadDrawer({ leadId, onClose, bucket = [], onNavigate })
   )
 }
 
-// Discreet action log — collapsed by default. Auto-records Call clicks +
-// stage changes via addActivity. Has a small "+ Add" input so the agent can
-// log things like "emailed today" or "left voicemail" inline.
+// Action log — always visible inside the drawer (no collapse fiddle). Soft
+// muted styling so it sits behind notes / contact info but stays scannable.
+// Quick add at the top, scrollable history below. Each row: small color dot,
+// truncated note, relative time. Hover reveals delete.
 function ActionLog({ activities, actionText, setActionText, actionKind, setActionKind, onLog, onDelete }) {
-  const [open, setOpen] = useState(false)
   const list = Array.isArray(activities) ? activities : []
-  const recent = list.slice(0, 8)
-  const lastCall = list.find(a => a?.type === 'call')
   const KINDS = [
-    ['call',  'Call',  '#10B981'],
-    ['text',  'Text',  '#3B82F6'],
-    ['email', 'Email', '#8B5CF6'],
-    ['note',  'Note',  '#F59E0B'],
+    ['call',  'Call',  '#10B981', Phone],
+    ['text',  'Text',  '#3B82F6', MessageSquare],
+    ['email', 'Email', '#8B5CF6', AtSign],
+    ['note',  'Note',  '#F59E0B', StickyNote],
   ]
+  const kindColor = (k) => (KINDS.find(([key]) => key === k) || [])[2] || '#5A6A7A'
+
   return (
-    <div className="rounded-xl border border-[#1A2130]" style={{ background: '#080B0F' }}>
-      <button onClick={() => setOpen(v => !v)}
-        className="w-full flex items-center justify-between gap-2 px-3 py-2 text-xs font-mono uppercase tracking-wider text-[#5A6A7A] hover:text-white">
-        <span>Action log {list.length > 0 && <span className="text-[#3A4A5A]">· {list.length}</span>}</span>
-        {lastCall && !open && (
-          <span className="text-[10px] font-mono normal-case tracking-normal text-[#10B981]">
-            last call {(() => { try { return formatDistanceToNow(new Date(lastCall.created_at), { addSuffix: true }) } catch { return '' } })()}
-          </span>
-        )}
-        <ChevronDown size={12} className={clsx('transition-transform flex-shrink-0', open && 'rotate-180')} />
-      </button>
-      {open && (
-        <div className="px-3 pb-3 space-y-2">
-          {/* Quick add */}
-          <div className="flex items-center gap-1.5">
-            <select value={actionKind} onChange={e => setActionKind(e.target.value)}
-              className="bg-[#0E1318] border border-[#1A2130] rounded px-1.5 py-1 text-[10px] text-white focus:outline-none focus:border-[#00E5C340]">
-              {KINDS.map(([k, label]) => <option key={k} value={k}>{label}</option>)}
-            </select>
-            <input value={actionText} onChange={e => setActionText(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); onLog(actionKind, actionText); setActionText('') } }}
-              placeholder='e.g. "Emailed proposal", "Left voicemail"'
-              className="flex-1 bg-[#0E1318] border border-[#1A2130] rounded px-2 py-1 text-xs text-white placeholder-[#3A4A5A] focus:outline-none focus:border-[#00E5C340]" />
-            <button onClick={() => { onLog(actionKind, actionText); setActionText('') }}
-              disabled={!actionText.trim()}
-              className="px-2 py-1 rounded text-[10px] font-semibold text-black disabled:opacity-40"
-              style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
-              Add
+    <div className="rounded-xl border border-[#1A2130] overflow-hidden" style={{ background: '#0B1016' }}>
+      <div className="flex items-center justify-between px-3 py-2 border-b border-[#1A2130]" style={{ background: '#0E1318' }}>
+        <span className="text-[10px] font-mono uppercase tracking-wider text-[#5A6A7A]">
+          Action log {list.length > 0 && <span className="text-[#3A4A5A]">· {list.length}</span>}
+        </span>
+      </div>
+
+      {/* Quick add — kind pills + text + add button on one row */}
+      <div className="px-3 py-2 border-b border-[#1A2130]">
+        <div className="flex items-center gap-1 mb-1.5 flex-wrap">
+          {KINDS.map(([k, label, color]) => (
+            <button key={k} type="button" onClick={() => setActionKind(k)}
+              className="text-[10px] px-1.5 py-0.5 rounded border transition-colors"
+              style={actionKind === k
+                ? { background: color + '20', color, borderColor: color + '60' }
+                : { color: '#5A6A7A', borderColor: '#1A2130' }}>
+              {label}
             </button>
-          </div>
-          {/* Recent entries */}
-          {recent.length === 0 ? (
-            <p className="text-[11px] text-[#5A6A7A]">No actions yet. Every Call click + stage change gets logged here automatically.</p>
-          ) : (
-            <div className="space-y-1">
-              {recent.map(a => {
-                const c = (KINDS.find(([k]) => k === a.type) || [])[2] || '#5A6A7A'
-                let when = ''
-                try { when = formatDistanceToNow(new Date(a.created_at), { addSuffix: true }) } catch {}
-                return (
-                  <div key={a.id} className="flex items-start gap-2 px-2 py-1 rounded hover:bg-[#0E1318] group">
-                    <span className="text-[10px] font-mono uppercase mt-0.5 flex-shrink-0" style={{ color: c }}>{a.type}</span>
-                    <p className="text-[11px] text-[#C0D0E0] flex-1 leading-tight">{a.note}</p>
-                    <span className="text-[10px] text-[#3A4A5A] font-mono flex-shrink-0">{when}</span>
-                    {onDelete && a.id && !String(a.id).startsWith('tmp-') && (
-                      <button
-                        onClick={() => {
-                          if (!confirm('Delete this action log entry?')) return
-                          onDelete(a.id)
-                        }}
-                        className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-[#3A4A5A] hover:text-[#EF4444] hover:bg-[#EF444415] transition-opacity flex-shrink-0"
-                        title="Delete this entry">
-                        <X size={10} />
-                      </button>
-                    )}
-                  </div>
-                )
-              })}
-              {list.length > recent.length && (
-                <p className="text-[10px] text-[#3A4A5A] text-center pt-1">… and {list.length - recent.length} older</p>
+          ))}
+        </div>
+        <div className="flex gap-1.5">
+          <input value={actionText} onChange={e => setActionText(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); onLog(actionKind, actionText); setActionText('') } }}
+            placeholder='e.g. "Left voicemail", "Emailed proposal"'
+            className="flex-1 bg-[#080B0F] border border-[#1A2130] rounded-md px-2 py-1 text-xs text-white placeholder-[#3A4A5A] focus:outline-none focus:border-[#00E5C340]" />
+          <button onClick={() => { onLog(actionKind, actionText); setActionText('') }}
+            disabled={!actionText.trim()}
+            className="px-2.5 py-1 rounded-md text-[10px] font-semibold text-black disabled:opacity-40"
+            style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
+            Add
+          </button>
+        </div>
+      </div>
+
+      {/* History — scrollable list */}
+      <div className="px-2 py-1.5 overflow-y-auto space-y-0.5" style={{ maxHeight: '220px', minHeight: '60px' }}>
+        {list.length === 0 ? (
+          <p className="text-[11px] text-[#3A4A5A] italic px-1.5 py-2">
+            No actions yet. Every Call + stage change logs here automatically.
+          </p>
+        ) : list.map((a) => {
+          const c = kindColor(a.type)
+          let when = ''
+          try { when = formatDistanceToNowStrict(new Date(a.created_at), { addSuffix: false }) + ' ago' } catch {}
+          const isTmp = a.id && String(a.id).startsWith('tmp-')
+          return (
+            <div key={a.id} className="group flex items-center gap-2 px-1.5 py-1 rounded transition-colors hover:bg-[#0E1318]">
+              <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: c }} />
+              <p className="text-[11px] text-[#C0D0E0] flex-1 leading-tight truncate" title={a.note}>{a.note || `(${a.type})`}</p>
+              <span className="text-[10px] text-[#3A4A5A] font-mono flex-shrink-0">{when}</span>
+              {onDelete && !isTmp && (
+                <button
+                  onClick={() => {
+                    if (!confirm('Delete this action log entry?')) return
+                    onDelete(a.id)
+                  }}
+                  className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-[#3A4A5A] hover:text-[#EF4444] hover:bg-[#EF444415] transition-opacity flex-shrink-0"
+                  title="Delete this entry">
+                  <X size={10} />
+                </button>
               )}
             </div>
-          )}
-        </div>
-      )}
+          )
+        })}
+      </div>
     </div>
   )
 }
