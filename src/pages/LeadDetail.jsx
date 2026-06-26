@@ -491,8 +491,10 @@ export default function LeadDetail() {
       {/* Header — back, name, prominent Call, stage move */}
       <div className="flex items-center justify-between px-6 py-4 border-b border-[#1A2130] flex-shrink-0 gap-4">
         <div className="flex items-center gap-3 min-w-0">
-          <button onClick={goBack} className="p-1.5 rounded-lg text-[#5A6A7A] hover:text-white hover:bg-[#1A2130] transition-colors flex-shrink-0" title="Back to Leads">
-            <ArrowLeft size={16} />
+          <button onClick={goBack}
+            className="p-1.5 rounded-lg text-[#5A6A7A] hover:text-white hover:bg-[#EF444415] hover:text-[#EF4444] transition-colors flex-shrink-0"
+            title="Exit lead (back to Leads list)">
+            <X size={16} />
           </button>
           {/* Prev / Next walk the filtered Leads list. Arrow keys also work
               (←/→ or j/k). Disabled state when at either end of the list. */}

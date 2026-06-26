@@ -135,32 +135,37 @@ export function AppProvider({ children }) {
     setLoading(false)
   }
 
-  // Last-activity map for the Leads list cards. One row per lead — the most
-  // recent activity. Pull the latest ~500 rows for this user and group by
-  // lead_id in JS (faster than a per-lead query and Supabase's PostgREST
-  // doesn't expose `DISTINCT ON`). Refreshed on mount and after every
-  // addActivity/deleteActivity so the card preview stays current.
-  const [lastActivityByLead, setLastActivityByLead] = useState({})
+  // Recent-activities map for the Leads list cards. Keeps the LAST 5
+  // activities per lead so cards can show a scrollable mini-log instead of
+  // requiring the agent to click into LeadDetail. One bulk query for the
+  // user's 1500 most-recent activities — grouped client-side.
+  const [lastActivityByLead, setLastActivityByLead] = useState({})        // singleton — last 1 (kept for back-compat)
+  const [recentActivitiesByLead, setRecentActivitiesByLead] = useState({}) // arrays — last 5 each
   const refreshLastActivities = async () => {
-    if (!session?.user?.id) { setLastActivityByLead({}); return }
+    if (!session?.user?.id) { setLastActivityByLead({}); setRecentActivitiesByLead({}); return }
     const targetId = (profile?.role === 'runner' && profile?.lead_agent_id)
       ? profile.lead_agent_id
       : session.user.id
     try {
       const { data, error } = await supabase
         .from('activities')
-        .select('lead_id, type, note, created_at')
+        .select('id, lead_id, type, note, created_at')
         .eq('user_id', targetId)
         .order('created_at', { ascending: false })
-        .limit(500)
+        .limit(1500)
       if (error) { console.error('[lastActivities] fetch failed:', error); return }
-      const map = {}
+      const head = {}
+      const recents = {}
       for (const row of (data || [])) {
         if (!row.lead_id) continue
-        if (map[row.lead_id]) continue  // first one (newest) wins
-        map[row.lead_id] = { type: row.type, note: row.note, created_at: row.created_at }
+        if (!recents[row.lead_id]) recents[row.lead_id] = []
+        if (recents[row.lead_id].length < 5) recents[row.lead_id].push({
+          id: row.id, type: row.type, note: row.note, created_at: row.created_at,
+        })
+        if (!head[row.lead_id]) head[row.lead_id] = { type: row.type, note: row.note, created_at: row.created_at }
       }
-      setLastActivityByLead(map)
+      setLastActivityByLead(head)
+      setRecentActivitiesByLead(recents)
     } catch (e) { console.error('[lastActivities] threw:', e) }
   }
 
@@ -428,6 +433,11 @@ export function AppProvider({ children }) {
         ...prev,
         [leadId]: { type: saved.type, note: saved.note, created_at: saved.created_at },
       }))
+      setRecentActivitiesByLead(prev => {
+        const cur = prev[leadId] || []
+        const next = [{ id: saved.id, type: saved.type, note: saved.note, created_at: saved.created_at }, ...cur].slice(0, 5)
+        return { ...prev, [leadId]: next }
+      })
       return saved
     } catch (e) {
       console.error('[addActivity] insert THREW for lead', leadId, 'type', type, '— exception:', e)
@@ -460,6 +470,7 @@ export function AppProvider({ children }) {
   useEffect(() => {
     if (!session?.user) { setDialsToday(0); return }
     refreshDialsToday()
+    refreshLastActivities()  // populate the Leads-list recent-activity preview
     // Re-check at the next local midnight so the counter rolls over live
     const now = new Date()
     const midnight = new Date(now); midnight.setHours(24, 0, 0, 0)
@@ -848,7 +859,7 @@ export function AppProvider({ children }) {
       addLead, bulkAddLeads, updateLead, updateLeadStage,
       deleteLead, deleteLeads, deleteAllLeadsForUser,
       addActivity, getLeadActivities, deleteActivity,
-      lastActivityByLead, refreshLastActivities,
+      lastActivityByLead, recentActivitiesByLead, refreshLastActivities,
       dialsToday, refreshDialsToday,
       addTag, updateTag, deleteTag, reorderTags,
       // sold-prompt globals

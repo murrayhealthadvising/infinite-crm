@@ -49,7 +49,7 @@ function leadInitials(lead) { const n = leadName(lead); if (n === '—' || !n) r
 // notes preview, comments chip, ZIP, time-in-stage, local time.
 // Each agent toggles which fields appear via Settings → Pipeline cards.
 function PipelineCard({ lead, onDragStart, onDragEnd, onClick }) {
-  const { getTag, pipelineCardFields, addActivity } = useApp()
+  const { getTag, pipelineCardFields, addActivity, recentActivitiesByLead } = useApp()
   const fields = pipelineCardFields || {}
   // Log a dial when the card's Call button is clicked. 2-min per-card coalesce
   // so an accidental double-tap doesn't double-count.
@@ -137,6 +137,26 @@ function PipelineCard({ lead, onDragStart, onDragEnd, onClick }) {
           style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', lineHeight: 1.4 }}>
           {lead.notes}
         </p>
+      )}
+
+      {/* Real recent actions — pulled from the activity log, scrollable when
+          there's more than fits. Falls back silently when the lead has none. */}
+      {recentActivitiesByLead && Array.isArray(recentActivitiesByLead[lead.id]) && recentActivitiesByLead[lead.id].length > 0 && (
+        <div className="mb-2 pt-1.5 border-t border-[#1A2130] space-y-0.5 overflow-y-auto"
+          style={{ maxHeight: '60px' }}>
+          {recentActivitiesByLead[lead.id].slice(0, 3).map((e, i) => {
+            let ago = ''
+            try { ago = formatDistanceToNowStrict(new Date(e.created_at), { addSuffix: false }) + ' ago' } catch {}
+            const color = ({ call: '#10B981', text: '#3B82F6', email: '#8B5CF6', note: '#F59E0B' })[e.type] || '#5A6A7A'
+            return (
+              <div key={e.id || i} className="flex items-center gap-1.5 text-[10px]" title={`${e.type} · ${e.note || ''} · ${ago}`}>
+                <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: color }} />
+                <span className="text-[#8899AA] truncate flex-1 min-w-0">{e.note || `(${e.type})`}</span>
+                <span className="text-[#3A4A5A] font-mono flex-shrink-0">{ago}</span>
+              </div>
+            )
+          })}
+        </div>
       )}
 
       <div className="flex items-center gap-1.5 flex-wrap">

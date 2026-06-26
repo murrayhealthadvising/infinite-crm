@@ -817,31 +817,41 @@ function NotesField({ value, onSave, placeholder }) {
 // ───────────────────────────────────────────────────────────────────────────
 // Lead card
 // ───────────────────────────────────────────────────────────────────────────
-// Tiny most-recent-action chip — shows the agent's last logged activity for
-// this lead (Called / Texted / Emailed / Note / etc) with a relative time so
-// they don't have to click into LeadDetail to remember what they last did.
-function RecentActionChip({ entry }) {
-  if (!entry || !entry.created_at) return null
-  const ICONS = { call: Phone, text: MessageSquare, email: AtSign, note: StickyNote, status: Zap, apt: Calendar }
-  const COLORS = { call: '#10B981', text: '#3B82F6', email: '#8B5CF6', note: '#F59E0B', status: '#00E5C3', apt: '#F97316' }
-  const Icon = ICONS[entry.type] || StickyNote
-  const color = COLORS[entry.type] || '#5A6A7A'
-  let ago = ''
-  try { ago = formatDistanceToNow(new Date(entry.created_at), { addSuffix: true }) } catch {}
-  const note = String(entry.note || '').slice(0, 60)
+const ACT_ICONS = { call: Phone, text: MessageSquare, email: AtSign, note: StickyNote, status: Zap, apt: Calendar }
+const ACT_COLORS = { call: '#10B981', text: '#3B82F6', email: '#8B5CF6', note: '#F59E0B', status: '#00E5C3', apt: '#F97316' }
+
+// Scrollable mini activity log for the Leads card's right column — sits
+// below "Received" and shows up to 5 most-recent activities for this lead.
+// Internally scrollable when entries overflow so the card height stays sane.
+function RecentActionsList({ entries }) {
+  const list = Array.isArray(entries) ? entries : []
+  if (!list.length) {
+    return <p className="text-[10px] text-[#3A4A5A] italic">No actions yet</p>
+  }
   return (
-    <span className="inline-flex items-center gap-1 text-[10px] font-mono"
-      style={{ color: '#5A6A7A' }}
-      title={`${entry.type} · ${entry.note || ''} · ${ago}`}>
-      <Icon size={10} style={{ color }} className="flex-shrink-0" />
-      <span className="truncate max-w-[180px]">{note}</span>
-      <span className="opacity-60 flex-shrink-0">· {ago}</span>
-    </span>
+    <div className="space-y-1 overflow-y-auto pr-1" style={{ maxHeight: '78px' }}>
+      {list.map((e, i) => {
+        const Icon = ACT_ICONS[e.type] || StickyNote
+        const color = ACT_COLORS[e.type] || '#5A6A7A'
+        let ago = ''
+        try { ago = formatDistanceToNow(new Date(e.created_at), { addSuffix: true }) } catch {}
+        return (
+          <div key={e.id || i} className="flex items-start gap-1.5"
+            title={`${e.type} · ${e.note || ''} · ${ago}`}>
+            <Icon size={9} style={{ color }} className="flex-shrink-0 mt-0.5" />
+            <div className="min-w-0 flex-1">
+              <p className="text-[10px] text-[#8899AA] truncate leading-tight">{e.note || `(${e.type})`}</p>
+              <p className="text-[9px] text-[#3A4A5A] font-mono leading-tight">{ago}</p>
+            </div>
+          </div>
+        )
+      })}
+    </div>
   )
 }
 
 function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNoteBChange, onNavigate, onDelete, onPriceChange, onCampaignChange, onRunnerChange, onTagsChange, runnerSuggestions, tagSuggestions, canDelete = true }) {
-  const { tags, getTag, splitNotes, pipelineCardFields, lastActivityByLead } = useApp()
+  const { tags, getTag, splitNotes, pipelineCardFields, recentActivitiesByLead } = useApp()
   const showRunner = pipelineCardFields?.runner !== false
   const [copied, setCopied] = useState(false)
   const [nameCopied, setNameCopied] = useState(false)
@@ -923,11 +933,6 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
             </button>
           )}
           <SoldBadge lead={lead} />
-          {lastActivityByLead && lastActivityByLead[lead.id] && (
-            <div className="mt-1">
-              <RecentActionChip entry={lastActivityByLead[lead.id]} />
-            </div>
-          )}
           <div className="flex items-center gap-1.5 mt-1 flex-wrap">
             <PitchCountdown leadId={lead.id} />
             <span className="text-xs text-[#5A6A7A]">{[lead.state, lead.zip].filter(Boolean).join(' ')}</span>
@@ -946,20 +951,21 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
         </div>
 
         <div className="flex flex-col gap-2 pt-0.5" onClick={e => e.stopPropagation()}>
-          {/* Email (compact icon-only) sits to the LEFT of the larger Call
-              button so the primary dial action stays prominent. */}
-          <div className="flex items-center justify-end gap-1.5">
-            {lead.email && (
+          {/* Call stays the full-width primary action (back to its original
+              size). Email is the tiny secondary button right below it on its
+              own line, sized to the word. */}
+          {lead.phone && (
+            <a href={`tel:${lead.phone}`} onClick={e => e.stopPropagation()}
+              className="flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-[8px] text-xs font-semibold text-black transition-opacity hover:opacity-80"
+              style={{ background: `linear-gradient(135deg, ${safeColor}, ${safeColor}AA)` }}>
+              <Phone size={12} /> Call
+            </a>
+          )}
+          {lead.email && (
+            <div className="flex justify-center">
               <EmailButton lead={lead} variant="compact" />
-            )}
-            {lead.phone && (
-              <a href={`tel:${lead.phone}`} onClick={e => e.stopPropagation()}
-                className="flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-[8px] text-xs font-semibold text-black transition-opacity hover:opacity-80"
-                style={{ background: `linear-gradient(135deg, ${safeColor}, ${safeColor}AA)` }}>
-                <Phone size={12} /> Call
-              </a>
-            )}
-          </div>
+            </div>
+          )}
           <TagPill stage={stageId} tags={safeTags} onChange={(s) => onStageChange(lead.id, s)} />
         </div>
 
@@ -1002,6 +1008,10 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
         <div className="space-y-1">
           <p className="text-[10px] text-[#3A4A5A] font-mono uppercase tracking-wider">Received</p>
           <p className="text-xs text-[#8899AA]">{safeFormat(lead.created_at, 'MM-dd-yyyy')}</p>
+          <div className="pt-1.5 mt-1.5 border-t border-[#1A2130]">
+            <p className="text-[10px] text-[#3A4A5A] font-mono uppercase tracking-wider mb-1">Recent</p>
+            <RecentActionsList entries={recentActivitiesByLead?.[lead.id]} />
+          </div>
         </div>
 
         <div className="flex flex-col items-end gap-1.5 pt-0.5">
