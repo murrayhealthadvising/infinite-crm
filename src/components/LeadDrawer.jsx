@@ -3,7 +3,12 @@ import { useNavigate } from 'react-router-dom'
 import { useApp } from '../context/AppContext'
 import StatusTag from './StatusTag'
 import { X, Phone, PhoneCall, ChevronDown, ChevronRight, ChevronUp, Maximize2, Check, Calendar, MapPin, Pencil, Plus, MessageSquare, AtSign, StickyNote, Zap } from 'lucide-react'
-import { format, formatDistanceToNow, formatDistanceToNowStrict } from 'date-fns'
+import { format, formatDistanceToNow, formatDistanceToNowStrict, isToday, isYesterday } from 'date-fns'
+
+// Activity-type → lucide icon + accent color. Used by the action log row
+// renderer below. Kept in sync with LeadDetail.jsx so both views look the same.
+const DRAWER_ACT_ICONS  = { call: PhoneCall, text: MessageSquare, email: AtSign, note: StickyNote, status: Zap, apt: Calendar }
+const DRAWER_ACT_COLORS = { call: '#10B981', text: '#3B82F6', email: '#8B5CF6', note: '#F59E0B', status: '#00E5C3', apt: '#F97316' }
 import clsx from 'clsx'
 import { displayPhone } from '../lib/phone'
 import { localTimeFor, localHourFor, tzLabelFor } from '../lib/timezone'
@@ -60,7 +65,7 @@ function NotesField({ value, onSave, placeholder }) {
 }
 
 export default function LeadDrawer({ leadId, onClose, bucket = [], onNavigate }) {
-  const { leads, tags, updateLead, updateLeadStage, addActivity, getLeadActivities, deleteActivity, addReminder, splitNotes, sideTagStyles } = useApp()
+  const { leads, tags, updateLead, updateLeadStage, addActivity, getLeadActivities, deleteActivity, addReminder, splitNotes, sideTagStyles, recentActivitiesByLead } = useApp()
   const navigate = useNavigate()
   const [stageOpen, setStageOpen] = useState(false)
   const [showEmpty, setShowEmpty] = useState(false)
@@ -74,28 +79,37 @@ export default function LeadDrawer({ leadId, onClose, bucket = [], onNavigate })
   // would only get the FIRST call logged.
   const lastCallByLeadRef = useRef({})
 
-  // Reload the activity history whenever we hop to a different lead. ALSO
-  // force a fresh fetch (bypassing AppContext cache) so we see activities
-  // created by teammates / other devices since we last opened this lead.
-  // CRITICAL: clear activities to [] IMMEDIATELY when leadId changes — otherwise
-  // the previous lead's count/entries stick around during the ~hundred-ms fetch
-  // and the agent sees "Action log · 7" from the lead they just navigated away
-  // from. Wiping first guarantees the UI never shows another lead's data.
+  // Activity history. Two-step load to keep the UI smooth:
+  //   1) IMMEDIATE seed from recentActivitiesByLead (already in memory from
+  //      the Leads list mount). No empty-flash, no fetch wait. If empty, we
+  //      still show empty state but at least it's accurate.
+  //   2) Background fetch via getLeadActivities to top-up with the FULL history
+  //      and pick up anything teammates have logged since last refresh. Only
+  //      replaces the seed if the fresh fetch returns MORE entries — never
+  //      downgrades the visible count.
   useEffect(() => {
-    if (!leadId || typeof getLeadActivities !== 'function') return
-    setActivities([])
+    if (!leadId) return
+    // Step 1 — instant seed from the in-memory recent-activity map
+    const seeded = (recentActivitiesByLead && recentActivitiesByLead[leadId]) || []
+    setActivities(seeded)
+    if (typeof getLeadActivities !== 'function') return
     let cancelled = false
+    // Step 2 — background fresh fetch
     try {
       const result = getLeadActivities(leadId, { force: true })
       if (result && typeof result.then === 'function') {
-        result.then(acts => { if (!cancelled) setActivities(acts || []) })
-              .catch(() => { if (!cancelled) setActivities([]) })
-      } else if (Array.isArray(result)) {
-        setActivities(result)
-      } else { setActivities([]) }
-    } catch { setActivities([]) }
+        result.then(acts => {
+          if (cancelled) return
+          const fresh = Array.isArray(acts) ? acts : []
+          // Only overwrite if the fresh fetch returned ≥ what we seeded.
+          // Prevents an empty fetch (RLS reject / cancelled net / etc.) from
+          // wiping out a perfectly good in-memory list.
+          if (fresh.length >= seeded.length) setActivities(fresh)
+        }).catch(() => { /* keep seeded list */ })
+      }
+    } catch {}
     return () => { cancelled = true }
-  }, [leadId, getLeadActivities])
+  }, [leadId, recentActivitiesByLead, getLeadActivities])
 
   const logAction = async (kind, text) => {
     if (!text || !text.trim()) return
@@ -317,80 +331,88 @@ export default function LeadDrawer({ leadId, onClose, bucket = [], onNavigate })
   )
 }
 
-// Action log — always visible inside the drawer (no collapse fiddle). Soft
-// muted styling so it sits behind notes / contact info but stays scannable.
-// Quick add at the top, scrollable history below. Each row: small color dot,
-// truncated note, relative time. Hover reveals delete.
+// Action log — matches the design used on LeadDetail's ActionLogPanel:
+// round icon badge + tinted background, note text, day/time label below,
+// hover reveals a delete X. Quick-add row at top with kind buttons + input.
+// Always visible; smooth list (no flash) because the parent seeds activities
+// from recentActivitiesByLead so empty state never appears mid-fetch when
+// there's actually data.
 function ActionLog({ activities, actionText, setActionText, actionKind, setActionKind, onLog, onDelete }) {
-  const list = Array.isArray(activities) ? activities : []
+  const list = (Array.isArray(activities) ? activities : []).slice(0, 40)
   const KINDS = [
-    ['call',  'Call',  '#10B981', Phone],
-    ['text',  'Text',  '#3B82F6', MessageSquare],
-    ['email', 'Email', '#8B5CF6', AtSign],
-    ['note',  'Note',  '#F59E0B', StickyNote],
+    ['call',  'Called',  '#10B981'],
+    ['text',  'Texted',  '#3B82F6'],
+    ['email', 'Emailed', '#8B5CF6'],
+    ['note',  'Note',    '#F59E0B'],
   ]
-  const kindColor = (k) => (KINDS.find(([key]) => key === k) || [])[2] || '#5A6A7A'
-
   return (
-    <div className="rounded-xl border border-[#1A2130] overflow-hidden" style={{ background: '#0B1016' }}>
-      <div className="flex items-center justify-between px-3 py-2 border-b border-[#1A2130]" style={{ background: '#0E1318' }}>
-        <span className="text-[10px] font-mono uppercase tracking-wider text-[#5A6A7A]">
-          Action log {list.length > 0 && <span className="text-[#3A4A5A]">· {list.length}</span>}
-        </span>
+    <div className="rounded-xl border border-[#1A2130] overflow-hidden flex flex-col" style={{ background: '#0E1318' }}>
+      <div className="flex items-center justify-between px-4 py-3 border-b border-[#1A2130]">
+        <div className="flex items-center gap-2">
+          <PhoneCall size={13} className="text-[#10B981]" />
+          <span className="text-xs font-mono uppercase tracking-wider text-[#8899AA]">Action log</span>
+          <span className="text-[10px] text-[#3A4A5A] font-mono">· {list.length}</span>
+        </div>
       </div>
-
-      {/* Quick add — kind pills + text + add button on one row */}
-      <div className="px-3 py-2 border-b border-[#1A2130]">
-        <div className="flex items-center gap-1 mb-1.5 flex-wrap">
-          {KINDS.map(([k, label, color]) => (
+      <div className="px-4 py-3 border-b border-[#1A2130]">
+        <div className="flex items-center gap-1.5 mb-2 flex-wrap">
+          {KINDS.map(([k, l, c]) => (
             <button key={k} type="button" onClick={() => setActionKind(k)}
-              className="text-[10px] px-1.5 py-0.5 rounded border transition-colors"
+              className="text-[10px] px-2 py-0.5 rounded border transition-colors"
               style={actionKind === k
-                ? { background: color + '20', color, borderColor: color + '60' }
+                ? { background: c + '15', color: c, borderColor: c + '60' }
                 : { color: '#5A6A7A', borderColor: '#1A2130' }}>
-              {label}
+              {l}
             </button>
           ))}
         </div>
-        <div className="flex gap-1.5">
+        <div className="flex gap-2">
           <input value={actionText} onChange={e => setActionText(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); onLog(actionKind, actionText); setActionText('') } }}
-            placeholder='e.g. "Left voicemail", "Emailed proposal"'
-            className="flex-1 bg-[#080B0F] border border-[#1A2130] rounded-md px-2 py-1 text-xs text-white placeholder-[#3A4A5A] focus:outline-none focus:border-[#00E5C340]" />
+            placeholder="What happened? (e.g., didn't answer, left vm)"
+            className="flex-1 bg-[#080B0F] border border-[#1A2130] rounded-lg px-3 py-1.5 text-xs text-white placeholder-[#3A4A5A] focus:outline-none focus:border-[#00E5C340]" />
           <button onClick={() => { onLog(actionKind, actionText); setActionText('') }}
             disabled={!actionText.trim()}
-            className="px-2.5 py-1 rounded-md text-[10px] font-semibold text-black disabled:opacity-40"
+            className="px-3 py-1.5 rounded-lg text-[11px] font-medium text-black disabled:opacity-40"
             style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
             Add
           </button>
         </div>
       </div>
-
-      {/* History — scrollable list */}
-      <div className="px-2 py-1.5 overflow-y-auto space-y-0.5" style={{ maxHeight: '220px', minHeight: '60px' }}>
+      <div className="flex-1 overflow-y-auto p-4 space-y-2.5" style={{ maxHeight: '260px', minHeight: '120px' }}>
         {list.length === 0 ? (
-          <p className="text-[11px] text-[#3A4A5A] italic px-1.5 py-2">
-            No actions yet. Every Call + stage change logs here automatically.
+          <p className="text-xs text-[#3A4A5A] text-center py-6 px-4">
+            Every call you make is auto-logged here with the exact time of day, so you can see when they don't pick up.
           </p>
-        ) : list.map((a) => {
-          const c = kindColor(a.type)
-          let when = ''
-          try { when = formatDistanceToNowStrict(new Date(a.created_at), { addSuffix: false }) + ' ago' } catch {}
+        ) : list.map((a, i) => {
+          const Icon = DRAWER_ACT_ICONS[a.type] || StickyNote
+          const color = DRAWER_ACT_COLORS[a.type] || '#5A6A7A'
+          const when = (() => { try { return new Date(a.created_at) } catch { return new Date() } })()
+          const valid = isFinite(when.getTime())
+          const dayLabel = !valid ? '' : isToday(when) ? 'Today' : isYesterday(when) ? 'Yesterday' : format(when, 'EEE MMM d')
+          const timeLabel = !valid ? '' : format(when, 'h:mm a')
           const isTmp = a.id && String(a.id).startsWith('tmp-')
           return (
-            <div key={a.id} className="group flex items-center gap-2 px-1.5 py-1 rounded transition-colors hover:bg-[#0E1318]">
-              <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: c }} />
-              <p className="text-[11px] text-[#C0D0E0] flex-1 leading-tight truncate" title={a.note}>{a.note || `(${a.type})`}</p>
-              <span className="text-[10px] text-[#3A4A5A] font-mono flex-shrink-0">{when}</span>
+            <div key={a.id || i} className="flex items-start gap-2.5 group">
+              <div className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5"
+                style={{ background: color + '20' }}>
+                <Icon size={11} style={{ color }} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs text-[#C0D0E0] leading-snug">{a.note || `(${a.type})`}</p>
+                <p className="text-[10px] text-[#3A4A5A] font-mono mt-0.5">
+                  {dayLabel}{dayLabel && timeLabel ? ' · ' : ''}{timeLabel}
+                </p>
+              </div>
               {onDelete && !isTmp && (
                 <button
                   onClick={() => {
                     if (!confirm('Delete this action log entry?')) return
                     onDelete(a.id)
                   }}
-                  className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-[#3A4A5A] hover:text-[#EF4444] hover:bg-[#EF444415] transition-opacity flex-shrink-0"
+                  className="opacity-0 group-hover:opacity-100 p-1 rounded text-[#3A4A5A] hover:text-[#EF4444] hover:bg-[#EF444415] transition-opacity flex-shrink-0"
                   title="Delete this entry">
-                  <X size={10} />
+                  <X size={11} />
                 </button>
               )}
             </div>
