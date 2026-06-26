@@ -951,20 +951,12 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
         </div>
 
         <div className="flex flex-col gap-2 pt-0.5" onClick={e => e.stopPropagation()}>
-          {/* Call stays the full-width primary action (back to its original
-              size). Email is the tiny secondary button right below it on its
-              own line, sized to the word. */}
           {lead.phone && (
             <a href={`tel:${lead.phone}`} onClick={e => e.stopPropagation()}
               className="flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-[8px] text-xs font-semibold text-black transition-opacity hover:opacity-80"
               style={{ background: `linear-gradient(135deg, ${safeColor}, ${safeColor}AA)` }}>
               <Phone size={12} /> Call
             </a>
-          )}
-          {lead.email && (
-            <div className="flex justify-center">
-              <EmailButton lead={lead} variant="compact" />
-            </div>
           )}
           <TagPill stage={stageId} tags={safeTags} onChange={(s) => onStageChange(lead.id, s)} />
         </div>
@@ -1015,6 +1007,11 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
         </div>
 
         <div className="flex flex-col items-end gap-1.5 pt-0.5">
+          {/* Quick-email button — small, top-right, opens the compose modal
+              without leaving the Leads list. */}
+          {lead.email && (
+            <EmailButton lead={lead} variant="compact" />
+          )}
           <button onClick={() => onNavigate(lead.id)}
             className="p-1.5 rounded-lg text-[#3A4A5A] hover:text-white transition-colors" title="Open detail">
             <ExternalLink size={14} />
