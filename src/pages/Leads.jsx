@@ -917,16 +917,20 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
         </div>
 
         <div className="flex flex-col gap-2 pt-0.5" onClick={e => e.stopPropagation()}>
-          {lead.phone && (
-            <a href={`tel:${lead.phone}`} onClick={e => e.stopPropagation()}
-              className="flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-[8px] text-xs font-semibold text-black transition-opacity hover:opacity-80"
-              style={{ background: `linear-gradient(135deg, ${safeColor}, ${safeColor}AA)` }}>
-              <Phone size={12} /> Call
-            </a>
-          )}
-          {lead.email && (
-            <EmailButton lead={lead} variant="pill" size="sm" />
-          )}
+          {/* Email (compact icon-only) sits to the LEFT of the larger Call
+              button so the primary dial action stays prominent. */}
+          <div className="flex items-center justify-end gap-1.5">
+            {lead.email && (
+              <EmailButton lead={lead} variant="icon" size="sm" />
+            )}
+            {lead.phone && (
+              <a href={`tel:${lead.phone}`} onClick={e => e.stopPropagation()}
+                className="flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-[8px] text-xs font-semibold text-black transition-opacity hover:opacity-80"
+                style={{ background: `linear-gradient(135deg, ${safeColor}, ${safeColor}AA)` }}>
+                <Phone size={12} /> Call
+              </a>
+            )}
+          </div>
           <TagPill stage={stageId} tags={safeTags} onChange={(s) => onStageChange(lead.id, s)} />
         </div>
 
