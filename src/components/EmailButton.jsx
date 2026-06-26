@@ -26,6 +26,25 @@ export default function EmailButton({ lead, variant = 'icon', size = 'sm', onCli
   const baseStyle = { background: 'linear-gradient(135deg, #3B82F6, #8B5CF6)' }
   const iconSize = size === 'md' ? 13 : 11
 
+  // Compact text-only variant — "as big as the words". Used on lead cards
+  // where Email is a secondary action next to the primary Call button.
+  if (variant === 'compact') {
+    return (
+      <>
+        <button onClick={handleOpen}
+          title={`Email ${lead.email}`}
+          className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold text-white flex-shrink-0 transition-opacity hover:opacity-90 leading-tight"
+          style={baseStyle}>
+          Email
+        </button>
+        {open && (
+          <ComposeEmailModal leadId={lead.id} to={lead.email}
+            onClose={() => setOpen(false)} />
+        )}
+      </>
+    )
+  }
+
   return (
     <>
       {variant === 'icon' ? (

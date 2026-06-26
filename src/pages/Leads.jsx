@@ -921,7 +921,7 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
               button so the primary dial action stays prominent. */}
           <div className="flex items-center justify-end gap-1.5">
             {lead.email && (
-              <EmailButton lead={lead} variant="icon" size="sm" />
+              <EmailButton lead={lead} variant="compact" />
             )}
             {lead.phone && (
               <a href={`tel:${lead.phone}`} onClick={e => e.stopPropagation()}
