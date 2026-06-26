@@ -8,7 +8,7 @@ import SoldBadge from '../components/SoldBadge'
 import CalendlyButton from '../components/CalendlyButton'
 import ComposeEmailModal from '../components/ComposeEmailModal'
 import ConversationPanel from '../components/ConversationPanel'
-import { Phone, Mail, MapPin, Calendar, ArrowLeft, MessageSquare, PhoneCall, AtSign, StickyNote, ChevronDown, Zap, Send, User, Users, Home, DollarSign, Heart, Pencil, Check, X, Clock } from 'lucide-react'
+import { Phone, Mail, MapPin, Calendar, ArrowLeft, MessageSquare, PhoneCall, AtSign, StickyNote, ChevronDown, ChevronLeft as ChevronLeftIcon, ChevronRight as ChevronRightIcon, Zap, Send, User, Users, Home, DollarSign, Heart, Pencil, Check, X, Clock } from 'lucide-react'
 import { normalizePhone, displayPhone } from '../lib/phone'
 import { localTimeFor, localHourFor } from '../lib/timezone'
 import { format, formatDistanceToNow, isToday, isYesterday } from 'date-fns'
@@ -385,6 +385,41 @@ export default function LeadDetail() {
     else navigate('/leads')
   }
 
+  // Prev/Next navigation through the filtered Leads list. The Leads page writes
+  // its current filtered+sorted ID array to sessionStorage on every render, so
+  // arrows here walk the EXACT list+order the agent was looking at. Falls back
+  // to the raw context leads order if no saved list exists (deep-linked nav).
+  const visibleIds = (() => {
+    try {
+      const raw = sessionStorage.getItem('leads:visibleIds')
+      if (raw) {
+        const arr = JSON.parse(raw)
+        if (Array.isArray(arr) && arr.length) return arr
+      }
+    } catch {}
+    return safeLeads.map(l => l.id)
+  })()
+  const navIdx = visibleIds.indexOf(id)
+  const prevId = navIdx > 0 ? visibleIds[navIdx - 1] : null
+  const nextId = navIdx >= 0 && navIdx < visibleIds.length - 1 ? visibleIds[navIdx + 1] : null
+  const goPrev = () => { if (prevId) navigate(`/leads/${prevId}`) }
+  const goNext = () => { if (nextId) navigate(`/leads/${nextId}`) }
+
+  // Keyboard shortcuts — left/right arrows walk prev/next when the agent isn't
+  // typing in an input or textarea (so we don't fight the notes editor).
+  useEffect(() => {
+    const onKey = (e) => {
+      const t = document.activeElement
+      const inField = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)
+      if (inField) return
+      if (e.key === 'ArrowLeft' || e.key === 'k') { e.preventDefault(); goPrev() }
+      else if (e.key === 'ArrowRight' || e.key === 'j') { e.preventDefault(); goNext() }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prevId, nextId, id])
+
   if (!lead) return (
     <div className="flex flex-col items-center justify-center h-full text-[#5A6A7A]">
       <p>Lead not found</p>
@@ -456,9 +491,26 @@ export default function LeadDetail() {
       {/* Header — back, name, prominent Call, stage move */}
       <div className="flex items-center justify-between px-6 py-4 border-b border-[#1A2130] flex-shrink-0 gap-4">
         <div className="flex items-center gap-3 min-w-0">
-          <button onClick={goBack} className="p-1.5 rounded-lg text-[#5A6A7A] hover:text-white hover:bg-[#1A2130] transition-colors flex-shrink-0" title="Back">
+          <button onClick={goBack} className="p-1.5 rounded-lg text-[#5A6A7A] hover:text-white hover:bg-[#1A2130] transition-colors flex-shrink-0" title="Back to Leads">
             <ArrowLeft size={16} />
           </button>
+          {/* Prev / Next walk the filtered Leads list. Arrow keys also work
+              (←/→ or j/k). Disabled state when at either end of the list. */}
+          <div className="flex items-center gap-0.5 border border-[#1A2130] rounded-lg flex-shrink-0">
+            <button onClick={goPrev} disabled={!prevId}
+              className="p-1.5 text-[#5A6A7A] hover:text-white hover:bg-[#1A2130] transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+              title={prevId ? 'Previous lead (←)' : 'No previous lead'}>
+              <ChevronLeftIcon size={14} />
+            </button>
+            <span className="text-[10px] font-mono text-[#5A6A7A] px-1.5 select-none">
+              {navIdx >= 0 ? `${navIdx + 1} / ${visibleIds.length}` : ''}
+            </span>
+            <button onClick={goNext} disabled={!nextId}
+              className="p-1.5 text-[#5A6A7A] hover:text-white hover:bg-[#1A2130] transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+              title={nextId ? 'Next lead (→)' : 'No next lead'}>
+              <ChevronRightIcon size={14} />
+            </button>
+          </div>
           <div className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0"
             style={{ background: (tag?.color || '#5A6A7A') + '25', color: tag?.color || '#5A6A7A' }}>
             {initials}

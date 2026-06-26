@@ -1669,6 +1669,15 @@ export default function Leads() {
     return matchSearch && matchStage && matchTags && matchTz && matchCampaign
   })
 
+  // Save the current filtered/sorted ID list to sessionStorage so LeadDetail
+  // can show ← → arrows that walk through THIS exact list in THIS exact order.
+  // Updated whenever filters or sort change.
+  useEffect(() => {
+    try {
+      sessionStorage.setItem('leads:visibleIds', JSON.stringify(filtered.map(l => l.id)))
+    } catch {}
+  }, [filtered])
+
   const toggleSelect = (id) => setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
   const toggleAll = () => setSelected(prev => prev.size === filtered.length ? new Set() : new Set(filtered.map(l => l.id)))
 
