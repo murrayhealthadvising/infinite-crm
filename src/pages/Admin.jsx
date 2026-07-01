@@ -30,8 +30,63 @@ export default function Admin() {
   useEffect(() => { loadAgents() }, [])
 
   const updateRole = async (userId, role) => {
-    await supabase.from('profiles').update({ role }).eq('user_id', userId)
+    // When leaving the runner role, clear lead_agent_id so a subsequent
+    // "make runner" always starts fresh.
+    const patch = { role }
+    if (role !== 'runner') patch.lead_agent_id = null
+    await supabase.from('profiles').update(patch).eq('user_id', userId)
     loadAgents()
+  }
+
+  // Approve a pending sign-up. Flips the profile from 'pending' → 'agent'
+  // so the user can access the CRM. Called from the Pending Approvals
+  // section at the top of the admin list.
+  const approvePending = async (userId) => {
+    await supabase.from('profiles').update({ role: 'agent' }).eq('user_id', userId)
+    setMsg({ type: 'success', text: 'Approved. They can now access the CRM.' })
+    loadAgents()
+    setTimeout(() => setMsg(null), 4000)
+  }
+  const rejectPending = async (agent) => {
+    if (!confirm(`Reject sign-up from ${agent.email}? Their profile will be deleted (they can re-request).`)) return
+    await supabase.from('profiles').delete().eq('user_id', agent.user_id)
+    setMsg({ type: 'info', text: 'Rejected.' })
+    loadAgents()
+    setTimeout(() => setMsg(null), 4000)
+  }
+
+  // Make an agent a runner working under a specific lead-agent. Sets BOTH
+  // role='runner' AND lead_agent_id in one write.
+  const [runnerPickerFor, setRunnerPickerFor] = useState(null)  // agent being made-runner
+  const makeRunner = async (runnerAgent, leadAgentUserId) => {
+    if (!leadAgentUserId) return
+    const { error } = await supabase.from('profiles')
+      .update({ role: 'runner', lead_agent_id: leadAgentUserId })
+      .eq('user_id', runnerAgent.user_id)
+    if (error) {
+      setMsg({ type: 'error', text: `Failed: ${error.message}` })
+    } else {
+      const leadAgent = agents.find(a => a.user_id === leadAgentUserId)
+      setMsg({ type: 'success', text: `${runnerAgent.full_name || runnerAgent.email} is now a runner for ${leadAgent?.full_name || leadAgent?.email}.` })
+      loadAgents()
+    }
+    setRunnerPickerFor(null)
+    setTimeout(() => setMsg(null), 6000)
+  }
+  const changeLeadAgent = async (runnerAgent, newLeadAgentUserId) => {
+    if (!newLeadAgentUserId) return
+    const { error } = await supabase.from('profiles')
+      .update({ lead_agent_id: newLeadAgentUserId })
+      .eq('user_id', runnerAgent.user_id)
+    if (error) {
+      setMsg({ type: 'error', text: `Failed: ${error.message}` })
+    } else {
+      const leadAgent = agents.find(a => a.user_id === newLeadAgentUserId)
+      setMsg({ type: 'success', text: `${runnerAgent.full_name || runnerAgent.email} now runs for ${leadAgent?.full_name || leadAgent?.email}.` })
+      loadAgents()
+    }
+    setRunnerPickerFor(null)
+    setTimeout(() => setMsg(null), 4000)
   }
 
   const startEditing = (agent) => {
@@ -108,11 +163,51 @@ export default function Admin() {
         }`}>{msg.text}</div>
       )}
 
+      {/* Pending approvals — accounts that signed up and haven't been let in
+          yet. Shown above the main list, in orange, so admin can't miss them. */}
+      {(() => {
+        const pending = agents.filter(a => a.role === 'pending')
+        if (pending.length === 0) return null
+        return (
+          <div className="rounded-xl border border-[#F59E0B40] overflow-hidden mb-4" style={{ background: '#F59E0B08' }}>
+            <div className="px-6 py-4 border-b border-[#F59E0B30] flex items-center gap-2">
+              <Shield size={14} className="text-[#F59E0B]" />
+              <span className="text-sm font-semibold text-[#F59E0B]">
+                {pending.length} pending sign-up{pending.length === 1 ? '' : 's'} waiting for you
+              </span>
+            </div>
+            <div className="divide-y divide-[#F59E0B20]">
+              {pending.map(a => (
+                <div key={a.id} className="px-6 py-3 flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-black flex-shrink-0"
+                    style={{ background: 'linear-gradient(135deg, #F59E0B, #EF4444)' }}>
+                    {a.full_name?.[0]?.toUpperCase() || a.email?.[0]?.toUpperCase()}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-white truncate">{a.full_name || '—'}</p>
+                    <p className="text-xs text-[#8899AA] truncate">{a.email}</p>
+                  </div>
+                  <button onClick={() => approvePending(a.user_id)}
+                    className="px-3 py-1.5 rounded-lg text-xs font-semibold text-black"
+                    style={{ background: 'linear-gradient(135deg, #10B981, #00E5C3)' }}>
+                    ✓ Approve
+                  </button>
+                  <button onClick={() => rejectPending(a)}
+                    className="px-3 py-1.5 rounded-lg text-xs border border-[#EF444440] text-[#EF4444] hover:bg-[#EF444415]">
+                    Reject
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )
+      })()}
+
       {/* Agent list */}
       <div className="rounded-xl border border-[#1A2130] overflow-hidden" style={{ background: '#0D1117' }}>
         <div className="px-6 py-4 border-b border-[#1A2130] flex items-center gap-2">
           <Users size={14} className="text-[#8899AA]" />
-          <span className="text-sm font-semibold text-white">{agents.length} accounts</span>
+          <span className="text-sm font-semibold text-white">{agents.filter(a => a.role !== 'pending').length} approved accounts</span>
         </div>
         {loading ? (
           <div className="p-6 text-center text-[#8899AA] text-sm">Loading…</div>
@@ -120,7 +215,7 @@ export default function Admin() {
           <div className="p-6 text-center text-[#8899AA] text-sm">No agents yet</div>
         ) : (
           <div className="divide-y divide-[#1A2130]">
-            {agents.map(agent => {
+            {agents.filter(a => a.role !== 'pending').map(agent => {
               const isEditing = editingAgentId === agent.id
               const previewLocal = deriveLocal(firstNameDraft || (agent.full_name || agent.email || '').split('@')[0])
               const previewAddr = previewLocal ? `${previewLocal}-leads@infinite-crm.net` : ''
@@ -138,10 +233,23 @@ export default function Admin() {
                     <span className={`px-2 py-0.5 rounded text-xs font-medium ${agent.role === 'admin' ? 'bg-[#00E5C310] text-[#00E5C3]' : agent.role === 'runner' ? 'bg-[#A78BFA15] text-[#A78BFA]' : 'bg-[#1A2130] text-[#8899AA]'}`}>
                       {agent.role || 'agent'}
                     </span>
+                    {/* Role actions — Make Admin / Make Runner / Demote */}
                     {agent.role !== 'admin' && agent.role !== 'runner' && (
-                      <button onClick={() => updateRole(agent.user_id, 'admin')}
-                        className="text-xs text-[#8899AA] hover:text-[#00E5C3]">
-                        Make Admin
+                      <>
+                        <button onClick={() => updateRole(agent.user_id, 'admin')}
+                          className="text-xs text-[#8899AA] hover:text-[#00E5C3]">
+                          Make Admin
+                        </button>
+                        <button onClick={() => setRunnerPickerFor(agent)}
+                          className="text-xs text-[#8899AA] hover:text-[#A78BFA]">
+                          Make Runner
+                        </button>
+                      </>
+                    )}
+                    {agent.role === 'runner' && (
+                      <button onClick={() => updateRole(agent.user_id, 'agent')}
+                        className="text-xs text-[#8899AA] hover:text-[#EF4444]">
+                        Demote to agent
                       </button>
                     )}
                     {agent.role === 'admin' && agent.email !== 'murrayhealthadvising@gmail.com' && (
@@ -151,6 +259,25 @@ export default function Admin() {
                       </button>
                     )}
                   </div>
+
+                  {/* Runner's lead-agent — shown for runner rows only */}
+                  {agent.role === 'runner' && (
+                    <div className="mt-3 flex items-center gap-2 flex-wrap" style={{ paddingLeft: '52px' }}>
+                      <span className="text-[10px] font-mono uppercase tracking-wider text-[#5A6A7A]">Running for</span>
+                      {(() => {
+                        const leadAgent = agents.find(a => a.user_id === agent.lead_agent_id)
+                        return (
+                          <code className={`text-xs font-mono ${leadAgent ? 'text-[#A78BFA]' : 'text-[#EF4444]'}`}>
+                            {leadAgent?.full_name || leadAgent?.email || '(NOT SET — click Change)'}
+                          </code>
+                        )
+                      })()}
+                      <button onClick={() => setRunnerPickerFor(agent)}
+                        className="text-xs text-[#5A6A7A] hover:text-white inline-flex items-center gap-1">
+                        <Edit2 size={11} /> Change
+                      </button>
+                    </div>
+                  )}
 
                   {/* Lead email row */}
                   {agent.role !== 'runner' && (
@@ -235,6 +362,58 @@ export default function Admin() {
           </div>
         )}
       </div>
+
+      {/* Runner picker modal — used both to convert an agent → runner and to
+          change the lead-agent an existing runner works under. */}
+      {runnerPickerFor && (() => {
+        const target = runnerPickerFor
+        // Candidate lead-agents: everyone except the target themselves, admins
+        // (fine to run under), and NOT other pending / runner accounts.
+        const candidates = agents.filter(a =>
+          a.user_id !== target.user_id &&
+          a.role !== 'pending' &&
+          a.role !== 'runner'
+        )
+        const isConvert = target.role !== 'runner'
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setRunnerPickerFor(null)} />
+            <div className="relative w-full max-w-md rounded-2xl border border-[#A78BFA40] overflow-hidden shadow-2xl" style={{ background: '#0E1318' }}>
+              <div className="flex items-center justify-between px-5 py-4 border-b border-[#1A2130]" style={{ background: '#A78BFA10' }}>
+                <div>
+                  <h3 className="text-base font-bold text-white">
+                    {isConvert ? `Make ${target.full_name || target.email} a runner` : `Change ${target.full_name || target.email}'s lead-agent`}
+                  </h3>
+                  <p className="text-xs text-[#8899AA] mt-0.5">Pick whose leads they'll work.</p>
+                </div>
+                <button onClick={() => setRunnerPickerFor(null)} className="p-1.5 rounded text-[#5A6A7A] hover:text-white hover:bg-[#1A2130]">✕</button>
+              </div>
+              <div className="p-2 max-h-[60vh] overflow-y-auto">
+                {candidates.length === 0 ? (
+                  <p className="text-xs text-[#8899AA] p-4 text-center">No candidate lead-agents. Add another admin/agent first.</p>
+                ) : candidates.map(c => (
+                  <button key={c.user_id}
+                    onClick={() => isConvert ? makeRunner(target, c.user_id) : changeLeadAgent(target, c.user_id)}
+                    disabled={c.user_id === target.lead_agent_id}
+                    className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-[#1A2130] transition-colors disabled:opacity-40 disabled:cursor-not-allowed text-left">
+                    <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-black flex-shrink-0"
+                      style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
+                      {c.full_name?.[0]?.toUpperCase() || c.email?.[0]?.toUpperCase()}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm text-white truncate">{c.full_name || '—'}</p>
+                      <p className="text-xs text-[#5A6A7A] truncate">{c.email} · {c.role || 'agent'}</p>
+                    </div>
+                    {c.user_id === target.lead_agent_id && (
+                      <span className="text-[10px] text-[#A78BFA]">current</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }

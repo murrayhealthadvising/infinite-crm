@@ -3,6 +3,7 @@ import { AppProvider, useApp } from './context/AppContext'
 import { Component } from 'react'
 import Layout from './components/Layout'
 import Login from './pages/Login'
+import PendingApproval from './pages/PendingApproval'
 import Dashboard from './pages/Dashboard'
 import Leads from './pages/Leads'
 import Pipeline from './pages/Pipeline'
@@ -52,7 +53,7 @@ class ErrorBoundary extends Component {
 }
 
 function AuthGate() {
-  const { session, authLoading } = useApp()
+  const { session, authLoading, profile } = useApp()
 
   if (authLoading) {
     return (
@@ -70,6 +71,11 @@ function AuthGate() {
   }
 
   if (!session) return <Login />
+
+  // Sign-up gate: pending role means an admin hasn't approved this user yet.
+  // Everyone starts here except murrayhealthadvising@gmail.com (bootstrap admin)
+  // — the AppContext creates new profiles with role='pending'.
+  if (profile?.role === 'pending') return <PendingApproval />
 
   return (
     <ErrorBoundary>

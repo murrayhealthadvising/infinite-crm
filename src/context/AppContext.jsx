@@ -52,11 +52,14 @@ export function AppProvider({ children }) {
       if (error && error.code !== 'PGRST116') { console.error('loadProfile error:', error) }
       const isMurray = sUser.email === 'murrayhealthadvising@gmail.com'
       if (!data) {
+        // Brand-new sign-up. Everyone starts as 'pending' EXCEPT Murray
+        // (bootstrap admin) so they can't wander into the app without being
+        // approved. Admin panel has an Approve button that flips them to 'agent'.
         const fallback = {
           user_id: sUser.id,
           email: sUser.email || '',
           full_name: sUser.user_metadata?.full_name || (sUser.email ? sUser.email.split('@')[0] : 'Agent'),
-          role: isMurray ? 'admin' : 'agent',
+          role: isMurray ? 'admin' : 'pending',
         }
         try {
           const { data: newProfile } = await supabase.from('profiles').upsert(fallback, { onConflict: 'user_id' }).select().maybeSingle()
