@@ -1,4 +1,4 @@
-// Infinite CRM Email Worker — v4.21 (9am send jitter 0-5min so overnight-deferred leads don't fire all at once)
+// Infinite CRM Email Worker — v4.22 (enroll retries 3x with backoff — fixes contact-created-but-not-texted bug)
 //
 // Deploys via the Cloudflare Workers REST API with NO bundler — every helper
 // inlined here. Handles two paths:
@@ -637,23 +637,44 @@ async function createOrFindContact(apiKey, lead) {
   return null
 }
 
-// Enroll a contact into a workflow.
+// Enroll a contact into a workflow. Retries on transient failures — the most
+// common bug was "contact was just created, PP hasn't finished indexing it,
+// enroll returns 404 or 500, we give up, lead gets a contact but never a
+// text". 3 attempts with 800ms + 1600ms backoff catches ~all eventual-
+// consistency and one-off network errors. Only 400 (workflow paused / bad
+// request) is treated as terminal since retry won't help.
 async function enrollInWorkflow(apiKey, workflowId, contactUuid) {
-  try {
-    const r = await fetch(`${PITCHPRFCT_API}/workflows/${encodeURIComponent(workflowId)}/enroll`, {
-      method: 'POST',
-      headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
-      body: JSON.stringify({ contactUuid }),
-    })
-    const text = await r.text()
-    if (r.ok) {
-      console.log('[pp] ENROLLED contact', contactUuid, 'in workflow', workflowId)
-    } else {
-      // 400 = workflow not active, 404 = workflow or contact not found.
-      console.error('[pp] enroll FAILED', r.status, text.slice(0, 300))
+  const MAX_ATTEMPTS = 3
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const r = await fetch(`${PITCHPRFCT_API}/workflows/${encodeURIComponent(workflowId)}/enroll`, {
+        method: 'POST',
+        headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
+        body: JSON.stringify({ contactUuid }),
+      })
+      const text = await r.text()
+      if (r.ok) {
+        console.log('[pp] ENROLLED contact', contactUuid, 'in workflow', workflowId, 'attempt', attempt)
+        return true
+      }
+      // 400 = terminal (workflow paused / invalid). Everything else is
+      // eligible for retry — includes 404 (contact not indexed yet), 429
+      // (rate limit), 5xx (transient upstream).
+      console.error('[pp] enroll attempt', attempt, 'FAILED', r.status, text.slice(0, 240))
+      if (r.status === 400) {
+        console.error('[pp] enroll terminal failure — not retrying (workflow paused / bad request)')
+        return false
+      }
+    } catch (e) {
+      console.error('[pp] enroll attempt', attempt, 'threw', String(e))
     }
-    return r.ok
-  } catch (e) { console.error('[pp] enroll threw', String(e)); return false }
+    if (attempt < MAX_ATTEMPTS) {
+      // Backoff: 800ms, 1600ms
+      await new Promise(res => setTimeout(res, 800 * attempt))
+    }
+  }
+  console.error('[pp] enroll GAVE UP after', MAX_ATTEMPTS, 'attempts — contact', contactUuid, 'workflow', workflowId)
+  return false
 }
 
 // Orchestrator — called once per brand-new lead from the email() handler.
@@ -849,9 +870,9 @@ export default {
     // every release so a stale deploy is immediately visible.
     if (req.method === 'GET' && url.pathname === '/version') {
       return new Response(JSON.stringify({
-        version: 'v4.21',
-        parser: '9am send jitter for TZ-deferred enrolls',
-        deployed_check: 'if you see v4.21 here, the deploy succeeded',
+        version: 'v4.22',
+        parser: 'enroll retries + jitter',
+        deployed_check: 'if you see v4.22 here, the deploy succeeded',
       }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
     }
     // Workflow-list proxy — lets the CRM Settings panel show a dropdown of the
@@ -1147,7 +1168,7 @@ export default {
       lead.agent_id = userId
       // Tag the source so we can tell worker-imported leads apart from
       // manual-paste imports. v4.14 stamps a build id so we can verify deploys.
-      lead.source = 'USHA Marketplace (worker v4.21)'
+      lead.source = 'USHA Marketplace (worker v4.22)'
       lead.stage = DEFAULT_STAGE
       lead.created_at = new Date().toISOString()
       lead.last_activity = lead.created_at

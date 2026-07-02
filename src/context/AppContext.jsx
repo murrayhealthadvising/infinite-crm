@@ -644,8 +644,30 @@ export function AppProvider({ children }) {
       setPitchQueue(map)
     } catch (e) { console.error('[pitchQueue] load threw:', e) }
   }
+  // Find the pending queue row for a lead by querying Supabase directly.
+  // Used as a fallback when the local pitchQueue map is stale (e.g. the
+  // countdown just popped up via realtime and the click handler was bound
+  // BEFORE the pitchQueue state settled). Without this, the check-mark used
+  // to silently no-op and require a full page refresh to work.
+  const findPendingQueueRow = async (leadId) => {
+    try {
+      const { data, error } = await supabase
+        .from('pitchprfct_queue')
+        .select('id, lead_id, enroll_at, status')
+        .eq('lead_id', leadId)
+        .eq('status', 'pending')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      if (error) { console.error('[pitchQueue] findPendingQueueRow error:', error); return null }
+      return data || null
+    } catch (e) { console.error('[pitchQueue] findPendingQueueRow threw:', e); return null }
+  }
   const cancelPitchQueue = async (leadId) => {
-    const row = pitchQueue[leadId]
+    // Try local state first; fall back to a Supabase lookup so the button
+    // always works even before the pitchQueue map catches up.
+    let row = pitchQueue[leadId]
+    if (!row) row = await findPendingQueueRow(leadId)
     if (!row) return { ok: false, error: 'Not queued' }
     setPitchQueue(prev => { const n = { ...prev }; delete n[leadId]; return n })  // optimistic
     try {
@@ -660,10 +682,13 @@ export function AppProvider({ children }) {
   // Bypass the wait — enroll now. Pulls the row's enroll_at to "now" so the
   // next cron pass (within ~1 min) picks it up. Status stays 'pending'.
   const bypassPitchQueue = async (leadId) => {
-    const row = pitchQueue[leadId]
+    // Same fallback as cancelPitchQueue — check Supabase directly if the
+    // local pitchQueue map doesn't have this lead yet.
+    let row = pitchQueue[leadId]
+    if (!row) row = await findPendingQueueRow(leadId)
     if (!row) return { ok: false, error: 'Not queued' }
     const nowIso = new Date().toISOString()
-    setPitchQueue(prev => prev[leadId] ? { ...prev, [leadId]: { ...prev[leadId], enroll_at: nowIso } } : prev)  // optimistic
+    setPitchQueue(prev => prev[leadId] ? { ...prev, [leadId]: { ...prev[leadId], enroll_at: nowIso } } : { ...prev, [leadId]: { id: row.id, enroll_at: nowIso } })  // optimistic — insert if missing
     try {
       const { error } = await supabase
         .from('pitchprfct_queue')
