@@ -139,13 +139,30 @@ function RefreshButton() {
 
 // DOB — bolder / brighter text so it stands out on the card, plus an "Age N"
 // hover tooltip rendered through a portal so it never gets clipped by card
-// overflow (which was the first-row cutoff bug).
+// overflow (which was the first-row cutoff bug). Formatted as MM/DD/YYYY
+// regardless of how the raw value was stored (ISO / slashes / etc).
 function DOBField({ dob }) {
   const [tipPos, setTipPos] = useState(null)  // { top, left } | null
   const anchorRef = useRef(null)
   if (!dob) return <span className="text-xs text-[#5A6A7A]">—</span>
   let age = null
-  try { age = differenceInYears(new Date(), parseISO(dob)) } catch {}
+  let displayDob = dob
+  try {
+    const parsed = parseISO(dob)
+    if (!isNaN(parsed.getTime())) {
+      age = differenceInYears(new Date(), parsed)
+      displayDob = format(parsed, 'MM/dd/yyyy')
+    }
+  } catch {}
+  // Fallback for values parseISO can't handle (e.g. already MM/DD/YYYY or
+  // M/D/YY) — best-effort reformat via Date parsing.
+  if (displayDob === dob) {
+    const d = new Date(dob)
+    if (!isNaN(d.getTime())) {
+      try { displayDob = format(d, 'MM/dd/yyyy') } catch {}
+      if (age == null) try { age = differenceInYears(new Date(), d) } catch {}
+    }
+  }
 
   const show = () => {
     if (age == null || !anchorRef.current) return
@@ -164,7 +181,7 @@ function DOBField({ dob }) {
       <span ref={anchorRef}
         className="inline-flex items-center gap-1 cursor-default text-xs font-semibold text-[#00E5C3] tracking-tight"
         onMouseEnter={show} onMouseLeave={hide}>
-        {dob}
+        {displayDob}
       </span>
       {tipPos && age !== null && createPortal(
         <span
