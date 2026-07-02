@@ -1,4 +1,4 @@
-// Infinite CRM Email Worker — v4.20 (/pp-conversation: merge results + 1 retry — first-try reliable)
+// Infinite CRM Email Worker — v4.21 (9am send jitter 0-5min so overnight-deferred leads don't fire all at once)
 //
 // Deploys via the Cloudflare Workers REST API with NO bundler — every helper
 // inlined here. Handles two paths:
@@ -444,10 +444,15 @@ function tzOffsetMinutes(tz, when) {
   } catch { return 0 }
 }
 // Returns the ISO timestamp the queue row should fire at: `base` if the lead's
-// local clock is in the 9am-9pm window, otherwise the next 9am in their TZ.
+// local clock is in the 9am-9pm window, otherwise the next 9am in their TZ
+// with a small random 0-5 minute jitter so a batch of overnight leads doesn't
+// all fire at exactly 9:00:00 (looks bot-like on the recipient side).
 // Falls back to `base` for leads whose TZ we can't infer (no state/zip).
 const PP_WINDOW_START_HOUR = 9   // 9 AM
 const PP_WINDOW_END_HOUR   = 21  // 9 PM (exclusive)
+// After-9am jitter: adds 0-5 minutes so deferred enrollments land at ~9:02 or
+// ~9:05 etc. instead of a synchronized 9:00:00 avalanche.
+const PP_JITTER_MAX_MIN    = 5
 function nextOkEnrollIso(lead, base = new Date()) {
   const tz = timezoneForLead(lead)
   if (!tz) return base.toISOString()
@@ -467,7 +472,11 @@ function nextOkEnrollIso(lead, base = new Date()) {
   // If we're past 9pm, target tomorrow's 9am. Otherwise (before 9am) target today's.
   const dayShift = localHour >= PP_WINDOW_END_HOUR ? 1 : 0
   const targetLocalMs = Date.UTC(y, m, day + dayShift, PP_WINDOW_START_HOUR, 0, 0)
-  const targetUtcMs = targetLocalMs - offsetMin * 60000
+  // Add 0-5 minutes of random jitter so multiple leads deferred overnight
+  // don't all fire on the exact same 9:00:00 tick — spreads them across
+  // ~9:00–9:05 which reads more natural to the recipient.
+  const jitterMs = Math.floor(Math.random() * (PP_JITTER_MAX_MIN * 60 * 1000))
+  const targetUtcMs = (targetLocalMs - offsetMin * 60000) + jitterMs
   return new Date(targetUtcMs).toISOString()
 }
 
@@ -840,9 +849,9 @@ export default {
     // every release so a stale deploy is immediately visible.
     if (req.method === 'GET' && url.pathname === '/version') {
       return new Response(JSON.stringify({
-        version: 'v4.20',
-        parser: '/pp-conversation merge + retry',
-        deployed_check: 'if you see v4.20 here, the deploy succeeded',
+        version: 'v4.21',
+        parser: '9am send jitter for TZ-deferred enrolls',
+        deployed_check: 'if you see v4.21 here, the deploy succeeded',
       }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
     }
     // Workflow-list proxy — lets the CRM Settings panel show a dropdown of the
@@ -1138,7 +1147,7 @@ export default {
       lead.agent_id = userId
       // Tag the source so we can tell worker-imported leads apart from
       // manual-paste imports. v4.14 stamps a build id so we can verify deploys.
-      lead.source = 'USHA Marketplace (worker v4.20)'
+      lead.source = 'USHA Marketplace (worker v4.21)'
       lead.stage = DEFAULT_STAGE
       lead.created_at = new Date().toISOString()
       lead.last_activity = lead.created_at
