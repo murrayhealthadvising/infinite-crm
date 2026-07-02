@@ -137,23 +137,52 @@ function RefreshButton() {
   )
 }
 
-// DOB tooltip
+// DOB — bolder / brighter text so it stands out on the card, plus an "Age N"
+// hover tooltip rendered through a portal so it never gets clipped by card
+// overflow (which was the first-row cutoff bug).
 function DOBField({ dob }) {
-  const [show, setShow] = useState(false)
+  const [tipPos, setTipPos] = useState(null)  // { top, left } | null
+  const anchorRef = useRef(null)
   if (!dob) return <span className="text-xs text-[#5A6A7A]">—</span>
   let age = null
   try { age = differenceInYears(new Date(), parseISO(dob)) } catch {}
+
+  const show = () => {
+    if (age == null || !anchorRef.current) return
+    const rect = anchorRef.current.getBoundingClientRect()
+    // Try to place above the anchor. If no room, flip below.
+    const preferAbove = rect.top > 34
+    setTipPos({
+      top: preferAbove ? rect.top - 30 : rect.bottom + 6,
+      left: rect.left + rect.width / 2,
+    })
+  }
+  const hide = () => setTipPos(null)
+
   return (
-    <span className="relative inline-flex items-center gap-1 cursor-default"
-      onMouseEnter={() => setShow(true)} onMouseLeave={() => setShow(false)}>
-      <span className="text-xs text-[#8899AA]">{dob}</span>
-      {show && age !== null && (
-        <span className="absolute bottom-full left-0 mb-1 px-2 py-1 rounded-lg text-xs font-mono whitespace-nowrap z-50 pointer-events-none"
-          style={{ background: '#1A2130', color: '#00E5C3', border: '1px solid #00E5C340' }}>
+    <>
+      <span ref={anchorRef}
+        className="inline-flex items-center gap-1 cursor-default text-xs font-semibold text-[#00E5C3] tracking-tight"
+        onMouseEnter={show} onMouseLeave={hide}>
+        {dob}
+      </span>
+      {tipPos && age !== null && createPortal(
+        <span
+          className="fixed px-2 py-1 rounded-lg text-xs font-mono whitespace-nowrap pointer-events-none shadow-lg"
+          style={{
+            top: tipPos.top,
+            left: tipPos.left,
+            transform: 'translate(-50%, 0)',
+            zIndex: 9999,
+            background: '#0E1318',
+            color: '#00E5C3',
+            border: '1px solid #00E5C340',
+          }}>
           Age {age}
-        </span>
+        </span>,
+        document.body
       )}
-    </span>
+    </>
   )
 }
 
