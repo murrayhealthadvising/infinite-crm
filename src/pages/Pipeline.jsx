@@ -105,7 +105,7 @@ function PipelineCard({ lead, onDragStart, onDragEnd, onClick }) {
               {inStage}
             </span>
           )}
-          {/* Enroll button moved to the bottom action row alongside Email/Book */}
+          <ManualEnrollButton lead={lead} compact />
         </div>
       </div>
 
@@ -171,16 +171,6 @@ function PipelineCard({ lead, onDragStart, onDragEnd, onClick }) {
             {time}
           </span>
         )}
-      </div>
-
-      {/* Quick actions — Email, Book (Calendly), Enroll (PitchPrfct workflow).
-          Each button owns its own click (stopPropagation) so tapping them
-          doesn't open the drawer. Kept small so the card stays compact. */}
-      <div className="mt-2 pt-2 border-t border-[#1A2130] flex items-center justify-center gap-1.5 flex-wrap"
-        onClick={(e) => e.stopPropagation()}>
-        <EmailButton lead={lead} variant="compact" />
-        <CalendlyButton lead={lead} />
-        <ManualEnrollButton lead={lead} compact />
       </div>
     </div>
   )

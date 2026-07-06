@@ -12,6 +12,9 @@ const DRAWER_ACT_COLORS = { call: '#10B981', text: '#3B82F6', email: '#8B5CF6', 
 import clsx from 'clsx'
 import { displayPhone } from '../lib/phone'
 import { localTimeFor, localHourFor, tzLabelFor } from '../lib/timezone'
+import EmailButton from './EmailButton'
+import CalendlyButton from './CalendlyButton'
+import ManualEnrollButton from './ManualEnrollButton'
 import { googleCalendarUrl, createCalendarEvent, isGcalConnected } from '../lib/gcal'
 
 // Slim notes editor — auto-grows to content within [6 lines, 15 lines], grows
@@ -327,6 +330,16 @@ export default function LeadDrawer({ leadId, onClose, bucket = [], onNavigate })
           {/* ALL info — every standard field + custom_fields, inline editable */}
           <AllInfoPanel lead={lead} leadId={leadId} updateLead={updateLead}
             showEmpty={showEmpty} setShowEmpty={setShowEmpty} />
+
+          {/* Quick actions at the very bottom — Email, Book (Calendly), Enroll
+              (PitchPrfct workflow). Sits below the info panel so the agent
+              can take action after reviewing the lead's details. */}
+          <div className="rounded-xl border border-[#1A2130] p-3 flex items-center justify-around gap-2 flex-wrap"
+            style={{ background: '#0E1318' }}>
+            <EmailButton lead={lead} variant="pill" size="md" />
+            <CalendlyButton lead={lead} />
+            <ManualEnrollButton lead={lead} />
+          </div>
         </div>
       </aside>
     </>

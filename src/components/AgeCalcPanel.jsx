@@ -98,28 +98,34 @@ function AgeToDobTab() {
 
       {valid && (
         <div className="space-y-2">
-          <p className="text-[10px] font-mono uppercase tracking-wider text-[#5A6A7A]">Born in</p>
-          <button onClick={() => copy(String(latestYear))}
+          <p className="text-[10px] font-mono uppercase tracking-wider text-[#5A6A7A]">
+            Suggested DOB — click to copy
+          </p>
+          <button onClick={() => copy(`01/01/${latestYear}`)}
             className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg border border-[#00E5C340] hover:bg-[#00E5C310] transition-colors"
-            title="Click to copy">
-            <span className="text-sm text-white">
-              <span className="font-mono text-[#00E5C3] text-lg font-bold">{latestYear}</span>
-              <span className="text-[#8899AA] ml-2 text-xs">if birthday already this year</span>
+            title="Click to copy 01/01/YYYY">
+            <span className="text-sm">
+              <span className="font-mono text-[#00E5C3] text-lg font-bold">01/01/{latestYear}</span>
+              <span className="text-[#8899AA] ml-2 text-xs block sm:inline">
+                birthday already this year
+              </span>
             </span>
-            <span className="text-[9px] text-[#5A6A7A]">copy</span>
+            <span className="text-[9px] text-[#5A6A7A] flex-shrink-0 ml-2">copy</span>
           </button>
-          <button onClick={() => copy(String(earliestYear))}
+          <button onClick={() => copy(`01/01/${earliestYear}`)}
             className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg border border-[#1A2130] hover:bg-[#0E1318] transition-colors"
-            title="Click to copy">
-            <span className="text-sm text-white">
-              <span className="font-mono text-[#8899AA] text-lg">{earliestYear}</span>
-              <span className="text-[#5A6A7A] ml-2 text-xs">if birthday hasn't happened yet</span>
+            title="Click to copy 01/01/YYYY">
+            <span className="text-sm">
+              <span className="font-mono text-[#8899AA] text-lg">01/01/{earliestYear}</span>
+              <span className="text-[#5A6A7A] ml-2 text-xs block sm:inline">
+                birthday hasn't happened yet
+              </span>
             </span>
-            <span className="text-[9px] text-[#5A6A7A]">copy</span>
+            <span className="text-[9px] text-[#5A6A7A] flex-shrink-0 ml-2">copy</span>
           </button>
           <p className="text-[10px] text-[#3A4A5A] leading-relaxed">
-            Ask their birth month + day to pick the exact year. Once you have it,
-            the full DOB fills into the DOB field on the lead as <code className="text-[#8899AA]">MM/DD/YYYY</code>.
+            01/01 is a placeholder — replace the MM/DD with their real birth date once they tell you.
+            The DOB field on the lead uses <code className="text-[#8899AA]">MM/DD/YYYY</code>.
           </p>
         </div>
       )}
