@@ -280,9 +280,11 @@ export default function LeadDrawer({ leadId, onClose, bucket = [], onNavigate })
         {/* Body */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
 
-          {/* Notes (top — main surface for working a lead) */}
+          {/* Notes (top — main surface for working a lead). Stacked vertically
+              when splitNotes is enabled so the drawer stays readable at
+              typical widths — was side-by-side which cramped both fields. */}
           {splitNotes ? (
-            <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-2">
               <NotesField value={lead.notes} onSave={(v) => updateLead(leadId, { notes: v })} />
               <NotesField value={lead.notes_b} onSave={(v) => updateLead(leadId, { notes_b: v })} placeholder="Notes (B)…" />
             </div>

@@ -8,6 +8,7 @@ export default function SoldDetailsModal() {
 
   const [what, setWhat] = useState('')
   const [price, setPrice] = useState('')
+  const [effective, setEffective] = useState('')  // YYYY-MM-DD from <input type=date>
   const [saving, setSaving] = useState(false)
   const ref = useRef(null)
 
@@ -15,6 +16,10 @@ export default function SoldDetailsModal() {
     if (lead) {
       setWhat(lead.plan_choice || '')
       setPrice(lead.premium ? String(lead.premium) : '')
+      // effective_date is stored as YYYY-MM-DD or an ISO string — take the
+      // date portion so the <input type=date> can display it.
+      const eff = lead.effective_date || ''
+      setEffective(eff ? String(eff).slice(0, 10) : '')
     }
   }, [pendingSoldLeadId])
 
@@ -33,13 +38,14 @@ export default function SoldDetailsModal() {
 
   const save = async () => {
     setSaving(true)
-    if (typeof updateLead === 'function' && (what.trim() || price.trim())) {
+    if (typeof updateLead === 'function' && (what.trim() || price.trim() || effective)) {
       try {
         const patch = {}
         if (what.trim()) patch.plan_choice = what.trim()
         // Premium = monthly price. Strip non-digits; null clears.
         const cleanPrice = price.replace(/[^\d.]/g, '')
         if (cleanPrice) patch.premium = Math.round(parseFloat(cleanPrice)) || null
+        if (effective) patch.effective_date = effective  // YYYY-MM-DD
         await updateLead(lead.id, patch)
       } catch (e) { console.error('save sold details:', e) }
     }
@@ -93,6 +99,16 @@ export default function SoldDetailsModal() {
                 className="flex-1 px-3 py-2.5 rounded-lg text-base font-bold text-white border border-[#1A2130] bg-[#080B0F] outline-none focus:border-[#00E5C3]" />
               <span className="text-xs text-[#5A6A7A] font-mono">/mo</span>
             </div>
+          </div>
+
+          <div>
+            <label className="block text-[10px] font-mono uppercase tracking-wider text-[#8899AA] mb-1.5">Effective date</label>
+            <input
+              type="date"
+              value={effective}
+              onChange={e => setEffective(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) save() }}
+              className="w-full px-3 py-2.5 rounded-lg text-sm text-white border border-[#1A2130] bg-[#080B0F] outline-none focus:border-[#00E5C3]" />
           </div>
 
           <div className="flex gap-2">

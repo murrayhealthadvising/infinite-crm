@@ -1,11 +1,13 @@
 import { NavLink, useLocation } from 'react-router-dom'
+import { useState } from 'react'
 import {
   LayoutDashboard, Shield, Users, GitBranch, Sun,
   Mail, Calculator, Settings, ChevronLeft,
-  ChevronRight, Menu, LogOut,
+  ChevronRight, Menu, LogOut, Cake,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import ActionsCounter from './ActionsCounter'
+import AgeCalcPanel from './AgeCalcPanel'
 import clsx from 'clsx'
 
 const NAV_FULL = [
@@ -32,9 +34,11 @@ const NAV_RUNNER = [
 export default function Sidebar() {
   const { sidebarOpen, setSidebarOpen, stats, user, profile, signOut, isRunner } = useApp()
   const NAV = isRunner ? NAV_RUNNER : NAV_FULL
+  const [calcOpen, setCalcOpen] = useState(false)
 
   return (
     <>
+      <AgeCalcPanel open={calcOpen} onClose={() => setCalcOpen(false)} />
       {sidebarOpen && (
         <div className="fixed inset-0 z-20 bg-black/50 lg:hidden" onClick={() => setSidebarOpen(false)} />
       )}
@@ -73,6 +77,19 @@ export default function Sidebar() {
             </>
           )}
         </nav>
+        {/* Quick tools row — age→DOB + calculator side panel. Open state
+            keeps between visits. When sidebar is collapsed, still shown as
+            an icon so the tool is always one click away. */}
+        <div className={`border-t border-[#1A2130] ${sidebarOpen ? 'px-2 py-2' : 'py-2 flex justify-center'}`}>
+          <button onClick={() => setCalcOpen(true)}
+            title="Age → DOB + Calculator (also available with keyboard shortcuts)"
+            className={`flex items-center gap-2 text-[#8899AA] hover:text-[#00E5C3] transition-colors ${
+              sidebarOpen ? 'w-full px-2 py-1.5 rounded-lg hover:bg-[#1A2130]' : 'p-1.5 rounded-lg hover:bg-[#1A2130]'
+            }`}>
+            <Cake size={15} className="flex-shrink-0" />
+            {sidebarOpen && <span className="text-xs font-medium">Age / Calc</span>}
+          </button>
+        </div>
         {/* Per-agent daily actions tracker — visible when sidebar is open */}
         {sidebarOpen && <ActionsCounter />}
         {sidebarOpen ? (

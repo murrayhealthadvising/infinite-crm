@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useApp } from '../context/AppContext'
 import {
@@ -82,7 +82,22 @@ function buildStaleNudges(leads) {
 }
 
 export default function Today() {
-  const { reminders, leads, addReminder, completeReminder, uncompleteReminder, snoozeReminder, deleteReminder, tags, dialsToday } = useApp()
+  const { reminders, leads, addReminder, completeReminder, uncompleteReminder, snoozeReminder, deleteReminder, tags, dialsToday, addActivity } = useApp()
+  // Same log-a-dial pattern as every other page. Per-lead 2-min coalesce
+  // stored on a ref keyed by lead id so multiple Today Call buttons for
+  // different leads all track independently.
+  const dialLogRef = useRef({})
+  const logDialFor = (lead) => {
+    if (!lead?.id) return
+    const now = Date.now()
+    const last = dialLogRef.current[lead.id] || 0
+    if (now - last < 2 * 60 * 1000) return
+    dialLogRef.current[lead.id] = now
+    if (typeof addActivity === 'function') {
+      addActivity(lead.id, 'call', `Called ${lead.phone || ''}`.trim())
+        .catch(e => console.error('[Today] dial log failed', e))
+    }
+  }
   const navigate = useNavigate()
   const [showAdd, setShowAdd] = useState(false)
   const [showDone, setShowDone] = useState(false)
@@ -191,7 +206,7 @@ export default function Today() {
                       {leadName(lead)} <span className="text-[#5A6A7A]">— {n.note}</span>
                     </button>
                     {lead?.phone && (
-                      <a href={`tel:${lead.phone}`}
+                      <a href={`tel:${lead.phone}`} onClick={() => logDialFor(lead)}
                         className="px-2.5 py-1 rounded-[8px] text-xs font-semibold text-black flex-shrink-0"
                         style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
                         Call

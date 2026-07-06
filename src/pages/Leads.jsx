@@ -897,7 +897,19 @@ function RecentActionsList({ entries }) {
 }
 
 function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNoteBChange, onNavigate, onDelete, onPriceChange, onCampaignChange, onRunnerChange, onTagsChange, runnerSuggestions, tagSuggestions, canDelete = true }) {
-  const { tags, getTag, splitNotes, pipelineCardFields, recentActivitiesByLead } = useApp()
+  const { tags, getTag, splitNotes, pipelineCardFields, recentActivitiesByLead, addActivity } = useApp()
+  // Log a dial when the agent presses Call. Same 2-min per-card coalesce as
+  // Pipeline / LeadDetail so a quick double-tap doesn't inflate the counter.
+  const lastCallRef = useRef(0)
+  const logDial = () => {
+    const now = Date.now()
+    if (now - lastCallRef.current < 2 * 60 * 1000) return
+    lastCallRef.current = now
+    if (typeof addActivity === 'function') {
+      addActivity(lead.id, 'call', `Called ${displayPhone(lead.phone) || lead.phone || ''}`.trim())
+        .catch(e => console.error('[Leads] dial log failed', e))
+    }
+  }
   const showRunner = pipelineCardFields?.runner !== false
   const [copied, setCopied] = useState(false)
   const [nameCopied, setNameCopied] = useState(false)
@@ -998,7 +1010,7 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
 
         <div className="flex flex-col gap-2 pt-0.5" onClick={e => e.stopPropagation()}>
           {lead.phone && (
-            <a href={`tel:${lead.phone}`} onClick={e => e.stopPropagation()}
+            <a href={`tel:${lead.phone}`} onClick={(e) => { e.stopPropagation(); logDial() }}
               className="flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-[8px] text-xs font-semibold text-black transition-opacity hover:opacity-80"
               style={{ background: `linear-gradient(135deg, ${safeColor}, ${safeColor}AA)` }}>
               <Phone size={12} /> Call
