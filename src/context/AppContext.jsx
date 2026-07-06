@@ -811,7 +811,7 @@ export function AppProvider({ children }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.user?.id, profile?.role, profile?.lead_agent_id])
 
-  const addReminder = async ({ lead_id, kind, due_at, note }) => {
+  const addReminder = async ({ lead_id, kind, due_at, end_at, note }) => {
     const uid = (profile?.role === 'runner' && profile?.lead_agent_id) ? profile.lead_agent_id : session?.user?.id
     if (!uid) return null
     const row = {
@@ -819,6 +819,10 @@ export function AppProvider({ children }) {
       lead_id: lead_id || null,
       kind: kind || 'call',
       due_at: due_at || null,
+      // end_at is optional — used for multi-day / spanning appointments. Column
+      // added by MIGRATE_LEAD_REMINDERS_END_AT.sql (safe if it already exists).
+      // If your DB doesn't have the column yet, Supabase drops the extra key.
+      ...(end_at ? { end_at } : {}),
       note: note || null,
     }
     try {
@@ -826,6 +830,24 @@ export function AppProvider({ children }) {
       if (data) { setReminders(prev => [...prev, data].sort((a, b) => new Date(a.due_at || 0) - new Date(b.due_at || 0))); return data }
     } catch (e) { console.error('addReminder failed:', e) }
     return null
+  }
+
+  // Full update — used by the calendar drag-to-reschedule and by the reminder
+  // edit form. Accepts a partial patch and returns the updated row.
+  const updateReminder = async (id, patch) => {
+    if (!id || !patch) return null
+    // Optimistic update first
+    setReminders(prev => prev.map(r => r.id === id ? { ...r, ...patch } : r))
+    try {
+      const { data } = await supabase.from('lead_reminders').update(patch).eq('id', id).select().single()
+      if (data) setReminders(prev => prev.map(r => r.id === id ? data : r))
+      return data
+    } catch (e) {
+      console.error('updateReminder failed:', e)
+      // Roll back by re-fetching
+      try { refreshReminders() } catch {}
+      return null
+    }
   }
 
   const completeReminder = async (id) => {
@@ -904,7 +926,7 @@ export function AppProvider({ children }) {
       pitchprfctRules, savePitchprfctRules,
       pitchQueue, refreshPitchQueue, cancelPitchQueue, bypassPitchQueue,
       // reminders (Today page)
-      reminders, refreshReminders, addReminder, completeReminder, uncompleteReminder, snoozeReminder, deleteReminder,
+      reminders, refreshReminders, addReminder, updateReminder, completeReminder, uncompleteReminder, snoozeReminder, deleteReminder,
       // commission entries (Calculator weekly tracker)
       commissionEntries, refreshCommissionEntries, addCommissionEntry, deleteCommissionEntry,
     }}>
