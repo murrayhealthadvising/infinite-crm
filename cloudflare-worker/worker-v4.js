@@ -1,4 +1,4 @@
-// Infinite CRM Email Worker — v4.22 (enroll retries 3x with backoff — fixes contact-created-but-not-texted bug)
+// Infinite CRM Email Worker — v4.23 (verified enroll log — only writes activity if PP actually sent; response tag column)
 //
 // Deploys via the Cloudflare Workers REST API with NO bundler — every helper
 // inlined here. Handles two paths:
@@ -677,9 +677,100 @@ async function enrollInWorkflow(apiKey, workflowId, contactUuid) {
   return false
 }
 
+// Fetch recent PitchPrfct messages for a contact. Reuses the same URL-attempt
+// fan-out the /pp-conversation HTTP endpoint uses so both stay in sync when
+// PP's undocumented messages endpoint moves. Returns [] on total failure.
+async function fetchPPMessages(apiKey, contactUuid, limit = 20) {
+  const attempts = [
+    `${PITCHPRFCT_API}/contacts/${encodeURIComponent(contactUuid)}/messages?take=${limit}`,
+    `${PITCHPRFCT_API}/messages?contactUuid=${encodeURIComponent(contactUuid)}&take=${limit}`,
+    `${PITCHPRFCT_API}/messages?contact_id=${encodeURIComponent(contactUuid)}&take=${limit}`,
+    `${PITCHPRFCT_API}/conversations/${encodeURIComponent(contactUuid)}?take=${limit}`,
+  ]
+  const settled = await Promise.allSettled(attempts.map(async (u) => {
+    const r = await fetch(u, { headers: { 'x-api-key': apiKey } })
+    return { url: u, ok: r.ok, text: await r.text() }
+  }))
+  const ok200s = settled.filter(s => s.status === 'fulfilled' && s.value.ok).map(s => s.value)
+  const merged = []
+  const seen = new Set()
+  const extractList = (rawText) => {
+    let raw
+    try { raw = JSON.parse(rawText) } catch { return [] }
+    const list = (raw && raw.data && (raw.data.rows || raw.data.messages || raw.data)) ||
+                 (raw && raw.messages) ||
+                 (Array.isArray(raw) ? raw : [])
+    return Array.isArray(list) ? list : []
+  }
+  for (const r of ok200s) {
+    for (const m of extractList(r.text)) {
+      const id = m.id || m.uuid || null
+      const body = (m.body || m.message || m.text || m.content || '').trim()
+      const sentAt = m.sentAt || m.createdAt || m.created_at || m.date || null
+      const key = id ? `id:${id}` : `c:${sentAt || ''}|${body}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      merged.push({
+        id, body,
+        direction: (m.direction || m.type ||
+          (m.outbound || m.isOutbound || m.fromMe ? 'outbound' : 'inbound')).toString().toLowerCase(),
+        sent_at: sentAt,
+      })
+    }
+  }
+  return merged
+}
+
+// Update the leads row's pp_response_status + checked timestamp.
+async function patchLeadPPStatus(env, leadId, status, checkedAt) {
+  try {
+    const patch = { pp_response_status: status }
+    if (checkedAt) patch.pp_response_checked_at = checkedAt
+    const r = await fetch(`${env.SUPABASE_URL}/rest/v1/leads?id=eq.${encodeURIComponent(leadId)}`, {
+      method: 'PATCH',
+      headers: {
+        apikey: env.SUPABASE_SERVICE_KEY,
+        authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}`,
+        'content-type': 'application/json',
+        prefer: 'return=minimal',
+      },
+      body: JSON.stringify(patch),
+    })
+    if (!r.ok) console.error('[pp] patchLeadPPStatus failed', r.status)
+  } catch (e) { console.error('[pp] patchLeadPPStatus threw', String(e)) }
+}
+
+// Verify + log — background task fired after a successful enroll. Waits 15
+// seconds for PP to send the first workflow message, then confirms via the
+// messages endpoint. Only logs the "Enrolled in workflow" activity if a real
+// outbound message was actually sent in that window. Prevents misleading
+// success entries when PP accepts the enroll but never actually texts.
+async function verifyAndLogEnroll(env, userId, leadId, apiKey, contactUuid, workflowName) {
+  try {
+    await new Promise(res => setTimeout(res, 15000))
+    const messages = await fetchPPMessages(apiKey, contactUuid, 10)
+    const cutoff = Date.now() - 90 * 1000  // messages in the last 90 sec
+    const hasFreshOutbound = messages.some(m => {
+      if (!/out/.test(m.direction)) return false
+      if (!m.sent_at) return false
+      const t = new Date(m.sent_at).getTime()
+      return isFinite(t) && t >= cutoff
+    })
+    if (hasFreshOutbound) {
+      await logEnrollActivity(env, userId, leadId, workflowName || '(unnamed)')
+      console.log('[pp] verified — logged enroll for lead', leadId)
+    } else {
+      console.warn('[pp] enroll acknowledged but no outbound message within 15s for lead', leadId, '— skipping log')
+    }
+  } catch (e) { console.error('[pp] verifyAndLogEnroll threw', String(e)) }
+}
+
 // Orchestrator — called once per brand-new lead from the email() handler.
 // Best-effort: any failure here is logged but never breaks lead insertion.
-async function enrollLeadInPitch(env, userId, lead) {
+// Pass `ctx` (from the fetch/email/scheduled handler) so the post-enroll
+// verification can run in the background via ctx.waitUntil() without blocking
+// the response.
+async function enrollLeadInPitch(env, userId, lead, ctx) {
   const tag = lead.id ? `lead=${lead.id}` : 'lead=?'
   const normPhone = coercePhoneE164(lead.phone)
   if (!normPhone) {
@@ -698,10 +789,55 @@ async function enrollLeadInPitch(env, userId, lead) {
   if (!contactUuid) { console.error('[pp]', tag, 'no contact UUID — cannot enroll'); return false }
   const ok = await enrollInWorkflow(apiKey, pick.id, contactUuid)
   if (ok && lead.id) {
-    // Fire-and-forget: agent sees the confirmation in the lead's Action Log
-    await logEnrollActivity(env, userId, lead.id, pick.name || pick.id)
+    // Immediately mark as awaiting a reply so the card shows the tag.
+    await patchLeadPPStatus(env, lead.id, 'awaiting', new Date().toISOString())
+    // Verify a real outbound message actually went out before writing the
+    // action-log entry. Runs in the background if ctx.waitUntil is available.
+    const task = verifyAndLogEnroll(env, userId, lead.id, apiKey, contactUuid, pick.name || pick.id)
+    if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(task)
+    else await task
   }
   return ok
+}
+
+// Cron scan: for every lead in 'awaiting' status, check PP conversation for
+// any inbound message. If found, flip status to 'responded'. Bounded to 20
+// leads per cron tick so we don't blow the PP rate limit even if a bunch land
+// at once. Only re-checks a lead every ~15 minutes.
+async function scanForResponses(env) {
+  const now = new Date()
+  const cutoff = new Date(now.getTime() - 15 * 60 * 1000).toISOString()
+  try {
+    const url = `${env.SUPABASE_URL}/rest/v1/leads?pp_response_status=eq.awaiting&or=(pp_response_checked_at.is.null,pp_response_checked_at.lte.${encodeURIComponent(cutoff)})&select=id,phone,user_id&limit=20`
+    const r = await fetch(url, {
+      headers: { apikey: env.SUPABASE_SERVICE_KEY, authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}` },
+    })
+    if (!r.ok) { console.error('[pp-scan] fetch awaiting HTTP', r.status); return }
+    const leads = await r.json()
+    if (!Array.isArray(leads) || leads.length === 0) return
+    console.log('[pp-scan] checking', leads.length, 'awaiting leads')
+    for (const lead of leads) {
+      try {
+        const apiKey = await getAgentApiKey(env, lead.user_id)
+        if (!apiKey) continue
+        const normPhone = coercePhoneE164(lead.phone)
+        if (!normPhone) continue
+        const contactUuid = await findContactByPhone(apiKey, normPhone)
+        if (!contactUuid) {
+          await patchLeadPPStatus(env, lead.id, 'awaiting', now.toISOString())  // just bump checked
+          continue
+        }
+        const messages = await fetchPPMessages(apiKey, contactUuid, 20)
+        const hasInbound = messages.some(m => /in/.test(m.direction) && !/out/.test(m.direction))
+        if (hasInbound) {
+          await patchLeadPPStatus(env, lead.id, 'responded', now.toISOString())
+          console.log('[pp-scan] lead', lead.id, 'RESPONDED')
+        } else {
+          await patchLeadPPStatus(env, lead.id, 'awaiting', now.toISOString())
+        }
+      } catch (e) { console.error('[pp-scan] error on lead', lead.id, String(e)) }
+    }
+  } catch (e) { console.error('[pp-scan] threw', String(e)) }
 }
 
 // ─── PitchPrfct delay queue ────────────────────────────────────────────────
@@ -735,7 +871,7 @@ async function insertQueueRow(env, row) {
 
 // Decide: queue the lead for later, or enroll it now. delayMinutes <= 0 (or no
 // lead id) means enroll immediately.
-async function schedulePitchForLead(env, userId, lead) {
+async function schedulePitchForLead(env, userId, lead, ctx) {
   const tag = lead.id ? `lead=${lead.id}` : 'lead=?'
   if (!coercePhoneE164(lead.phone)) {
     console.log('[pp]', tag, 'no usable phone — skipping', { raw: lead.phone }); return
@@ -754,7 +890,7 @@ async function schedulePitchForLead(env, userId, lead) {
     if (deferred) {
       console.warn('[pp]', tag, 'no lead.id, cannot queue TZ-deferred enroll — firing immediately')
     }
-    await enrollLeadInPitch(env, userId, lead)
+    await enrollLeadInPitch(env, userId, lead, ctx)
     return
   }
   // Queue if there's any wait (delay OR TZ defer). Otherwise enroll inline.
@@ -768,7 +904,7 @@ async function schedulePitchForLead(env, userId, lead) {
     }
     console.error('[pp]', tag, 'queue insert failed — enrolling inline instead')
   }
-  await enrollLeadInPitch(env, userId, lead)
+  await enrollLeadInPitch(env, userId, lead, ctx)
 }
 
 // ── Cron side ──────────────────────────────────────────────────────────────
@@ -805,7 +941,7 @@ async function setQueueStatus(env, id, status) {
 // Enroll one queued lead whose timer has elapsed, then mark the row done.
 // Re-checks the 9am-9pm TZ window at fire time; if still outside, defers the
 // row to the next OK time instead of enrolling and waking the lead at 3am.
-async function processQueueRow(env, row) {
+async function processQueueRow(env, row, ctx) {
   const lead = await getLeadById(env, row.lead_id)
   if (!lead) {
     console.error('[cron] lead not found for queue row', row.id, row.lead_id)
@@ -822,7 +958,7 @@ async function processQueueRow(env, row) {
     return
   }
   console.log('[cron] enrolling queued lead', row.lead_id, 'attempt', (row.attempts || 0) + 1)
-  const ok = await enrollLeadInPitch(env, row.user_id, lead)
+  const ok = await enrollLeadInPitch(env, row.user_id, lead, ctx)
   if (ok) {
     await setQueueStatus(env, row.id, 'done')
     return
@@ -842,7 +978,7 @@ async function processQueueRow(env, row) {
 
 // Process every pending queue row whose enroll_at has passed. Rows the agent
 // cancelled (status 'cancelled') are never selected here, so they never enroll.
-async function runQueue(env) {
+async function runQueue(env, ctx) {
   try {
     const now = new Date().toISOString()
     const r = await fetch(
@@ -853,13 +989,13 @@ async function runQueue(env) {
     const rows = await r.json()
     const due = Array.isArray(rows) ? rows : []
     console.log('[cron] due queue rows:', due.length)
-    for (const row of due) await processQueueRow(env, row)
+    for (const row of due) await processQueueRow(env, row, ctx)
   } catch (e) { console.error('[cron] runQueue threw', String(e)) }
 }
 
 // ─── Worker entry points ───────────────────────────────────────────────────
 export default {
-  async fetch(req, env) {
+  async fetch(req, env, ctx) {
     const url = new URL(req.url)
     // CORS preflight
     if (req.method === 'OPTIONS') {
@@ -870,9 +1006,9 @@ export default {
     // every release so a stale deploy is immediately visible.
     if (req.method === 'GET' && url.pathname === '/version') {
       return new Response(JSON.stringify({
-        version: 'v4.22',
-        parser: 'enroll retries + jitter',
-        deployed_check: 'if you see v4.22 here, the deploy succeeded',
+        version: 'v4.23',
+        parser: 'verified enroll log + pp_response_status',
+        deployed_check: 'if you see v4.23 here, the deploy succeeded',
       }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
     }
     // Workflow-list proxy — lets the CRM Settings panel show a dropdown of the
@@ -1080,9 +1216,16 @@ export default {
           status: 502, headers: { 'content-type': 'application/json', ...CORS },
         })
       }
-      // Log a confirmation row so the agent sees this enrollment in the lead's
-      // Action Log too — same pattern as auto-enroll, just labeled "Manually".
-      await logEnrollActivity(env, agentId, leadId, workflowName ? `Manually → ${workflowName}` : 'Manual enroll')
+      // Immediately mark as awaiting so the card shows the tag right away.
+      await patchLeadPPStatus(env, leadId, 'awaiting', new Date().toISOString())
+      // Verify + log in the background so the HTTP response returns fast.
+      // The action-log entry only appears if PP actually sent a message.
+      const verifyTask = verifyAndLogEnroll(
+        env, agentId, leadId, apiKey, contactUuid,
+        workflowName ? `Manually → ${workflowName}` : 'Manual enroll'
+      )
+      if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(verifyTask)
+      else verifyTask.catch(() => {})
       return new Response(JSON.stringify({ ok: true, contact_uuid: contactUuid, workflow_id: workflowId }), {
         status: 200, headers: { 'content-type': 'application/json', ...CORS },
       })
@@ -1134,7 +1277,7 @@ export default {
     })
   },
 
-  async email(message, env) {
+  async email(message, env, ctx) {
     const recipient = message.to || ''
     console.log('[email] received', { recipient, from: message.from, subject: message.headers?.get?.('subject') || '' })
     try {
@@ -1168,7 +1311,7 @@ export default {
       lead.agent_id = userId
       // Tag the source so we can tell worker-imported leads apart from
       // manual-paste imports. v4.14 stamps a build id so we can verify deploys.
-      lead.source = 'USHA Marketplace (worker v4.22)'
+      lead.source = 'USHA Marketplace (worker v4.23)'
       lead.stage = DEFAULT_STAGE
       lead.created_at = new Date().toISOString()
       lead.last_activity = lead.created_at
@@ -1181,7 +1324,7 @@ export default {
         // Settings it's queued (a countdown the agent can cancel); with no delay
         // it enrolls immediately. Duplicates fall through and are NOT re-enrolled.
         const insertedId = parseFirstId(result.body)
-        await schedulePitchForLead(env, userId, { ...lead, id: insertedId })
+        await schedulePitchForLead(env, userId, { ...lead, id: insertedId }, ctx)
       } else if (isDuplicate(result) && lead.phone) {
         // USHA forwarded the same lead twice (e.g. via Gmail filter AND directly
         // to murray-leads@). Bump last_activity on the existing row instead of
@@ -1215,6 +1358,10 @@ export default {
   // Cloudflare dashboard. Without a delay configured, nothing is ever queued
   // and this simply finds no rows.
   async scheduled(event, env, ctx) {
-    await runQueue(env)
+    await runQueue(env, ctx)
+    // Also scan for lead responses on each cron tick — bounded to 20 leads
+    // per run so we never blow PP's rate limit. Only re-checks any given lead
+    // every 15 minutes to avoid pointless churn.
+    await scanForResponses(env)
   },
 }

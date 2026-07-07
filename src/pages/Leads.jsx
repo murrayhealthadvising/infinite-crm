@@ -896,6 +896,32 @@ function RecentActionsList({ entries }) {
   )
 }
 
+// Small pill showing PitchPrfct response status. Renders nothing for leads
+// that were never PP-enrolled (status is null / 'unknown'). Green "Responded"
+// if the lead has replied; amber "Awaiting" if enrolled but silent so far.
+function PPResponsePill({ status }) {
+  if (!status || status === 'unknown') return null
+  if (status === 'responded') {
+    return (
+      <span className="inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded"
+        style={{ background: '#10B98115', color: '#10B981', border: '1px solid #10B98140' }}
+        title="This lead replied to your PitchPrfct text">
+        ✓ Responded
+      </span>
+    )
+  }
+  if (status === 'awaiting') {
+    return (
+      <span className="inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded"
+        style={{ background: '#8899AA15', color: '#8899AA', border: '1px solid #8899AA40' }}
+        title="Enrolled in PitchPrfct workflow, no reply yet">
+        · No reply
+      </span>
+    )
+  }
+  return null
+}
+
 function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNoteBChange, onNavigate, onDelete, onPriceChange, onCampaignChange, onRunnerChange, onTagsChange, runnerSuggestions, tagSuggestions, canDelete = true }) {
   const { tags, getTag, splitNotes, pipelineCardFields, recentActivitiesByLead, addActivity } = useApp()
   // Log a dial when the agent presses Call. Same 2-min per-card coalesce as
@@ -993,6 +1019,7 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
           <SoldBadge lead={lead} />
           <div className="flex items-center gap-1.5 mt-1 flex-wrap">
             <PitchCountdown leadId={lead.id} />
+            <PPResponsePill status={lead.pp_response_status} />
             <span className="text-xs text-[#5A6A7A]">{[lead.state, lead.zip].filter(Boolean).join(' ')}</span>
             <LocalTime lead={lead} />
             <CampaignPill value={lead.campaign || lead.source} color={safeColor} onSave={(v) => onCampaignChange(lead.id, v)} />

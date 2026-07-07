@@ -110,7 +110,23 @@ function PipelineCard({ lead, onDragStart, onDragEnd, onClick }) {
       </div>
 
       <SoldBadge lead={lead} />
-      <div className="mb-2 empty:hidden"><PitchCountdown leadId={lead.id} /></div>
+      <div className="mb-2 flex items-center gap-1.5 flex-wrap empty:hidden">
+        <PitchCountdown leadId={lead.id} />
+        {lead.pp_response_status === 'responded' && (
+          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded"
+            style={{ background: '#10B98115', color: '#10B981', border: '1px solid #10B98140' }}
+            title="This lead replied to your PitchPrfct text">
+            ✓ Responded
+          </span>
+        )}
+        {lead.pp_response_status === 'awaiting' && (
+          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded"
+            style={{ background: '#8899AA15', color: '#8899AA', border: '1px solid #8899AA40' }}
+            title="Enrolled but no reply yet">
+            · No reply
+          </span>
+        )}
+      </div>
 
       {fields.email && lead.email && (
         <p className="text-[11px] text-[#5A6A7A] truncate mb-1.5">{lead.email}</p>
