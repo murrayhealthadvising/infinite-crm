@@ -728,12 +728,72 @@ function WeekCalendar({ anchor, reminders, gcalEvents = [], leadById, onSlotClic
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Side rail — same as before but broken out
+// Side rail — overdue + stale leads. Can be collapsed to a thin strip so the
+// calendar gets the full width when the agent wants more room. Collapsed state
+// persists in localStorage so the preference sticks across page loads.
 // ─────────────────────────────────────────────────────────────────────────────
 function SideRail({ overdue, staleNudges, leadById, onNavigate, onCompleteReminder, onSnoozeReminder, onDeleteReminder, logDialFor }) {
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return localStorage.getItem('today:railCollapsed') === '1' } catch { return false }
+  })
+  const toggle = () => {
+    setCollapsed(v => {
+      const next = !v
+      try { localStorage.setItem('today:railCollapsed', next ? '1' : '0') } catch {}
+      return next
+    })
+  }
+
+  // Collapsed state — thin strip with just an expand button and count dots.
+  // Keeps counts visible so the agent knows what's waiting even when hidden.
+  if (collapsed) {
+    return (
+      <aside className="w-8 flex-shrink-0 border-l border-[#1A2130] flex flex-col items-center py-3 gap-3"
+        style={{ background: '#0A0E14' }}>
+        <button onClick={toggle}
+          title="Expand overdue / stale leads panel"
+          className="p-1.5 rounded-md text-[#5A6A7A] hover:text-white hover:bg-[#1A2130] transition-colors">
+          <ChevronLeft size={14} />
+        </button>
+        <div className="w-px flex-1 bg-[#1A2130]" />
+        {overdue.length > 0 && (
+          <button onClick={toggle}
+            title={`${overdue.length} overdue — click to expand`}
+            className="flex flex-col items-center gap-0.5 hover:scale-110 transition-transform">
+            <AlertTriangle size={12} className="text-[#EF4444]" />
+            <span className="text-[9px] font-mono font-bold text-[#EF4444]">{overdue.length}</span>
+          </button>
+        )}
+        {staleNudges.length > 0 && (
+          <button onClick={toggle}
+            title={`${staleNudges.length} stale leads — click to expand`}
+            className="flex flex-col items-center gap-0.5 hover:scale-110 transition-transform">
+            <Clock size={12} className="text-[#A78BFA]" />
+            <span className="text-[9px] font-mono font-bold text-[#A78BFA]">{staleNudges.length}</span>
+          </button>
+        )}
+        {overdue.length === 0 && staleNudges.length === 0 && (
+          <div title="Nothing overdue" className="p-0.5">
+            <Check size={12} className="text-[#10B981]" />
+          </div>
+        )}
+      </aside>
+    )
+  }
+
   return (
     <aside className="w-80 flex-shrink-0 border-l border-[#1A2130] overflow-y-auto" style={{ background: '#0A0E14' }}>
       <div className="p-3 space-y-4">
+        {/* Collapse handle — top-right so the agent can shrink the rail
+            without hunting for the button. Mirrors the collapsed-state expand
+            button (ChevronRight → hide, ChevronLeft → show). */}
+        <div className="flex items-center justify-end -mb-2">
+          <button onClick={toggle}
+            title="Minimize panel to give the calendar more room"
+            className="p-1 rounded-md text-[#5A6A7A] hover:text-white hover:bg-[#1A2130] transition-colors">
+            <ChevronRight size={13} />
+          </button>
+        </div>
         <section>
           <div className="flex items-center gap-2 mb-2">
             <AlertTriangle size={12} className="text-[#EF4444]" />
