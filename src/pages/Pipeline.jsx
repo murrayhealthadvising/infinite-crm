@@ -98,6 +98,22 @@ function PipelineCard({ lead, onDragStart, onDragEnd, onClick }) {
           <p className="text-sm font-medium text-white group-hover:text-[#00E5C3] transition-colors truncate">{leadName(lead)}</p>
         </div>
         <div className="flex items-center gap-1.5 flex-shrink-0">
+          {/* Response status pill — moved up here from the info row so it
+              doesn't crowd the state/zip/campaign line with the countdown. */}
+          {lead.pp_response_status === 'responded' && (
+            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded"
+              style={{ background: '#10B98115', color: '#10B981', border: '1px solid #10B98140' }}
+              title="This lead replied to your PitchPrfct text">
+              ✓ Responded
+            </span>
+          )}
+          {lead.pp_response_status === 'awaiting' && (
+            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded"
+              style={{ background: '#8899AA15', color: '#8899AA', border: '1px solid #8899AA40' }}
+              title="Enrolled but no reply yet">
+              · No reply
+            </span>
+          )}
           {fields.time_in_stage !== false && inStage && (
             <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-[4px]"
               style={{ background: sColor + '15', color: sColor, border: `1px solid ${sColor}40` }}
@@ -112,20 +128,6 @@ function PipelineCard({ lead, onDragStart, onDragEnd, onClick }) {
       <SoldBadge lead={lead} />
       <div className="mb-2 flex items-center gap-1.5 flex-wrap empty:hidden">
         <PitchCountdown leadId={lead.id} />
-        {lead.pp_response_status === 'responded' && (
-          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded"
-            style={{ background: '#10B98115', color: '#10B981', border: '1px solid #10B98140' }}
-            title="This lead replied to your PitchPrfct text">
-            ✓ Responded
-          </span>
-        )}
-        {lead.pp_response_status === 'awaiting' && (
-          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded"
-            style={{ background: '#8899AA15', color: '#8899AA', border: '1px solid #8899AA40' }}
-            title="Enrolled but no reply yet">
-            · No reply
-          </span>
-        )}
       </div>
 
       {fields.email && lead.email && (

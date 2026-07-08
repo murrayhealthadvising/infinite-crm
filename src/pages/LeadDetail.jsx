@@ -88,6 +88,14 @@ function EditableField({ label, value, icon: Icon, onSave, type = 'text', option
   const [editing, setEditing] = useState(false)
   const [val, setVal] = useState(value || '')
 
+  // Re-sync when the parent hands us a new value — critical when the parent
+  // is LeadDetail and the user hits ←/→ to walk between leads. Without this
+  // the same component instance keeps the previous lead's local `val` and
+  // renders wrong details on the new lead. Matches CustomFieldRow behavior.
+  // We only re-sync when NOT editing so we don't blow away in-progress typing
+  // if the underlying lead updates from a realtime event mid-edit.
+  useEffect(() => { if (!editing) setVal(value || '') }, [value, editing])
+
   const save = () => { onSave(val); setEditing(false) }
   const cancel = () => { setVal(value || ''); setEditing(false) }
 
@@ -175,10 +183,20 @@ function leadStageLabel(lead) {
 
 function AIAssistant({ lead }) {
   const [prompt, setPrompt] = useState('')
-  const [messages, setMessages] = useState([
-    { role: 'assistant', content: `I'm looking at ${leadFullName(lead)} — ${leadStageLabel(lead)} lead from ${lead?.state || 'unknown'}. ${lead?.notes ? `Notes: "${lead.notes}". ` : ''}How can I help you follow up?` }
-  ])
+  const buildIntro = (l) => ({ role: 'assistant', content: `I'm looking at ${leadFullName(l)} — ${leadStageLabel(l)} lead from ${l?.state || 'unknown'}. ${l?.notes ? `Notes: "${l.notes}". ` : ''}How can I help you follow up?` })
+  const [messages, setMessages] = useState([buildIntro(lead)])
   const [loading, setLoading] = useState(false)
+
+  // When the parent navigates to a different lead (←/→ or clicking another
+  // card), wipe the previous conversation so the assistant doesn't answer
+  // for the wrong contact. Keyed on lead.id so realtime updates to fields on
+  // the SAME lead don't wipe an in-progress chat.
+  useEffect(() => {
+    setMessages([buildIntro(lead)])
+    setPrompt('')
+    setLoading(false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lead?.id])
 
   const send = async () => {
     if (!prompt.trim() || loading) return
@@ -248,6 +266,10 @@ function ActionLogPanel({ activities, leadId, addActivity, deleteActivity, setLe
   const [text, setText] = useState('')
   const [kind, setKind] = useState('note')
   const list = (activities || []).slice(0, 40)
+
+  // Reset input + selected kind when the parent switches leads — otherwise a
+  // half-typed note from lead A would appear pre-filled on lead B's log.
+  useEffect(() => { setText(''); setKind('note') }, [leadId])
 
   const add = async () => {
     if (!text.trim()) return
@@ -365,6 +387,14 @@ export default function LeadDetail() {
       // Wipe immediately so the previous lead's activities never bleed into
       // this lead's view while the fetch is in flight.
       setLeadActivities([])
+      // Also clear any transient parent-owned UI state that would otherwise
+      // carry over from the previous lead: modal open flags, the stage-move
+      // dropdown, and the per-lead call-throttle ref. Without these, hitting
+      // ←/→ with a modal open showed the modal aimed at the wrong contact.
+      setShowRemindMe(false)
+      setShowCompose(false)
+      setEditStage(false)
+      lastCallRef.current = 0
       let cancelled = false
       try {
         // force: true → bypass cache so we always see activities from teammates

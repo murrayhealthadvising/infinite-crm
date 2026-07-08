@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
-import { Calendar, ExternalLink, Settings as Cog } from 'lucide-react'
+import { createPortal } from 'react-dom'
+import { Calendar, ExternalLink, Settings as Cog, Copy, Check, X } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 
 // Per-agent Calendly links stored in localStorage. Shape:
@@ -74,9 +75,117 @@ function loadCalendlyWidget() {
   return calendlyLoadPromise
 }
 
+// Floating side widget shown alongside the Calendly popup. Calendly's overlay
+// doesn't reliably prefill the phone field (their form asks for it inside the
+// modal after the time is picked), so agents keep having to bounce back to the
+// CRM to grab digits. This panel pins the key lead fields to the top-right at
+// higher z-index than Calendly's overlay so you can click-to-copy without
+// juggling windows. Auto-dismisses when the Calendly overlay is removed.
+function CalendlyCopyPanel({ lead, onClose }) {
+  const [copied, setCopied] = useState('')
+
+  // Poll for Calendly overlay removal — when the user closes the popup we
+  // hide this widget too. Calendly injects `.calendly-overlay` into <body>.
+  useEffect(() => {
+    const iv = setInterval(() => {
+      if (!document.querySelector('.calendly-overlay')) onClose()
+    }, 500)
+    return () => clearInterval(iv)
+  }, [onClose])
+
+  const name = [lead?.first_name, lead?.last_name].filter(Boolean).join(' ').trim() || lead?.name || ''
+  // Phone: normalize to digits-only for one variant, keep pretty for display.
+  const phoneRaw = String(lead?.phone || '').trim()
+  const phoneDigits = phoneRaw.replace(/\D/g, '')
+  const phonePretty = phoneDigits.length === 10
+    ? `(${phoneDigits.slice(0,3)}) ${phoneDigits.slice(3,6)}-${phoneDigits.slice(6)}`
+    : (phoneRaw || '')
+
+  const copy = async (label, value) => {
+    if (!value) return
+    try {
+      await navigator.clipboard.writeText(value)
+      setCopied(label)
+      setTimeout(() => setCopied(c => (c === label ? '' : c)), 1200)
+    } catch {}
+  }
+
+  const rows = [
+    { label: 'Name',  value: name },
+    { label: 'Email', value: lead?.email || '' },
+    { label: 'Phone', value: phonePretty, altValue: phoneDigits && phoneDigits.length === 10 ? phoneDigits : '' },
+    { label: 'State', value: lead?.state || '' },
+    { label: 'Zip',   value: lead?.zip || '' },
+    { label: 'DOB',   value: lead?.dob ? formatDOB(lead.dob) : '' },
+  ].filter(r => r.value)
+
+  return createPortal(
+    <div
+      // Sit above Calendly's overlay (theirs is ~9999). Fixed to viewport so
+      // it doesn't shift when Calendly locks body scroll.
+      style={{ position: 'fixed', top: 24, right: 24, zIndex: 10001, width: 260 }}
+      className="rounded-xl border border-[#1A2130] shadow-2xl overflow-hidden"
+    >
+      <div style={{ background: '#0E1318' }}>
+        <div className="flex items-center justify-between px-3 py-2 border-b border-[#1A2130]" style={{ background: '#111820' }}>
+          <div>
+            <p className="text-[10px] font-mono uppercase tracking-wider text-[#00E5C3]">Lead info</p>
+            <p className="text-[10px] text-[#3A4A5A] mt-0.5">Click to copy</p>
+          </div>
+          <button onClick={onClose}
+            className="p-1 rounded hover:bg-[#1A2130] text-[#5A6A7A] hover:text-white transition-colors"
+            title="Hide"
+          >
+            <X size={12} />
+          </button>
+        </div>
+        <div className="p-2 space-y-1">
+          {rows.map(r => (
+            <div key={r.label} className="flex items-stretch gap-1">
+              <button
+                onClick={() => copy(r.label, r.value)}
+                className="flex-1 flex items-center justify-between gap-2 px-2 py-1.5 rounded-md hover:bg-[#1A2130] transition-colors text-left"
+                title={`Copy ${r.label.toLowerCase()}`}
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="text-[9px] uppercase tracking-wider text-[#5A6A7A] leading-none mb-0.5">{r.label}</p>
+                  <p className="text-xs text-white truncate">{r.value}</p>
+                </div>
+                {copied === r.label
+                  ? <Check size={12} className="text-[#00E5C3] flex-shrink-0" />
+                  : <Copy size={11} className="text-[#5A6A7A] flex-shrink-0" />
+                }
+              </button>
+              {r.altValue && r.altValue !== r.value && (
+                <button
+                  onClick={() => copy(r.label + ' digits', r.altValue)}
+                  className="px-2 rounded-md hover:bg-[#1A2130] transition-colors text-[9px] text-[#5A6A7A] hover:text-white"
+                  title="Copy as digits only (no formatting)"
+                >
+                  {copied === r.label + ' digits' ? <Check size={10} className="text-[#00E5C3]" /> : '#'}
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>,
+    document.body
+  )
+}
+
+function formatDOB(dob) {
+  if (!dob) return ''
+  // Handles YYYY-MM-DD (from date columns) — displayed as MM/DD/YYYY like the rest of the app.
+  const m = String(dob).match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (m) return `${m[2]}/${m[3]}/${m[1]}`
+  return String(dob)
+}
+
 export default function CalendlyButton({ lead }) {
   const { user } = useApp()
   const [open, setOpen] = useState(false)
+  const [copyPanelOpen, setCopyPanelOpen] = useState(false)
   const [links, setLinks] = useState(() => loadCalendlyLinks(user?.id))
   const ref = useRef(null)
 
@@ -114,6 +223,9 @@ export default function CalendlyButton({ lead }) {
           prefill: { name, email },         // prefill the booking form
           utm: { utmSource: 'Infinite CRM' },
         })
+        // Show the side copy widget — Calendly's form doesn't reliably prefill
+        // phone, so agents keep needing quick access to lead info while booking.
+        setCopyPanelOpen(true)
         return
       }
     } catch (e) {
@@ -124,24 +236,35 @@ export default function CalendlyButton({ lead }) {
     if (fallback) window.open(fallback, '_blank', 'noopener,noreferrer')
   }
 
+  // Copy widget is rendered via portal so it appears alongside any variant.
+  const copyPanel = copyPanelOpen ? (
+    <CalendlyCopyPanel lead={lead} onClose={() => setCopyPanelOpen(false)} />
+  ) : null
+
   // Zero-config state — button still visible, just sends to Settings
   if (!hasLinks) {
     return (
-      <a href="/settings#calendly" title="Set up your Calendly links in Settings"
-        className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-dashed border-[#1A2130] text-sm text-[#5A6A7A] hover:text-white hover:border-[#2A3547]">
-        <Calendar size={13} /> Book
-      </a>
+      <>
+        <a href="/settings#calendly" title="Set up your Calendly links in Settings"
+          className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-dashed border-[#1A2130] text-sm text-[#5A6A7A] hover:text-white hover:border-[#2A3547]">
+          <Calendar size={13} /> Book
+        </a>
+        {copyPanel}
+      </>
     )
   }
 
   // One link — click goes straight to it (no dropdown)
   if (onlyOne) {
     return (
-      <button onClick={() => openLink(all[0].url)}
-        title={`Book ${all[0].label} (prefilled with this lead's name/email)`}
-        className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-[#1A2130] text-sm text-[#8899AA] hover:text-white hover:border-[#2A3547]">
-        <Calendar size={13} /> Book
-      </button>
+      <>
+        <button onClick={() => openLink(all[0].url)}
+          title={`Book ${all[0].label} (prefilled with this lead's name/email)`}
+          className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-[#1A2130] text-sm text-[#8899AA] hover:text-white hover:border-[#2A3547]">
+          <Calendar size={13} /> Book
+        </button>
+        {copyPanel}
+      </>
     )
   }
 
@@ -172,6 +295,7 @@ export default function CalendlyButton({ lead }) {
           </div>
         </div>
       )}
+      {copyPanel}
     </div>
   )
 }

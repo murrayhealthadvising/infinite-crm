@@ -1019,7 +1019,6 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
           <SoldBadge lead={lead} />
           <div className="flex items-center gap-1.5 mt-1 flex-wrap">
             <PitchCountdown leadId={lead.id} />
-            <PPResponsePill status={lead.pp_response_status} />
             <span className="text-xs text-[#5A6A7A]">{[lead.state, lead.zip].filter(Boolean).join(' ')}</span>
             <LocalTime lead={lead} />
             <CampaignPill value={lead.campaign || lead.source} color={safeColor} onSave={(v) => onCampaignChange(lead.id, v)} />
@@ -1085,6 +1084,7 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
         <div className="space-y-1">
           <p className="text-[10px] text-[#3A4A5A] font-mono uppercase tracking-wider">Received</p>
           <p className="text-xs text-[#8899AA]">{safeFormat(lead.created_at, 'MM-dd-yyyy')}</p>
+          <p className="text-[10px] text-[#5A6A7A] font-mono">{safeFormat(lead.created_at, 'h:mm a')}</p>
           <div className="pt-1.5 mt-1.5 border-t border-[#1A2130]">
             <p className="text-[10px] text-[#3A4A5A] font-mono uppercase tracking-wider mb-1">Recent</p>
             <RecentActionsList entries={recentActivitiesByLead?.[lead.id]} />
@@ -1092,6 +1092,9 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
         </div>
 
         <div className="flex flex-col items-end gap-1.5 pt-0.5">
+          {/* Response status lives on the right rail so it doesn't crowd the
+              state/zip/campaign line under the name. */}
+          <PPResponsePill status={lead.pp_response_status} />
           {/* Quick-email button — small, top-right, opens the compose modal
               without leaving the Leads list. */}
           {lead.email && (

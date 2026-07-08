@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { MessageCircle, RefreshCw, Send, ArrowDown, AlertCircle } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { formatDistanceToNow, format } from 'date-fns'
@@ -25,6 +25,17 @@ export default function ConversationPanel({ lead }) {
 
   const agentId = lead?.user_id || lead?.agent_id || user?.id
   const phone = lead?.phone
+
+  // Reset the panel back to idle whenever the parent hands us a different
+  // lead — otherwise ←/→ nav in LeadDetail leaves the previous lead's
+  // messages on screen until the agent clicks Refresh, which is exactly
+  // the "wrong details on new contact" bug we're fixing.
+  useEffect(() => {
+    setState('idle')
+    setMessages([])
+    setError(null)
+    setNote(null)
+  }, [lead?.id])
 
   const fetchMessages = async () => {
     if (!agentId || !phone) {

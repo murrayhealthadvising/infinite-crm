@@ -57,18 +57,79 @@ const STATE_TZ = {
   WY: 'America/Denver',
 }
 
-// ZIP-prefix overrides for the most common multi-zone state edge cases.
-// (5-digit ZIP, we look at the first 3.)
+// ZIP-prefix overrides for multi-zone state edge cases. (5-digit ZIP, we look
+// at the first 3.) Sources: USPS ZIP-code zone assignments cross-referenced
+// with the IANA timezone database. Where a 3-digit prefix straddles a zone
+// boundary we pick the dominant zone for that prefix — the misses fall back
+// to state-level default, which is close enough for "is it OK to dial now."
+const ZIP3_TZ = {
+  // Florida panhandle Central (west of Apalachicola River)
+  '324': 'America/Chicago', // Panama City
+  '325': 'America/Chicago', // Pensacola / Milton
+
+  // Texas — El Paso & Hudspeth counties Mountain
+  '798': 'America/Denver', // El Paso
+  '799': 'America/Denver', // El Paso metro / Van Horn
+
+  // Oregon — Malheur County Mountain
+  '979': 'America/Denver', // Ontario, Vale, Nyssa
+
+  // Idaho northern panhandle (10 counties) Pacific
+  '832': 'America/Los_Angeles', // Sandpoint (Bonner)
+  '833': 'America/Los_Angeles', // Kellogg / Wallace (Shoshone)
+  '834': 'America/Los_Angeles', // Coeur d'Alene (Kootenai)
+  '835': 'America/Los_Angeles', // Lewiston (Nez Perce, part)
+  '838': 'America/Los_Angeles', // Moscow / Grangeville
+
+  // Tennessee eastern third Eastern
+  '373': 'America/New_York', // Chattanooga
+  '374': 'America/New_York', // Cleveland
+  '376': 'America/New_York', // Johnson City / Kingsport
+  '377': 'America/New_York', // Knoxville
+  '378': 'America/New_York', // Knoxville area
+  '379': 'America/New_York', // Knoxville area
+
+  // Kentucky western third Central
+  '420': 'America/Chicago', // Paducah
+  '421': 'America/Chicago', // Bowling Green area
+  '422': 'America/Chicago', // Bowling Green
+  '423': 'America/Chicago', // Owensboro
+  '424': 'America/Chicago', // Owensboro area
+
+  // Indiana SW & NW pockets Central (most of IN is Eastern)
+  '463': 'America/Chicago', // Gary / Hammond
+  '464': 'America/Chicago', // Gary metro
+  '476': 'America/Chicago', // Evansville
+  '477': 'America/Chicago', // Evansville metro
+
+  // Michigan — 4 western UP counties Central
+  '499': 'America/Chicago', // Iron Mountain / Ironwood
+
+  // Kansas — 4 far-western counties Mountain
+  '677': 'America/Denver', // Colby / Goodland
+  '679': 'America/Denver', // NW Kansas edge
+
+  // Nebraska western panhandle Mountain
+  '691': 'America/Denver', // Scottsbluff area
+  '693': 'America/Denver', // Valentine (Cherry county)
+  '695': 'America/Denver', // Alliance / Chadron
+
+  // North Dakota western Mountain
+  '586': 'America/Denver', // Dickinson
+  '588': 'America/Denver', // Williston
+
+  // South Dakota western half Mountain
+  '577': 'America/Denver', // Rapid City
+  '578': 'America/Denver', // Rapid City west
+
+  // Nevada — West Wendover Mountain (rest of NV is Pacific)
+  '898': 'America/Denver', // West Wendover (Elko county corner)
+}
+
 function zipOverride(zip) {
   if (!zip) return null
   const z = String(zip).trim().slice(0, 3)
-  if (z === '324' || z === '325') return 'America/Chicago'    // FL panhandle (Pensacola/Panama City)
-  if (z === '798' || z === '799') return 'America/Denver'      // TX El Paso
-  if (z === '979')                  return 'America/Denver'      // OR Malheur
-  if (z === '838')                  return 'America/Los_Angeles' // ID panhandle
-  if (z === '376' || z === '377' || z === '378') return 'America/New_York' // TN eastern (Knoxville/Chattanooga)
-  if (z === '420' || z === '421' || z === '422') return 'America/Chicago'  // KY western (Paducah/Bowling Green)
-  return null
+  return ZIP3_TZ[z] || null
 }
 
 export function timezoneFor(lead) {
