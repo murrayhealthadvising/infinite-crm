@@ -519,10 +519,11 @@ export default function LeadDetail() {
   return (
     <div className="flex flex-col h-full overflow-hidden animate-fade-in">
       {/* Header — back, name, prominent Call, stage move.
-          Uses flex-wrap so on narrow browser widths the action buttons drop
-          to a second row instead of overlapping the name/status cluster. */}
-      <div className="flex flex-wrap items-center justify-between px-4 md:px-6 py-3 md:py-4 border-b border-[#1A2130] flex-shrink-0 gap-3 md:gap-4">
-        <div className="flex items-center gap-2 md:gap-3 min-w-0 flex-1">
+          Below lg: stacks vertically (name row on top, actions on second row)
+          so nothing overlaps on skinny browser widths.
+          At lg+: single row, side by side. */}
+      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between px-4 md:px-6 py-3 md:py-4 border-b border-[#1A2130] flex-shrink-0 gap-3 lg:gap-4">
+        <div className="flex items-center gap-2 md:gap-3 min-w-0 w-full lg:w-auto lg:flex-1">
           <button onClick={goBack}
             className="p-1.5 rounded-lg text-[#5A6A7A] hover:text-white hover:bg-[#EF444415] hover:text-[#EF4444] transition-colors flex-shrink-0"
             title="Exit lead (back to Leads list)">
@@ -568,10 +569,10 @@ export default function LeadDetail() {
           </div>
         </div>
 
-        {/* Right cluster wraps too — at narrow widths action buttons flow onto
-            their own row rather than overlapping. justify-end keeps them
-            right-aligned when they DO fit inline. */}
-        <div className="flex items-center gap-2 flex-wrap justify-end">
+        {/* Right cluster — sits on its own row below lg, right-aligned at lg+.
+            flex-wrap lets any single row that IS wide enough for most but not
+            all buttons wrap gracefully. w-full below lg fills the row. */}
+        <div className="flex items-center gap-2 flex-wrap w-full lg:w-auto lg:justify-end">
           {lead.phone && (
             <a href={`tel:${lead.phone}`}
               onClick={logCall}
