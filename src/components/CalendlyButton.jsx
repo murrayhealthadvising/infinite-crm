@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { Calendar, ExternalLink, Settings as Cog, Copy, Check, X } from 'lucide-react'
 import { useApp } from '../context/AppContext'
+import { timezoneFor, tzLabelFor } from '../lib/timezone'
 
 // Per-agent Calendly links stored in localStorage. Shape:
 //   { default: { label, url }, extras: [{ label, url }] }
@@ -35,6 +36,23 @@ function withPrefill(url, lead) {
     const name = [lead?.first_name, lead?.last_name].filter(Boolean).join(' ').trim() || lead?.name || ''
     if (name) u.searchParams.set('name', name)
     if (lead?.email) u.searchParams.set('email', lead.email)
+    return withLeadTimezone(u.toString(), lead)
+  } catch { return url }
+}
+
+// Append `?timezone=<IANA>` so Calendly opens preselected to the LEAD's zone
+// instead of the agent's browser zone. Without this an agent in FL (Eastern)
+// booking William in TX (Central) sees Eastern times, which is confusing and
+// leads to appointments that make sense for the agent but not the prospect.
+// Calendly's URL parameter documentation lists `timezone` as an accepted
+// override — safe no-op if we don't know the lead's zone.
+function withLeadTimezone(url, lead) {
+  if (!url) return ''
+  const tz = timezoneFor(lead)
+  if (!tz) return url
+  try {
+    const u = new URL(url)
+    u.searchParams.set('timezone', tz)
     return u.toString()
   } catch { return url }
 }
@@ -139,6 +157,17 @@ function CalendlyCopyPanel({ lead, onClose }) {
             <X size={12} />
           </button>
         </div>
+        {/* Timezone strip — reassurance that Calendly is showing times in the
+            LEAD's zone, not the agent's browser zone. If Calendly's URL param
+            didn't take (older embed cache, etc.) agent knows to switch manually
+            using Calendly's built-in timezone dropdown. */}
+        {tzLabelFor(lead) && (
+          <div className="px-3 py-1.5 border-b border-[#1A2130] flex items-center gap-1.5" style={{ background: '#0A1015' }}>
+            <span className="text-[9px] uppercase tracking-wider text-[#5A6A7A]">Times in</span>
+            <span className="text-[10px] font-mono text-[#00E5C3]">{tzLabelFor(lead)}</span>
+            <span className="text-[9px] text-[#3A4A5A]">· lead's local zone</span>
+          </div>
+        )}
         <div className="p-2 space-y-1">
           {rows.map(r => (
             <div key={r.label} className="flex items-stretch gap-1">
@@ -217,9 +246,13 @@ export default function CalendlyButton({ lead }) {
     try {
       const Calendly = await loadCalendlyWidget()
       if (Calendly && typeof Calendly.initPopupWidget === 'function') {
+        // Bake the lead's timezone into the URL so Calendly's calendar opens
+        // in Central for a TX lead even when the agent's browser is Eastern.
+        // The `timezone=` URL param is passed through the popup verbatim.
+        const urlWithTz = withLeadTimezone(url, lead)
         // In-app modal overlay — booking happens without leaving the CRM
         Calendly.initPopupWidget({
-          url,                              // bare URL — prefill is passed separately
+          url: urlWithTz,                   // URL now carries ?timezone=IANA
           prefill: { name, email },         // prefill the booking form
           utm: { utmSource: 'Infinite CRM' },
         })

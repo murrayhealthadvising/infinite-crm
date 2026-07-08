@@ -518,9 +518,11 @@ export default function LeadDetail() {
 
   return (
     <div className="flex flex-col h-full overflow-hidden animate-fade-in">
-      {/* Header — back, name, prominent Call, stage move */}
-      <div className="flex items-center justify-between px-6 py-4 border-b border-[#1A2130] flex-shrink-0 gap-4">
-        <div className="flex items-center gap-3 min-w-0">
+      {/* Header — back, name, prominent Call, stage move.
+          Uses flex-wrap so on narrow browser widths the action buttons drop
+          to a second row instead of overlapping the name/status cluster. */}
+      <div className="flex flex-wrap items-center justify-between px-4 md:px-6 py-3 md:py-4 border-b border-[#1A2130] flex-shrink-0 gap-3 md:gap-4">
+        <div className="flex items-center gap-2 md:gap-3 min-w-0 flex-1">
           <button onClick={goBack}
             className="p-1.5 rounded-lg text-[#5A6A7A] hover:text-white hover:bg-[#EF444415] hover:text-[#EF4444] transition-colors flex-shrink-0"
             title="Exit lead (back to Leads list)">
@@ -566,13 +568,21 @@ export default function LeadDetail() {
           </div>
         </div>
 
-        <div className="flex items-center gap-2 flex-shrink-0">
+        {/* Right cluster wraps too — at narrow widths action buttons flow onto
+            their own row rather than overlapping. justify-end keeps them
+            right-aligned when they DO fit inline. */}
+        <div className="flex items-center gap-2 flex-wrap justify-end">
           {lead.phone && (
             <a href={`tel:${lead.phone}`}
               onClick={logCall}
-              className="flex items-center gap-2 px-4 py-2 rounded-[8px] text-sm font-semibold text-black transition-opacity hover:opacity-90"
+              title={`Call ${displayPhone(lead.phone)}`}
+              className="flex items-center gap-2 px-3 md:px-4 py-2 rounded-[8px] text-sm font-semibold text-black transition-opacity hover:opacity-90"
               style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
-              <PhoneCall size={14} /> Call {displayPhone(lead.phone)}
+              <PhoneCall size={14} />
+              {/* Number hidden below md so the button stays compact on skinny
+                  browser widths — hover title still shows the digits. */}
+              <span className="hidden md:inline">Call {displayPhone(lead.phone)}</span>
+              <span className="md:hidden">Call</span>
             </a>
           )}
           {lead.email && (
@@ -588,7 +598,7 @@ export default function LeadDetail() {
           <button onClick={() => setShowRemindMe(true)}
             className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-[#1A2130] text-sm text-[#8899AA] hover:text-white hover:border-[#2A3547]"
             title="Schedule a reminder for this lead">
-            <Calendar size={13} /> Remind me
+            <Calendar size={13} /> <span className="hidden md:inline">Remind me</span>
           </button>
           <div className="relative">
             <button onClick={() => setEditStage(!editStage)}
