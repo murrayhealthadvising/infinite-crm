@@ -3,8 +3,9 @@ import { useNavigate } from 'react-router-dom'
 import { useApp } from '../context/AppContext'
 import {
   Phone, PhoneCall, Calendar, CheckSquare, Plus, X, Check, Clock,
-  ChevronLeft, ChevronRight, Trash2, Sun, AlertTriangle,
+  ChevronLeft, ChevronRight, Trash2, Sun, AlertTriangle, ExternalLink,
 } from 'lucide-react'
+import { isGcalConnected, listGoogleEvents } from '../lib/gcal'
 import {
   format, formatDistanceToNow, isToday, isTomorrow, isPast, isSameDay,
   addDays, addHours, addMinutes, startOfWeek, endOfWeek, startOfMonth, endOfMonth,
@@ -113,6 +114,45 @@ export default function Today() {
   const [addSeed, setAddSeed] = useState(null)       // prefill data for the add/edit modal
   const [editing, setEditing] = useState(null)       // reminder being edited
 
+  // Google Calendar overlay — persist the toggle in localStorage so the
+  // preference sticks across page loads. Only meaningful if the user has
+  // connected their Google account in Settings.
+  const gcalConnected = isGcalConnected()
+  const [showGcal, setShowGcal] = useState(() => {
+    try { return localStorage.getItem('today:showGcal') === '1' } catch { return false }
+  })
+  const [gcalEvents, setGcalEvents] = useState([])
+  const [gcalLoading, setGcalLoading] = useState(false)
+  const [gcalError, setGcalError] = useState(null)
+
+  // Fetch GCal events when overlay is on and range changes. Range is the
+  // whole visible grid, not just the current month: month view shows leading/
+  // trailing week days from adjacent months, so we widen to cover those too.
+  useEffect(() => {
+    if (!showGcal || !gcalConnected) { setGcalEvents([]); return }
+    const timeMin = view === 'month'
+      ? startOfWeek(startOfMonth(anchor), { weekStartsOn: 0 })
+      : startOfWeek(anchor, { weekStartsOn: 0 })
+    const timeMax = view === 'month'
+      ? endOfWeek(endOfMonth(anchor), { weekStartsOn: 0 })
+      : endOfWeek(anchor, { weekStartsOn: 0 })
+    let cancelled = false
+    setGcalLoading(true); setGcalError(null)
+    listGoogleEvents({ timeMin, timeMax }).then(res => {
+      if (cancelled) return
+      if (res.ok) { setGcalEvents(res.events || []); setGcalError(null) }
+      else { setGcalEvents([]); setGcalError(res.error || 'Load failed') }
+      setGcalLoading(false)
+    })
+    return () => { cancelled = true }
+  }, [showGcal, gcalConnected, view, anchor])
+
+  const toggleGcal = () => {
+    const next = !showGcal
+    setShowGcal(next)
+    try { localStorage.setItem('today:showGcal', next ? '1' : '0') } catch {}
+  }
+
   const safeLeads = Array.isArray(leads) ? leads : []
   const leadById = useMemo(() => {
     const m = new Map()
@@ -208,6 +248,30 @@ export default function Today() {
               Week
             </button>
           </div>
+          {/* Google Calendar overlay toggle — only rendered when connected.
+              If not connected, the button becomes a link to Settings so the
+              agent knows where to hook it up. */}
+          {gcalConnected ? (
+            <button onClick={toggleGcal}
+              title={showGcal ? 'Hide Google Calendar events' : 'Overlay Google Calendar events on this view'}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs transition-colors ${
+                showGcal
+                  ? 'border-[#4285F4] text-white'
+                  : 'border-[#1A2130] text-[#8899AA] hover:text-white hover:border-[#2A3547]'
+              }`}
+              style={showGcal ? { background: '#4285F415' } : {}}
+            >
+              <Calendar size={12} style={{ color: showGcal ? '#4285F4' : undefined }} />
+              GCal {showGcal ? 'on' : 'off'}
+              {gcalLoading && <span className="text-[9px] text-[#5A6A7A]">…</span>}
+            </button>
+          ) : (
+            <a href="/settings#gcal"
+              title="Connect your Google Calendar in Settings to overlay events here"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-dashed border-[#1A2130] text-xs text-[#5A6A7A] hover:text-white hover:border-[#2A3547]">
+              <Calendar size={12} /> Connect GCal
+            </a>
+          )}
           {/* Nav */}
           <div className="flex items-center gap-0.5 border border-[#1A2130] rounded-lg">
             <button onClick={() => setAnchor(view === 'month' ? addDays(startOfMonth(anchor), -1) : addDays(anchor, -7))}
@@ -246,6 +310,7 @@ export default function Today() {
           <MonthCalendar
             anchor={anchor}
             reminders={activeReminders}
+            gcalEvents={gcalEvents}
             leadById={leadById}
             onSlotClick={(day) => seedFromSlot(day)}
             onReminderClick={editReminder}
@@ -257,6 +322,7 @@ export default function Today() {
           <WeekCalendar
             anchor={anchor}
             reminders={activeReminders}
+            gcalEvents={gcalEvents}
             leadById={leadById}
             onSlotClick={seedFromSlot}
             onReminderClick={editReminder}
@@ -305,7 +371,7 @@ export default function Today() {
 // pills; overflow gets a "+N more" line. Click empty area → add at 9 AM.
 // Drag a pill to another day → reschedule. Multi-day appointments span cells.
 // ─────────────────────────────────────────────────────────────────────────────
-function MonthCalendar({ anchor, reminders, leadById, onSlotClick, onReminderClick, onDropOnDay, onCompleteReminder, onDeleteReminder }) {
+function MonthCalendar({ anchor, reminders, gcalEvents = [], leadById, onSlotClick, onReminderClick, onDropOnDay, onCompleteReminder, onDeleteReminder }) {
   const monthStart = startOfMonth(anchor)
   const monthEnd   = endOfMonth(anchor)
   const gridStart  = startOfWeek(monthStart, { weekStartsOn: 0 })
@@ -341,6 +407,28 @@ function MonthCalendar({ anchor, reminders, leadById, onSlotClick, onReminderCli
     return m
   }, [reminders, days])
 
+  // Bucket Google Calendar events the same way. Kept separate so cell UI can
+  // render them with distinct styling (blue chip, "G" tag, external-link icon)
+  // and skip the drag handlers — gcal events are read-only in Infinite.
+  const gcalByDay = useMemo(() => {
+    const m = new Map(days.map(d => [d.toDateString(), []]))
+    for (const e of gcalEvents) {
+      const start = new Date(e.startAt)
+      const end   = new Date(e.endAt || e.startAt)
+      if (isNaN(start.getTime())) continue
+      const rangeStart = startOfDay(start)
+      const rangeEnd   = endOfDay(isNaN(end.getTime()) ? start : end)
+      for (const d of days) {
+        if (d >= rangeStart && d <= rangeEnd) {
+          const arr = m.get(d.toDateString())
+          if (arr) arr.push(e)
+        }
+      }
+    }
+    for (const arr of m.values()) arr.sort((a, b) => new Date(a.startAt || 0) - new Date(b.startAt || 0))
+    return m
+  }, [gcalEvents, days])
+
   return (
     <div className="flex-1 flex flex-col overflow-hidden" style={{ background: '#080B0F' }}>
       {/* Day-name header */}
@@ -360,9 +448,16 @@ function MonthCalendar({ anchor, reminders, leadById, onSlotClick, onReminderCli
         {days.map(day => {
           const key = day.toDateString()
           const items = remindersByDay.get(key) || []
+          const gEvents = gcalByDay.get(key) || []
           const inMonth = day.getMonth() === anchor.getMonth()
           const isNow = isSameDay(day, today)
           const dragOver = dragOverKey === key
+          // Cap total chips at 4; split budget favoring reminders since those
+          // are the primary CRM data. GCal events fill any remaining slots.
+          const maxChips = 4
+          const reminderSlots = Math.min(items.length, Math.max(2, maxChips - Math.min(gEvents.length, 2)))
+          const gcalSlots = Math.max(0, maxChips - reminderSlots)
+          const hiddenCount = Math.max(0, (items.length - reminderSlots) + (gEvents.length - Math.min(gEvents.length, gcalSlots)))
           return (
             <div key={key}
               onDragOver={(e) => { e.preventDefault(); if (dragOverKey !== key) setDragOverKey(key) }}
@@ -387,7 +482,7 @@ function MonthCalendar({ anchor, reminders, leadById, onSlotClick, onReminderCli
                 {isNow && <span className="text-[8px] font-mono uppercase text-[#00E5C3]">Today</span>}
               </div>
               <div className="flex-1 flex flex-col gap-0.5 overflow-hidden">
-                {items.slice(0, 4).map(r => {
+                {items.slice(0, reminderSlots).map(r => {
                   const lead = leadById.get(r.lead_id)
                   const meta = KIND_META[r.kind] || KIND_META.call
                   const overdue = r.due_at && isPast(new Date(r.due_at))
@@ -408,11 +503,32 @@ function MonthCalendar({ anchor, reminders, leadById, onSlotClick, onReminderCli
                     </div>
                   )
                 })}
-                {items.length > 4 && (
+                {/* Google Calendar chips — read-only, blue-tinted, open the
+                    event in Google Calendar on click. Distinct from CRM
+                    reminders by the "G" tag and left border color. */}
+                {gEvents.slice(0, gcalSlots).map(e => {
+                  const timeLabel = e.allDay ? '' : format(new Date(e.startAt), 'h:mma').toLowerCase()
+                  return (
+                    <a key={e.id}
+                      href={e.htmlLink || '#'} target="_blank" rel="noopener noreferrer"
+                      onClick={(ev) => ev.stopPropagation()}
+                      title={`${e.allDay ? 'All-day' : timeLabel} · ${e.summary}${e.location ? ' @ ' + e.location : ''} (Google Calendar)`}
+                      className="flex items-center gap-1 px-1 py-0.5 rounded text-[10px] truncate hover:brightness-125"
+                      style={{
+                        background: '#4285F420',
+                        borderLeft: '2px solid #4285F4',
+                      }}>
+                      <span className="text-[8px] font-mono flex-shrink-0 px-1 rounded" style={{ background: '#4285F430', color: '#8AB4F8' }}>G</span>
+                      {timeLabel && <span className="text-[9px] font-mono flex-shrink-0 text-[#8AB4F8]">{timeLabel}</span>}
+                      <span className="text-white truncate">{e.summary}</span>
+                    </a>
+                  )
+                })}
+                {hiddenCount > 0 && (
                   <button
                     onClick={(e) => { e.stopPropagation(); onSlotClick(day) }}
                     className="text-[9px] text-[#5A6A7A] hover:text-white text-left px-1">
-                    +{items.length - 4} more
+                    +{hiddenCount} more
                   </button>
                 )}
               </div>
@@ -427,7 +543,7 @@ function MonthCalendar({ anchor, reminders, leadById, onSlotClick, onReminderCli
 // ─────────────────────────────────────────────────────────────────────────────
 // Week view — kept from before, with drag-drop and now-line.
 // ─────────────────────────────────────────────────────────────────────────────
-function WeekCalendar({ anchor, reminders, leadById, onSlotClick, onReminderClick, onDropOnDay, onCompleteReminder, onDeleteReminder }) {
+function WeekCalendar({ anchor, reminders, gcalEvents = [], leadById, onSlotClick, onReminderClick, onDropOnDay, onCompleteReminder, onDeleteReminder }) {
   const weekStart = useMemo(() => startOfWeek(anchor, { weekStartsOn: 0 }), [anchor])
   const days = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)), [weekStart])
   const scrollRef = useRef(null)
@@ -448,6 +564,22 @@ function WeekCalendar({ anchor, reminders, leadById, onSlotClick, onReminderClic
     }
     return m
   }, [reminders, days])
+
+  // Google Calendar events bucketed by day. Timed events get a block on the
+  // hour timeline; all-day events show as a strip at the top of the column.
+  const gcalByDay = useMemo(() => {
+    const m = new Map(days.map(d => [d.toDateString(), { timed: [], allDay: [] }]))
+    for (const e of gcalEvents) {
+      const start = new Date(e.startAt)
+      if (isNaN(start.getTime())) continue
+      const key = startOfDay(start).toDateString()
+      const bucket = m.get(key)
+      if (!bucket) continue
+      if (e.allDay) bucket.allDay.push(e)
+      else bucket.timed.push(e)
+    }
+    return m
+  }, [gcalEvents, days])
 
   return (
     <div ref={scrollRef} className="flex-1 overflow-y-auto" style={{ background: '#080B0F' }}>
@@ -543,6 +675,42 @@ function WeekCalendar({ anchor, reminders, leadById, onSlotClick, onReminderClic
                       </button>
                     </div>
                   </div>
+                )
+              })}
+              {/* Google Calendar timed events — read-only blocks. Position
+                  using the same eventPosition helper so they align on the
+                  hour grid. Blue color matches Google's brand + differentiates
+                  from CRM reminders. Clicking opens the event in a new tab. */}
+              {(gcalByDay.get(key)?.timed || []).map(e => {
+                const start = new Date(e.startAt)
+                const end = e.endAt ? new Date(e.endAt) : new Date(start.getTime() + 30 * 60 * 1000)
+                if (isNaN(start.getTime())) return null
+                const dayStart = startOfDay(start)
+                const minsFromCalStart = differenceInMinutes(start, dayStart) - CAL_START_HOUR * 60
+                const durMin = Math.max(15, differenceInMinutes(end, start))
+                const top = (minsFromCalStart / 60) * CAL_HOUR_PX
+                const height = Math.max(20, (durMin / 60) * CAL_HOUR_PX - 2)
+                if (top < 0 || top >= CAL_HOURS * CAL_HOUR_PX) return null
+                return (
+                  <a key={e.id}
+                    href={e.htmlLink || '#'} target="_blank" rel="noopener noreferrer"
+                    onClick={(ev) => ev.stopPropagation()}
+                    className="absolute left-1 right-1 rounded-md border overflow-hidden text-left px-1.5 py-1 hover:brightness-125"
+                    style={{
+                      top, height,
+                      background: '#4285F420',
+                      borderColor: '#4285F460',
+                      borderLeft: '3px solid #4285F4',
+                    }}
+                    title={`${format(start, 'h:mm a')} · ${e.summary}${e.location ? ' @ ' + e.location : ''} (Google Calendar)`}>
+                    <div className="flex items-center gap-1 min-w-0">
+                      <span className="text-[8px] font-mono flex-shrink-0 px-1 rounded" style={{ background: '#4285F430', color: '#8AB4F8' }}>G</span>
+                      <span className="text-[10px] font-semibold truncate text-white">{e.summary}</span>
+                    </div>
+                    {height > 24 && e.location && (
+                      <p className="text-[9px] text-[#8AB4F8] truncate leading-tight">{e.location}</p>
+                    )}
+                  </a>
                 )
               })}
               {isNow && nowTop >= 0 && nowTop < CAL_HOURS * CAL_HOUR_PX && (

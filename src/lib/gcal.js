@@ -207,6 +207,72 @@ export async function createCalendarEvent({ title, startsAt, durationMinutes = 1
   }
 }
 
+// ── List events from the user's primary calendar ──────────────────────────
+// Used by the Today page to overlay real Google Calendar events on the
+// month/week grid so agents can see their existing commitments alongside
+// CRM reminders. Same OAuth scope we already have (calendar.events) allows
+// events.list on primary — no additional consent prompt needed.
+//
+// Returns { ok, events } where events is an array of:
+//   { id, summary, startAt, endAt, allDay, htmlLink, location }
+// Silently returns { ok: false, events: [] } if the user isn't connected
+// (caller can hide the toggle in that case).
+export async function listGoogleEvents({ timeMin, timeMax }) {
+  if (!timeMin || !timeMax) return { ok: false, events: [], error: 'timeMin and timeMax required' }
+
+  let token = readToken()
+  if (!token) token = await silentRefresh()
+  if (!token) return { ok: false, events: [], error: 'Not connected' }
+
+  const url = new URL('https://www.googleapis.com/calendar/v3/calendars/primary/events')
+  url.searchParams.set('timeMin', new Date(timeMin).toISOString())
+  url.searchParams.set('timeMax', new Date(timeMax).toISOString())
+  // singleEvents expands recurring events into instances so we can plot each
+  // occurrence separately. orderBy=startTime lets us render in chronological
+  // order without a client-side sort.
+  url.searchParams.set('singleEvents', 'true')
+  url.searchParams.set('orderBy', 'startTime')
+  url.searchParams.set('maxResults', '250')
+
+  const get = async (tok) => fetch(url.toString(), {
+    headers: { 'Authorization': `Bearer ${tok.access_token}` },
+  })
+
+  try {
+    let res = await get(token)
+    if (res.status === 401) {
+      const fresh = await silentRefresh()
+      if (fresh) res = await get(fresh)
+      if (res.status === 401) {
+        clearGcalToken()
+        return { ok: false, events: [], error: 'Connection expired' }
+      }
+    }
+    if (!res.ok) {
+      const txt = await res.text().catch(() => '')
+      return { ok: false, events: [], error: `Calendar API error (${res.status}): ${txt.slice(0, 120)}` }
+    }
+    const data = await res.json()
+    // Normalize into a shape Today.jsx can render without knowing about the
+    // Google event schema. All-day events use date; timed events use dateTime.
+    const events = (Array.isArray(data.items) ? data.items : []).map(e => {
+      const allDay = !!(e.start?.date && !e.start?.dateTime)
+      const startAt = e.start?.dateTime || e.start?.date || null
+      const endAt   = e.end?.dateTime   || e.end?.date   || null
+      return {
+        id: e.id,
+        summary: e.summary || '(no title)',
+        startAt, endAt, allDay,
+        htmlLink: e.htmlLink || '',
+        location: e.location || '',
+      }
+    }).filter(e => e.startAt)
+    return { ok: true, events }
+  } catch (e) {
+    return { ok: false, events: [], error: e?.message || 'Network error' }
+  }
+}
+
 // ── URL fallback (kept for offline / no-OAuth scenarios) ───────────────────
 function pad(n) { return String(n).padStart(2, '0') }
 function toGCalDate(d) {
