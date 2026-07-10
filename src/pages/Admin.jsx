@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useApp } from '../context/AppContext'
 import { supabase } from '../lib/supabase'
-import { Users, Mail, Shield, RefreshCw, Copy, Check, Edit2 } from 'lucide-react'
+import { Users, Mail, Shield, RefreshCw, Copy, Check, Edit2, Trash2 } from 'lucide-react'
 
 // Derive a routing local-part from a first name OR an email. Lowercase, strips
 // punctuation, kept short. "Doug" → "doug" · "Murray Health" → "murray".
@@ -73,6 +73,45 @@ export default function Admin() {
     setRunnerPickerFor(null)
     setTimeout(() => setMsg(null), 6000)
   }
+  // Full account deletion — calls the admin_delete_user RPC. Nukes leads,
+  // activities, reminders, tags, integrations, profile, and finally auth.users
+  // so they can't sign back in. Requires TWO confirms because there's no undo.
+  const deleteAccount = async (agent) => {
+    if (!agent?.user_id) return
+    const label = agent.full_name || agent.email
+    // First confirm — reality check
+    if (!confirm(
+      `Delete ${label}'s account?\n\n` +
+      `This will PERMANENTLY remove:\n` +
+      `• Their profile\n` +
+      `• All their leads, activities, and reminders\n` +
+      `• Their pipeline stages\n` +
+      `• Their PitchPrfct key, Gmail token, calendar tokens\n` +
+      `• Their auth account (they can't sign back in)\n\n` +
+      `There is no undo.`
+    )) return
+    // Second confirm — force typing the email to prevent mis-clicks
+    const typed = prompt(`Type ${agent.email} to confirm deletion:`)
+    if (!typed || typed.trim().toLowerCase() !== String(agent.email).toLowerCase()) {
+      setMsg({ type: 'info', text: 'Deletion cancelled (email did not match).' })
+      setTimeout(() => setMsg(null), 3500)
+      return
+    }
+    const { data, error } = await supabase.rpc('admin_delete_user', { target_user_id: agent.user_id })
+    if (error) {
+      setMsg({ type: 'error', text: `Delete failed: ${error.message}` })
+    } else {
+      const counts = data?.counts || {}
+      const summary = Object.entries(counts)
+        .filter(([, n]) => Number(n) > 0)
+        .map(([k, n]) => `${n} ${k.replace(/_/g, ' ')}`)
+        .join(', ') || 'account only'
+      setMsg({ type: 'success', text: `Deleted ${label} — cleaned up: ${summary}.` })
+      loadAgents()
+    }
+    setTimeout(() => setMsg(null), 8000)
+  }
+
   const changeLeadAgent = async (runnerAgent, newLeadAgentUserId) => {
     if (!newLeadAgentUserId) return
     const { error } = await supabase.from('profiles')
@@ -256,6 +295,17 @@ export default function Admin() {
                       <button onClick={() => updateRole(agent.user_id, 'agent')}
                         className="text-xs text-[#8899AA] hover:text-[#EF4444]">
                         Demote
+                      </button>
+                    )}
+                    {/* Delete account — hidden for self and bootstrap admin.
+                        Two confirms (dialog + email retype) before it fires.
+                        Wipes everything: profile, leads, activities, tokens. */}
+                    {agent.email !== 'murrayhealthadvising@gmail.com'
+                      && agent.user_id !== profile?.user_id && (
+                      <button onClick={() => deleteAccount(agent)}
+                        title="Delete this account and all their data"
+                        className="p-1 rounded text-[#5A6A7A] hover:text-[#EF4444] hover:bg-[#EF444415] transition-colors">
+                        <Trash2 size={13} />
                       </button>
                     )}
                   </div>
