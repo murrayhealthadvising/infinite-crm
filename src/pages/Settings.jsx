@@ -1386,6 +1386,182 @@ function IntegrationsPanel() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Infinite API Keys panel — per-user. Lets teammates mint API keys for
+// external automations (Kam, n8n, etc.). Keys are shown ONCE on creation;
+// only the SHA-256 hash lives in the DB. Revoke is instant.
+// ─────────────────────────────────────────────────────────────────────────────
+function ApiKeysPanel() {
+  const { user } = useApp()
+  const uid = user?.id
+  const [keys, setKeys] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [label, setLabel] = useState('')
+  const [creating, setCreating] = useState(false)
+  const [justCreated, setJustCreated] = useState(null)  // { key, label } — shown once
+  const [copied, setCopied] = useState(false)
+  const [msg, setMsg] = useState(null)
+
+  const load = async () => {
+    if (!uid) return
+    setLoading(true)
+    const { data } = await supabase.from('api_keys')
+      .select('id,label,key_prefix,scopes,created_at,last_used_at,revoked_at')
+      .eq('user_id', uid)
+      .is('revoked_at', null)
+      .order('created_at', { ascending: false })
+    setKeys(Array.isArray(data) ? data : [])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [uid])
+
+  // Generate a cryptographically random 40-char base62 key, prefixed 'ic_'
+  // ("infinite crm"). base62 keeps it URL-safe and easy to double-click select.
+  const generateKey = () => {
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
+    const bytes = crypto.getRandomValues(new Uint8Array(40))
+    let out = 'ic_'
+    for (const b of bytes) out += alphabet[b % alphabet.length]
+    return out
+  }
+  const sha256Hex = async (str) => {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str))
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('')
+  }
+
+  const create = async () => {
+    if (!uid) return
+    if (!label.trim()) { setMsg({ type: 'error', text: 'Give the key a label (e.g. "Kam", "n8n prod").' }); return }
+    setCreating(true); setMsg(null)
+    try {
+      const key = generateKey()
+      const hash = await sha256Hex(key)
+      const prefix = key.slice(0, 8)
+      const { data, error } = await supabase.from('api_keys').insert({
+        user_id: uid,
+        key_hash: hash,
+        key_prefix: prefix,
+        label: label.trim(),
+      }).select().maybeSingle()
+      if (error) throw error
+      setJustCreated({ key, label: label.trim() })
+      setLabel('')
+      setCopied(false)
+      load()
+    } catch (e) {
+      setMsg({ type: 'error', text: 'Could not create key: ' + (e.message || String(e)) })
+    }
+    setCreating(false)
+  }
+
+  const revoke = async (k) => {
+    if (!confirm(`Revoke "${k.label || k.key_prefix}"? Any external tool using this key will stop working immediately.`)) return
+    const { error } = await supabase.from('api_keys').update({ revoked_at: new Date().toISOString() }).eq('id', k.id)
+    if (error) setMsg({ type: 'error', text: 'Revoke failed: ' + error.message })
+    else { setMsg({ type: 'success', text: `Revoked "${k.label || k.key_prefix}".` }); load() }
+    setTimeout(() => setMsg(null), 4000)
+  }
+
+  const copyKey = async () => {
+    if (!justCreated?.key) return
+    try { await navigator.clipboard.writeText(justCreated.key); setCopied(true); setTimeout(() => setCopied(false), 2000) } catch {}
+  }
+
+  return (
+    <div className="rounded-xl border border-[#1A2130] p-5" style={{ background: '#0D1117' }}>
+      <div className="flex items-center gap-2 mb-3">
+        <Key size={14} className="text-[#00E5C3]" />
+        <h2 className="text-xs font-mono uppercase tracking-wider text-[#5A6A7A]">Infinite API keys</h2>
+      </div>
+      <p className="text-xs text-[#5A6A7A] mb-4 leading-relaxed">
+        Give an external automation (Kam, n8n, Make, etc.) programmatic access to your leads.
+        Each key is scoped to <span className="text-[#C0D0E0]">your account only</span> — it can't touch anyone else's data.
+        Base URL: <code className="text-[#00E5C3] font-mono text-[10px]">https://api.infinite-crm.net/api/v1</code>
+      </p>
+
+      {/* One-time key display — shown after successful create */}
+      {justCreated && (
+        <div className="p-4 rounded-lg border border-[#00E5C340] mb-4" style={{ background: '#00E5C310' }}>
+          <div className="flex items-center gap-2 mb-2">
+            <CheckCircle size={14} className="text-[#00E5C3]" />
+            <p className="text-sm font-semibold text-white">Key created — copy it now, you won't see it again</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <code className="flex-1 px-3 py-2 bg-[#080B0F] border border-[#1A2130] rounded font-mono text-xs text-[#00E5C3] break-all select-all">{justCreated.key}</code>
+            <button onClick={copyKey}
+              className="px-3 py-2 rounded text-xs font-semibold text-black inline-flex items-center gap-1.5"
+              style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
+              {copied ? <><Check size={11} /> Copied</> : <><Copy size={11} /> Copy</>}
+            </button>
+          </div>
+          <p className="text-[10px] text-[#5A6A7A] mt-2 leading-snug">
+            Only the hash is stored — closing this box means it's gone from our side forever.
+            Paste it into your automation now.
+          </p>
+          <button onClick={() => setJustCreated(null)}
+            className="text-[10px] text-[#5A6A7A] hover:text-white mt-2 inline-flex items-center gap-1">
+            <X size={10} /> I've saved it — dismiss
+          </button>
+        </div>
+      )}
+
+      {/* Create form */}
+      {!justCreated && (
+        <div className="flex items-center gap-2 mb-4">
+          <input
+            value={label}
+            onChange={e => setLabel(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') create() }}
+            placeholder="Key label (e.g. Kam, n8n prod)"
+            className="flex-1 px-3 py-2 rounded-lg text-sm text-white border border-[#1A2130] bg-[#080B0F] outline-none focus:border-[#00E5C340]" />
+          <button onClick={create} disabled={creating || !label.trim()}
+            className="px-4 py-2 rounded-lg text-sm font-semibold text-black inline-flex items-center gap-1.5 disabled:opacity-40"
+            style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
+            <Plus size={13} /> {creating ? 'Creating…' : 'Create key'}
+          </button>
+        </div>
+      )}
+
+      {/* Existing keys */}
+      {loading ? (
+        <p className="text-xs text-[#5A6A7A] italic">Loading…</p>
+      ) : keys.length === 0 ? (
+        <p className="text-xs text-[#5A6A7A] italic">No API keys yet. Create one above.</p>
+      ) : (
+        <div className="space-y-2">
+          {keys.map(k => (
+            <div key={k.id} className="flex items-center gap-3 px-3 py-2 rounded-lg border border-[#1A2130]" style={{ background: '#080B0F' }}>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="text-sm text-white truncate">{k.label || 'Unlabeled'}</p>
+                  <code className="text-[10px] font-mono text-[#5A6A7A]">{k.key_prefix}…</code>
+                </div>
+                <p className="text-[10px] text-[#5A6A7A] font-mono mt-0.5">
+                  Created {format(new Date(k.created_at), 'MMM d, yyyy')} ·
+                  {k.last_used_at
+                    ? ` Last used ${format(new Date(k.last_used_at), 'MMM d, h:mm a')}`
+                    : ' Never used'}
+                </p>
+              </div>
+              <button onClick={() => revoke(k)}
+                title="Revoke this key"
+                className="p-2 rounded-lg text-[#5A6A7A] hover:text-[#EF4444] hover:bg-[#EF444415]">
+                <Trash2 size={12} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {msg && (
+        <div className={`text-xs mt-3 ${msg.type === 'error' ? 'text-[#EF4444]' : msg.type === 'success' ? 'text-[#10B981]' : 'text-[#8899AA]'}`}>
+          {msg.text}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // PitchPrfct Automation panel — per-agent. Each agent connects their OWN
 // PitchPrfct account: their API key is saved (privately, row-level secured) to
 // the pitchprfct_keys table, and their keyword→workflow rules to their profile.
@@ -1801,6 +1977,9 @@ export default function Settings() {
 
       {/* Integrations — bookmarklets / webhooks for external tools */}
       {!isRunner && <IntegrationsPanel />}
+
+      {/* Infinite API Keys — per-user keys for external automations (Kam, n8n) */}
+      {!isRunner && <ApiKeysPanel />}
 
       {/* PitchPrfct Automation — campaign/comment → workflow enrollment rules */}
       {!isRunner && <PitchPerfectPanel />}

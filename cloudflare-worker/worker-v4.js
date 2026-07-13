@@ -349,12 +349,12 @@ function isDuplicate(result) {
 }
 
 // CORS headers — needed because the PitchPerfect bookmarklet runs from
-// app.pitchprfct.com (or wherever) and posts to this worker. Wide open since
-// the worker validates agent_id and is otherwise read-only.
+// app.pitchprfct.com (or wherever) and posts to this worker. Also required
+// for the /api/v1/* endpoints called by Kam and other external automations.
 const CORS = {
   'access-control-allow-origin': '*',
-  'access-control-allow-methods': 'POST, OPTIONS',
-  'access-control-allow-headers': 'content-type',
+  'access-control-allow-methods': 'GET, POST, PATCH, DELETE, OPTIONS',
+  'access-control-allow-headers': 'content-type, x-api-key, authorization',
   'access-control-max-age': '86400',
 }
 
@@ -377,6 +377,429 @@ function sanitizeForInsert(lead) {
   }
   return out
 }
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  INFINITE PUBLIC API v1  —  /api/v1/*
+// ─────────────────────────────────────────────────────────────────────────────
+// External REST surface. Auth via X-API-Key (or Authorization: Bearer). Every
+// operation is scoped to the api_key's owner user_id, so a leaked key can only
+// touch the owner's data — never anyone else's.
+//
+// Endpoints:
+//   GET   /api/v1/leads?phone=+1... or ?email=...   → find (dedup)
+//   POST  /api/v1/leads?upsert=true                  → create or upsert
+//   GET   /api/v1/leads/:id                          → fetch one
+//   PATCH /api/v1/leads/:id                          → update (auto-logs stage changes)
+//   POST  /api/v1/leads/:id/tags                     → add/remove tags → maps to stage
+//   POST  /api/v1/leads/:id/activity                 → append activity row
+//   GET   /api/v1/stages                             → user's stage catalog
+//   GET   /api/v1/tags                               → same as /stages (alias for Kam's terminology)
+//
+// Wire format is camelCase in/out; the mapper translates to/from snake_case
+// on the DB side so external integrators don't need to know our column names.
+// ═════════════════════════════════════════════════════════════════════════════
+
+const API_V1_CORS = { ...CORS, 'content-type': 'application/json' }
+const jsonResp = (obj, status = 200, extraHeaders = {}) =>
+  new Response(JSON.stringify(obj), {
+    status,
+    headers: { ...API_V1_CORS, ...extraHeaders },
+  })
+
+// ── Field mapping (external camelCase ↔ DB snake_case) ────────────────────
+// Only fields listed here are accepted from external requests. Anything else
+// is silently dropped (defense in depth against schema-cache errors and
+// accidental writes to columns like user_id or stage_changed_at).
+const EXT_TO_DB = {
+  firstName: 'first_name',
+  lastName: 'last_name',
+  phone: 'phone',
+  email: 'email',
+  address: 'address',
+  city: 'city',
+  state: 'state',
+  zip: 'zip',
+  dob: 'dob',
+  ageBand: 'age_range',
+  age: 'age',
+  gender: 'gender',
+  smoker: 'smoker',
+  householdSize: 'household',
+  income: 'income',
+  campaign: 'campaign',
+  source: 'source',
+  cost: 'price',
+  stage: 'stage',
+  plan: 'plan_choice',
+  planChoice: 'plan_choice',
+  premium: 'premium',
+  carrier: 'carrier',
+  effectiveDate: 'effective_date',
+  notesRaw: 'notes',
+  notesStatus: 'notes_b',
+  notes: 'notes',
+  comments: 'comments',
+  bestContactTime: 'best_contact_time',
+  monthlyBudget: 'monthly_budget',
+  externalId: 'external_id',
+}
+// Reverse map — DB snake_case → external camelCase, for GET responses.
+const DB_TO_EXT = (() => {
+  const out = {}
+  for (const [ext, db] of Object.entries(EXT_TO_DB)) {
+    // Prefer the "primary" external name for a given DB column. First one wins.
+    if (!(db in out)) out[db] = ext
+  }
+  // Fields we return but don't accept as writable input
+  out.id = 'id'
+  out.user_id = 'ownerUserId'
+  out.created_at = 'receivedAt'
+  out.updated_at = 'updatedAt'
+  out.stage_changed_at = 'stageChangedAt'
+  out.pp_response_status = 'respondedStatus'
+  return out
+})()
+
+function externalToDbPatch(body) {
+  if (!body || typeof body !== 'object') return {}
+  const out = {}
+  for (const [ext, val] of Object.entries(body)) {
+    const dbCol = EXT_TO_DB[ext]
+    if (!dbCol) continue
+    if (val === undefined) continue
+    // Normalize phone to E.164 on the way in
+    if (dbCol === 'phone') {
+      const p = coercePhoneE164(val)
+      if (p) out.phone = p
+      continue
+    }
+    // Normalize effective_date to YYYY-MM-DD if a full ISO is sent
+    if (dbCol === 'effective_date' && typeof val === 'string') {
+      out.effective_date = val.slice(0, 10)
+      continue
+    }
+    out[dbCol] = val
+  }
+  return out
+}
+
+function dbToExternal(row) {
+  if (!row || typeof row !== 'object') return null
+  const out = {}
+  for (const [dbCol, val] of Object.entries(row)) {
+    const extName = DB_TO_EXT[dbCol]
+    if (!extName) continue
+    out[extName] = val
+  }
+  return out
+}
+
+// ── SHA-256 hex — used to hash incoming API keys before DB lookup ─────────
+async function sha256Hex(str) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str))
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('')
+}
+
+// ── Auth middleware — resolve X-API-Key to { userId, scopes, keyId } ─────
+// Returns null on failure. Bumps last_used_at on success (fire-and-forget so
+// slow DB writes don't slow the API response).
+async function authenticateApiKey(env, req, ctx) {
+  const headerKey = req.headers.get('x-api-key')
+    || (req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '').trim()
+  if (!headerKey || headerKey.length < 16) return null
+  const hash = await sha256Hex(headerKey)
+  const url = `${env.SUPABASE_URL}/rest/v1/api_keys?key_hash=eq.${encodeURIComponent(hash)}&revoked_at=is.null&select=id,user_id,scopes&limit=1`
+  const r = await fetch(url, {
+    headers: {
+      apikey: env.SUPABASE_SERVICE_KEY,
+      authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}`,
+    },
+  })
+  if (!r.ok) return null
+  const rows = await r.json().catch(() => [])
+  if (!rows?.length) return null
+  const { id, user_id, scopes } = rows[0]
+  // Fire-and-forget bump of last_used_at
+  const bump = fetch(`${env.SUPABASE_URL}/rest/v1/api_keys?id=eq.${id}`, {
+    method: 'PATCH',
+    headers: {
+      apikey: env.SUPABASE_SERVICE_KEY,
+      authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}`,
+      'content-type': 'application/json',
+      prefer: 'return=minimal',
+    },
+    body: JSON.stringify({ last_used_at: new Date().toISOString() }),
+  }).catch(() => {})
+  if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(bump)
+  return { userId: user_id, scopes: Array.isArray(scopes) ? scopes : [], keyId: id }
+}
+
+function hasScope(auth, needed) {
+  return auth && Array.isArray(auth.scopes) && auth.scopes.includes(needed)
+}
+
+// ── DB helpers used by the API routes ─────────────────────────────────────
+async function sbSelect(env, table, query) {
+  const r = await fetch(`${env.SUPABASE_URL}/rest/v1/${table}?${query}`, {
+    headers: {
+      apikey: env.SUPABASE_SERVICE_KEY,
+      authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}`,
+    },
+  })
+  if (!r.ok) return { ok: false, status: r.status, body: await r.text() }
+  return { ok: true, status: r.status, rows: await r.json().catch(() => []) }
+}
+
+async function sbInsert(env, table, row) {
+  const r = await fetch(`${env.SUPABASE_URL}/rest/v1/${table}`, {
+    method: 'POST',
+    headers: {
+      apikey: env.SUPABASE_SERVICE_KEY,
+      authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}`,
+      'content-type': 'application/json',
+      prefer: 'return=representation',
+    },
+    body: JSON.stringify([row]),
+  })
+  const txt = await r.text()
+  if (!r.ok) return { ok: false, status: r.status, body: txt }
+  let rows = []
+  try { rows = JSON.parse(txt) } catch {}
+  return { ok: true, status: r.status, row: rows?.[0] || null }
+}
+
+async function sbPatch(env, table, filterQuery, patch) {
+  const r = await fetch(`${env.SUPABASE_URL}/rest/v1/${table}?${filterQuery}`, {
+    method: 'PATCH',
+    headers: {
+      apikey: env.SUPABASE_SERVICE_KEY,
+      authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}`,
+      'content-type': 'application/json',
+      prefer: 'return=representation',
+    },
+    body: JSON.stringify(patch),
+  })
+  const txt = await r.text()
+  if (!r.ok) return { ok: false, status: r.status, body: txt }
+  let rows = []
+  try { rows = JSON.parse(txt) } catch {}
+  return { ok: true, status: r.status, row: rows?.[0] || null }
+}
+
+// Log an activity row (mirrors the CRM's addActivity function).
+async function apiLogActivity(env, userId, leadId, type, note) {
+  try {
+    await sbInsert(env, 'activities', {
+      user_id: userId, lead_id: leadId, type, note, created_at: new Date().toISOString(),
+    })
+  } catch {}
+}
+
+// ── ROUTES ────────────────────────────────────────────────────────────────
+async function handleApiV1(url, req, env, ctx) {
+  // OPTIONS preflight
+  if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS })
+
+  // Authenticate
+  const auth = await authenticateApiKey(env, req, ctx)
+  if (!auth) {
+    return jsonResp({ error: 'Unauthorized. Send X-API-Key: <your key> or Authorization: Bearer <your key>.' }, 401)
+  }
+
+  const path = url.pathname.replace(/^\/api\/v1/, '') || '/'
+  const method = req.method
+
+  try {
+    // GET /leads?phone=... or ?email=... — find (dedup)
+    if (method === 'GET' && path === '/leads') {
+      if (!hasScope(auth, 'leads:read')) return jsonResp({ error: 'Missing scope: leads:read' }, 403)
+      const phone = url.searchParams.get('phone')
+      const email = url.searchParams.get('email')
+      if (!phone && !email) return jsonResp({ error: 'Provide phone or email' }, 400)
+      const filters = [`user_id=eq.${encodeURIComponent(auth.userId)}`]
+      if (phone) {
+        const e164 = coercePhoneE164(phone) || phone
+        filters.push(`phone=eq.${encodeURIComponent(e164)}`)
+      }
+      if (email) filters.push(`email=eq.${encodeURIComponent(email.toLowerCase())}`)
+      const r = await sbSelect(env, 'leads', filters.join('&') + '&limit=1&order=created_at.desc')
+      if (!r.ok) return jsonResp({ error: `Lookup failed: ${r.body}` }, 500)
+      const lead = r.rows[0] || null
+      return jsonResp({ found: !!lead, lead: lead ? dbToExternal(lead) : null })
+    }
+
+    // POST /leads or POST /leads?upsert=true
+    if (method === 'POST' && path === '/leads') {
+      if (!hasScope(auth, 'leads:write')) return jsonResp({ error: 'Missing scope: leads:write' }, 403)
+      const body = await req.json().catch(() => null)
+      if (!body || typeof body !== 'object') return jsonResp({ error: 'Body must be JSON object' }, 400)
+      const patch = externalToDbPatch(body)
+      if (!patch.phone && !patch.email) {
+        return jsonResp({ error: 'Provide at least phone or email' }, 400)
+      }
+      const upsert = url.searchParams.get('upsert') === 'true'
+      // Dedup by phone (preferred) then email
+      if (upsert) {
+        const dedupFilters = [`user_id=eq.${encodeURIComponent(auth.userId)}`]
+        if (patch.phone) dedupFilters.push(`phone=eq.${encodeURIComponent(patch.phone)}`)
+        else if (patch.email) dedupFilters.push(`email=eq.${encodeURIComponent(patch.email.toLowerCase())}`)
+        const existing = await sbSelect(env, 'leads', dedupFilters.join('&') + '&limit=1&select=id,stage')
+        if (existing.ok && existing.rows[0]) {
+          const leadId = existing.rows[0].id
+          const oldStage = existing.rows[0].stage
+          const patched = { ...patch }
+          delete patched.phone; delete patched.email  // don't overwrite the dedup key
+          if ('stage' in patched && patched.stage !== oldStage) {
+            patched.stage_changed_at = new Date().toISOString()
+          }
+          const pr = await sbPatch(env, 'leads', `id=eq.${leadId}`, patched)
+          if (!pr.ok) return jsonResp({ error: `Upsert-patch failed: ${pr.body}` }, 500)
+          if ('stage' in patched && patched.stage !== oldStage) {
+            await apiLogActivity(env, auth.userId, leadId, 'status', `Stage → ${patched.stage} (via API)`)
+          }
+          return jsonResp({ lead: dbToExternal(pr.row), upserted: true, action: 'updated' }, 200)
+        }
+      }
+      // Fresh insert
+      const insertRow = { ...patch, user_id: auth.userId, created_at: new Date().toISOString() }
+      if (insertRow.email) insertRow.email = String(insertRow.email).toLowerCase()
+      if (insertRow.stage) insertRow.stage_changed_at = new Date().toISOString()
+      const ir = await sbInsert(env, 'leads', insertRow)
+      if (!ir.ok) {
+        if (isDuplicate(ir)) return jsonResp({ error: 'Lead already exists', code: 'duplicate' }, 409)
+        return jsonResp({ error: `Insert failed: ${ir.body}` }, 500)
+      }
+      if (insertRow.stage) {
+        await apiLogActivity(env, auth.userId, ir.row.id, 'status', `Stage → ${insertRow.stage} (via API)`)
+      }
+      await apiLogActivity(env, auth.userId, ir.row.id, 'note', 'Created via API')
+      return jsonResp({ lead: dbToExternal(ir.row), upserted: !!upsert, action: 'created' }, 201)
+    }
+
+    // /leads/:id routes
+    const leadIdMatch = path.match(/^\/leads\/([0-9a-fA-F-]{36})(\/(tags|activity))?$/)
+    if (leadIdMatch) {
+      const leadId = leadIdMatch[1]
+      const subresource = leadIdMatch[3]
+
+      // Verify the lead belongs to this API key's owner (isolation guarantee)
+      const own = await sbSelect(env, 'leads', `id=eq.${leadId}&user_id=eq.${encodeURIComponent(auth.userId)}&select=id,stage&limit=1`)
+      if (!own.ok || !own.rows[0]) return jsonResp({ error: 'Lead not found' }, 404)
+      const oldStage = own.rows[0].stage
+
+      // GET /leads/:id
+      if (method === 'GET' && !subresource) {
+        if (!hasScope(auth, 'leads:read')) return jsonResp({ error: 'Missing scope: leads:read' }, 403)
+        const r = await sbSelect(env, 'leads', `id=eq.${leadId}&limit=1`)
+        if (!r.ok || !r.rows[0]) return jsonResp({ error: 'Lead not found' }, 404)
+        return jsonResp({ lead: dbToExternal(r.rows[0]) })
+      }
+
+      // PATCH /leads/:id
+      if (method === 'PATCH' && !subresource) {
+        if (!hasScope(auth, 'leads:write')) return jsonResp({ error: 'Missing scope: leads:write' }, 403)
+        const body = await req.json().catch(() => null)
+        if (!body || typeof body !== 'object') return jsonResp({ error: 'Body must be JSON object' }, 400)
+        const patch = externalToDbPatch(body)
+        // Append vs replace for notes — Kam wants to accumulate raw notes over
+        // a conversation, so if `notesRaw` is set AND body.notesMode !== 'replace',
+        // fetch current and prepend a newline.
+        const notesMode = String(body.notesMode || 'append').toLowerCase()
+        if ('notes' in patch && notesMode === 'append') {
+          const existing = await sbSelect(env, 'leads', `id=eq.${leadId}&select=notes&limit=1`)
+          const prior = existing.ok ? (existing.rows[0]?.notes || '') : ''
+          patch.notes = prior ? `${prior}\n${patch.notes}` : patch.notes
+        }
+        // notes_b (right box / status) defaults to replace since Kam wants to
+        // overwrite the current-state summary, not accumulate it.
+        // Auto-stamp stage_changed_at when stage changes
+        if ('stage' in patch && patch.stage !== oldStage) {
+          patch.stage_changed_at = new Date().toISOString()
+        }
+        if (!Object.keys(patch).length) return jsonResp({ error: 'No writable fields in body' }, 400)
+        const pr = await sbPatch(env, 'leads', `id=eq.${leadId}`, patch)
+        if (!pr.ok) return jsonResp({ error: `Patch failed: ${pr.body}` }, 500)
+        if ('stage' in patch && patch.stage !== oldStage && hasScope(auth, 'activity:write')) {
+          await apiLogActivity(env, auth.userId, leadId, 'status', `Stage → ${patch.stage} (via API)`)
+        }
+        return jsonResp({ lead: dbToExternal(pr.row) })
+      }
+
+      // POST /leads/:id/tags — add/remove tags. In Infinite each lead has ONE
+      // stage (not a multi-tag). We treat "add" as "set the stage to this tag";
+      // "remove" clears the stage if it matches. Tag catalog is fuzzy-matched
+      // to stage IDs so Kam can send "#SOLD", "sold", or "Sold" interchangeably.
+      if (method === 'POST' && subresource === 'tags') {
+        if (!hasScope(auth, 'tags:write')) return jsonResp({ error: 'Missing scope: tags:write' }, 403)
+        const body = await req.json().catch(() => null)
+        if (!body || typeof body !== 'object') return jsonResp({ error: 'Body must be JSON object' }, 400)
+        const add = Array.isArray(body.add) ? body.add : []
+        const remove = Array.isArray(body.remove) ? body.remove : []
+        // Fetch tag catalog to fuzzy-match names to IDs
+        const cat = await sbSelect(env, 'tags', `user_id=eq.${encodeURIComponent(auth.userId)}&select=id,label`)
+        if (!cat.ok) return jsonResp({ error: `Tag catalog fetch failed: ${cat.body}` }, 500)
+        const stageMap = new Map()
+        for (const t of cat.rows) {
+          stageMap.set(String(t.id).toLowerCase(), t.id)
+          if (t.label) stageMap.set(String(t.label).toLowerCase().replace(/^#/, '').trim(), t.id)
+        }
+        const resolve = (raw) => {
+          const k = String(raw || '').toLowerCase().replace(/^#/, '').trim()
+          return stageMap.get(k) || null
+        }
+        // Apply removes first, then adds. Last successful add wins as the stage.
+        let newStage = oldStage
+        for (const r of remove) {
+          const rid = resolve(r)
+          if (rid && rid === newStage) newStage = null
+        }
+        for (const a of add) {
+          const aid = resolve(a)
+          if (aid) newStage = aid
+        }
+        if (newStage !== oldStage) {
+          const patch = { stage: newStage, stage_changed_at: new Date().toISOString() }
+          const pr = await sbPatch(env, 'leads', `id=eq.${leadId}`, patch)
+          if (!pr.ok) return jsonResp({ error: `Stage update failed: ${pr.body}` }, 500)
+          if (hasScope(auth, 'activity:write')) {
+            await apiLogActivity(env, auth.userId, leadId, 'status', `Stage → ${newStage || '(cleared)'} (via API tags)`)
+          }
+          return jsonResp({ lead: dbToExternal(pr.row), stage: newStage })
+        }
+        return jsonResp({ stage: newStage, changed: false })
+      }
+
+      // POST /leads/:id/activity
+      if (method === 'POST' && subresource === 'activity') {
+        if (!hasScope(auth, 'activity:write')) return jsonResp({ error: 'Missing scope: activity:write' }, 403)
+        const body = await req.json().catch(() => null)
+        if (!body || typeof body !== 'object') return jsonResp({ error: 'Body must be JSON object' }, 400)
+        const type = String(body.type || 'note').slice(0, 32)
+        const note = String(body.note || '').slice(0, 500)
+        if (!note) return jsonResp({ error: 'note required' }, 400)
+        await apiLogActivity(env, auth.userId, leadId, type, note)
+        return jsonResp({ ok: true }, 201)
+      }
+    }
+
+    // GET /stages and GET /tags (alias — both return the user's tag/stage catalog)
+    if (method === 'GET' && (path === '/stages' || path === '/tags')) {
+      if (!hasScope(auth, 'stages:read')) return jsonResp({ error: 'Missing scope: stages:read' }, 403)
+      const r = await sbSelect(env, 'tags', `user_id=eq.${encodeURIComponent(auth.userId)}&select=id,label,color,sort_order&order=sort_order.asc`)
+      if (!r.ok) return jsonResp({ error: `Fetch failed: ${r.body}` }, 500)
+      // Return both id (write-safe) and label (display) so Kam can pick whichever.
+      return jsonResp({ stages: r.rows.map(t => ({ id: t.id, label: t.label, color: t.color })) })
+    }
+
+    // Not matched
+    return jsonResp({ error: `No route for ${method} ${path}` }, 404)
+  } catch (e) {
+    return jsonResp({ error: String(e?.message || e) }, 500)
+  }
+}
+// ═════════════════════════════════════════════════════════════════════════════
+//  END INFINITE PUBLIC API v1
+// ═════════════════════════════════════════════════════════════════════════════
 
 // Coerce a phone in any common shape — "(717) 623-0690", "7176230690",
 // "+17176230690", "1-717-623-0690" — into E.164 +1XXXXXXXXXX. Returns null
@@ -1006,10 +1429,14 @@ export default {
     // every release so a stale deploy is immediately visible.
     if (req.method === 'GET' && url.pathname === '/version') {
       return new Response(JSON.stringify({
-        version: 'v4.23',
-        parser: 'verified enroll log + pp_response_status',
-        deployed_check: 'if you see v4.23 here, the deploy succeeded',
+        version: 'v4.24',
+        parser: 'public Infinite API v1 (per-user keys)',
+        deployed_check: 'if you see v4.24 here, the deploy succeeded',
       }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
+    }
+    // Public API v1 — auth via X-API-Key. All routes under /api/v1/*.
+    if (url.pathname.startsWith('/api/v1')) {
+      return handleApiV1(url, req, env, ctx)
     }
     // Workflow-list proxy — lets the CRM Settings panel show a dropdown of the
     // agent's real PitchPrfct workflows WITHOUT the API key ever touching the
