@@ -363,7 +363,10 @@ function InfoSection({ title, color, children }) {
       <div className="px-4 py-2.5 border-b border-[#1A2130]">
         <span className="text-[10px] font-mono uppercase tracking-wider" style={{ color: color || '#5A6A7A' }}>{title}</span>
       </div>
-      <div className="grid grid-cols-2 lg:grid-cols-3 gap-2 p-3">
+      {/* Contact / Demographics / etc. — single column below sm (400px), two
+          columns on medium, three on large. Prevents cramped 50%-width fields
+          on iPhone Safari (~390px). */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 p-3">
         {children}
       </div>
     </div>
@@ -625,7 +628,7 @@ export default function LeadDetail() {
       </div>
 
       {/* Body — pitch-first layout: all info visible, no accordion */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-4 max-w-6xl mx-auto w-full">
+      <div className="flex-1 overflow-y-auto p-3 md:p-6 space-y-4 max-w-6xl mx-auto w-full">
 
         {/* Sold — prominent badge with plan + monthly premium */}
         <SoldBadge lead={lead} size="detail" />
@@ -712,7 +715,10 @@ export default function LeadDetail() {
               {Object.keys(lead.custom_fields || {}).length} field{Object.keys(lead.custom_fields || {}).length === 1 ? '' : 's'}
             </span>
           </div>
-          <div className="grid grid-cols-2 lg:grid-cols-3 gap-2 p-3">
+          {/* Contact / Demographics / etc. — single column below sm (400px), two
+          columns on medium, three on large. Prevents cramped 50%-width fields
+          on iPhone Safari (~390px). */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 p-3">
             {Object.entries(lead.custom_fields || {}).map(([key, value]) => (
               <CustomFieldRow key={key}
                 name={key}

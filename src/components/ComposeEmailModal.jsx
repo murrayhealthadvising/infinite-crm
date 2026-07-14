@@ -71,24 +71,90 @@ export default function ComposeEmailModal({ leadId, to: initialTo, onClose, defa
   useEffect(() => { if (connected && templates === null) loadTemplates() }, [connected])
 
   // When a template is picked, we capture BOTH the plain and HTML versions
-  // (with variables substituted). If the template has an HTML version, we
-  // send it as HTML so the recipient sees the rich layout instead of the
-  // flattened plain text. The editable textarea below shows the plain
-  // version — agents can tweak the wording, and on send we re-apply that
-  // wording to the plain MIME part while sending the original HTML intact.
+  // (with variables substituted). We ALSO remember the untouched plain body
+  // (`originalTemplateBody`) so that when the agent edits the textarea, we
+  // can detect the diff on send and merge those edits back into the HTML —
+  // otherwise the recipient sees the template unchanged and the agent's
+  // tweaks are silently lost. This was the "just goes off the template" bug.
   const [templateHtml, setTemplateHtml] = useState('')
+  const [originalTemplateBody, setOriginalTemplateBody] = useState('')
   const applyTemplate = (tplId) => {
     setSelectedTpl(tplId)
     if (!tplId) {
       setTemplateHtml('')
+      setOriginalTemplateBody('')
       return
     }
     const t = (templates || []).find(t => t.id === tplId)
     if (!t) return
+    const filledBody = substituteVars(t.body || '')
     setSubject(substituteVars(t.subject || ''))
-    setBody(substituteVars(t.body || ''))
+    setBody(filledBody)
+    setOriginalTemplateBody(filledBody)
     setTemplateHtml(t.html ? substituteVars(t.html) : '')
   }
+
+  // Has the agent edited the body since the template was applied?
+  const hasBodyEdits = !!(originalTemplateBody && body !== originalTemplateBody)
+
+  // Escape a plain-text body so it renders safely inside HTML. Preserves line
+  // breaks with <br> and collapses runs of empty lines with &nbsp; so blank
+  // paragraphs don't collapse in the rendered email.
+  const plainToHtml = (text) => {
+    if (!text) return ''
+    const escaped = String(text)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+    const withBreaks = escaped.split('\n').map(l => l || '&nbsp;').join('<br>')
+    return `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; font-size: 14px; line-height: 1.5; color: #222;">${withBreaks}</div>`
+  }
+
+  // Attempt to swap the original plain body OUT of the HTML template and the
+  // agent's edited body IN, preserving whatever header/footer/signature
+  // styling the template had. Returns null if we can't confidently locate
+  // the original body inside the HTML (caller then falls back to plainToHtml).
+  const substituteBodyInHtml = (html, oldBody, newBody) => {
+    if (!html || !oldBody) return null
+    // Direct substring match — works when the template stores the body verbatim
+    if (html.includes(oldBody)) {
+      const escaped = String(newBody)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/\n/g, '<br>')
+      return html.replace(oldBody, escaped)
+    }
+    // Anchor-based fallback: find the first and last non-empty line of the
+    // original body inside the HTML. If both are found and in order, replace
+    // everything between with the edited body.
+    const lines = oldBody.split('\n').map(l => l.trim()).filter(Boolean)
+    if (lines.length < 2) return null
+    const first = lines[0]
+    const last = lines[lines.length - 1]
+    const startIdx = html.indexOf(first)
+    const endIdx = html.lastIndexOf(last)
+    if (startIdx < 0 || endIdx <= startIdx) return null
+    const escaped = String(newBody)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/\n/g, '<br>')
+    return html.slice(0, startIdx) + escaped + html.slice(endIdx + last.length)
+  }
+
+  // Preview HTML — reflects whatever WILL actually be sent (with edits applied).
+  // Computed live so the iframe preview stays in sync as the agent types.
+  const previewHtml = (() => {
+    if (!templateHtml && !hasBodyEdits) return ''
+    if (!hasBodyEdits) return templateHtml
+    if (templateHtml) {
+      const swapped = substituteBodyInHtml(templateHtml, originalTemplateBody, body)
+      if (swapped) return swapped
+    }
+    return plainToHtml(body)
+  })()
+  // Was the smart substitution successful (edits went into the styled template)
+  // or did we have to fall back to a plain-text-as-HTML render (edits are shown
+  // but the template's styling is lost)? Used to color the status message.
+  const editsMergedIntoTemplate = hasBodyEdits && templateHtml
+    && !!substituteBodyInHtml(templateHtml, originalTemplateBody, body)
 
   // Auto-focus subject when modal opens (To is usually pre-filled)
   useEffect(() => {
@@ -129,13 +195,14 @@ export default function ComposeEmailModal({ leadId, to: initialTo, onClose, defa
       : user?.email
       ? `${user.email.split('@')[0]} <${user.email}>`
       : undefined
-    // If the picked template had an HTML version, send it as multipart/alt
-    // (rich HTML + plain fallback). Otherwise plain only — same as before.
+    // Send the HTML that reflects the agent's edits (previewHtml handles the
+    // merge). If no template + no edits, previewHtml is empty and we fall
+    // back to plain-only, same as before.
     const res = await sendGmailMessage({
       to,
       subject,
       body,
-      html: templateHtml || undefined,
+      html: previewHtml || undefined,
       fromName,
     })
     if (res.ok) {
@@ -244,25 +311,38 @@ export default function ComposeEmailModal({ leadId, to: initialTo, onClose, defa
 
           <div>
             <label className="block text-[10px] font-mono uppercase tracking-wider text-[#5A6A7A] mb-1">
-              Body {templateHtml && <span className="text-[#3B82F6] normal-case">· HTML template — preview below</span>}
+              Body
+              {templateHtml && !hasBodyEdits && <span className="text-[#3B82F6] normal-case"> · HTML template — preview below</span>}
+              {hasBodyEdits && editsMergedIntoTemplate && <span className="text-[#10B981] normal-case"> · edits merged into HTML template ✓</span>}
+              {hasBodyEdits && !editsMergedIntoTemplate && <span className="text-[#F59E0B] normal-case"> · sending as plain text (template body couldn't be located)</span>}
             </label>
             <textarea ref={bodyRef} value={body} onChange={e => setBody(e.target.value)}
-              rows={templateHtml ? 4 : 10}
+              rows={templateHtml ? 5 : 10}
               placeholder="Hi —&#10;&#10;Wanted to follow up on…"
               className="w-full px-3 py-2.5 bg-[#080B0F] border border-[#1A2130] rounded-lg text-sm text-white focus:outline-none focus:border-[#3B82F6] resize-y" />
-            {templateHtml && (
-              <p className="text-[10px] text-[#5A6A7A] mt-1">
-                Editing the textarea changes the plain-text fallback only. The HTML version below is what most recipients will see.
-              </p>
+            {templateHtml && hasBodyEdits && (
+              <div className="flex items-center justify-between gap-2 mt-1">
+                <p className="text-[10px] text-[#5A6A7A]">
+                  {editsMergedIntoTemplate
+                    ? 'Edits are baked into the HTML preview below — that\'s what the recipient sees.'
+                    : 'Couldn\'t match the template body — we\'ll send your edits as plain-formatted HTML so nothing is lost.'}
+                </p>
+                <button onClick={() => setBody(originalTemplateBody)}
+                  className="text-[10px] text-[#5A6A7A] hover:text-white underline whitespace-nowrap"
+                  title="Discard edits and restore the template body"
+                >
+                  Reset to template
+                </button>
+              </div>
             )}
           </div>
 
-          {templateHtml && (
+          {previewHtml && (
             <div>
               <label className="block text-[10px] font-mono uppercase tracking-wider text-[#5A6A7A] mb-1">Preview (what the recipient will see)</label>
               <iframe
                 title="Email preview"
-                srcDoc={templateHtml}
+                srcDoc={previewHtml}
                 sandbox=""
                 style={{ width: '100%', minHeight: '320px', maxHeight: '50vh', border: '1px solid #1A2130', borderRadius: '8px', background: 'white' }}
               />

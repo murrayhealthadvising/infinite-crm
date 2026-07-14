@@ -967,7 +967,11 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
   return (
     <div className="rounded-xl border overflow-hidden transition-all duration-200"
       style={{ background: safeBg, borderColor: selected ? safeColor : safeColor + '30', borderWidth: selected ? '2px' : '1px' }}>
-      <div className="grid gap-3 px-4 pt-3 pb-2 items-start" style={{ gridTemplateColumns: '28px 1.8fr 0.9fr 1.4fr 1fr 80px' }}>
+      {/* Card grid — stacks on mobile (single column) so all fields are
+          readable at 390px. At md+ (768px) it becomes the 6-column layout
+          designed for desktop. Grid areas keep the visual weight consistent
+          per breakpoint without hiding any data. */}
+      <div className="grid gap-2 md:gap-3 px-3 md:px-4 pt-3 pb-2 items-start grid-cols-1 md:[grid-template-columns:28px_1.8fr_0.9fr_1.4fr_1fr_80px]">
         <div className="pt-1" onClick={e => e.stopPropagation()}>
           <button onClick={() => onSelect(lead.id)} className="text-[#3A4A5A] hover:text-white transition-colors">
             {selected ? <CheckSquare size={16} style={{ color: safeColor }} /> : <Square size={16} />}
@@ -1197,7 +1201,7 @@ function TagFilterPills({ tagFilters, setTagFilters, leads }) {
   })
 
   return (
-    <div ref={ref} className="flex gap-2 px-6 pb-2 overflow-x-auto items-center"
+    <div ref={ref} className="flex gap-2 px-3 md:px-6 pb-2 overflow-x-auto items-center"
       style={{ scrollbarWidth: 'none', msOverflowStyle: 'none', cursor: 'grab', WebkitOverflowScrolling: 'touch' }}>
       <span className="text-[10px] font-mono uppercase tracking-wider text-[#3A4A5A] flex-shrink-0 mr-1">Side tags</span>
       {all.map(([t, count]) => {
@@ -1244,7 +1248,7 @@ function CampaignFilterPills({ campaignFilters, setCampaignFilters, leads }) {
   })
 
   return (
-    <div ref={ref} className="flex gap-2 px-6 pb-2 overflow-x-auto items-center"
+    <div ref={ref} className="flex gap-2 px-3 md:px-6 pb-2 overflow-x-auto items-center"
       style={{ scrollbarWidth: 'none', msOverflowStyle: 'none', cursor: 'grab', WebkitOverflowScrolling: 'touch' }}>
       <span className="text-[10px] font-mono uppercase tracking-wider text-[#3A4A5A] flex-shrink-0 mr-1">Campaigns</span>
       {entries.map(([c, count]) => {
@@ -1294,7 +1298,7 @@ function TzFilterPills({ tzFilters, setTzFilters, leads }) {
   })
 
   return (
-    <div ref={ref} className="flex gap-2 px-6 pb-2 overflow-x-auto items-center"
+    <div ref={ref} className="flex gap-2 px-3 md:px-6 pb-2 overflow-x-auto items-center"
       style={{ scrollbarWidth: 'none', msOverflowStyle: 'none', cursor: 'grab', WebkitOverflowScrolling: 'touch' }}>
       <span className="text-[10px] font-mono uppercase tracking-wider text-[#3A4A5A] flex-shrink-0 mr-1">Time zones</span>
       {zones.map(z => {
@@ -1325,7 +1329,7 @@ function DragScrollPills({ stageFilter, setStageFilter, tags, leads }) {
   const safeTags = Array.isArray(tags) ? tags : []
   const safeLeads = Array.isArray(leads) ? leads : []
   return (
-    <div ref={ref} className="flex gap-2 px-6 pb-2 overflow-x-auto"
+    <div ref={ref} className="flex gap-2 px-3 md:px-6 pb-2 overflow-x-auto"
       style={{ scrollbarWidth: 'none', msOverflowStyle: 'none', cursor: 'grab', WebkitOverflowScrolling: 'touch' }}>
       <button onClick={() => setStageFilter('')}
         className="px-3 py-1 rounded-full text-xs whitespace-nowrap flex-shrink-0 border transition-all"
@@ -2013,13 +2017,14 @@ export default function Leads() {
 
   return (
     <div className="flex flex-col h-full animate-fade-in">
-      {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4 border-b border-[#1A2130] flex-shrink-0">
+      {/* Header — action buttons wrap onto a second row on narrow screens
+          so the 7-button toolbar doesn't overflow at 390px iPhone width. */}
+      <div className="flex flex-wrap items-center justify-between gap-y-2 px-3 md:px-6 py-3 md:py-4 border-b border-[#1A2130] flex-shrink-0">
         <div>
           <h1 className="text-xl font-display font-bold text-white">Leads</h1>
           <p className="text-xs text-[#5A6A7A] mt-0.5">{filtered.length} of {safeLeads.length} leads{selected.size > 0 ? ` · ${selected.size} selected` : ''}</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <button onClick={toggleAll}
             className="p-2 rounded-lg text-[#5A6A7A] hover:text-white hover:bg-[#1A2130] transition-colors" title="Select all">
             {selected.size === filtered.length && filtered.length > 0 ? <CheckSquare size={16} className="text-[#00E5C3]" /> : <Square size={16} />}
@@ -2131,10 +2136,12 @@ export default function Leads() {
         </div>
       )}
 
-      {/* Filters — compact top row + collapsible secondary filter strip */}
+      {/* Filters — compact top row + collapsible secondary filter strip.
+          Wraps on mobile so the search box gets full width and the sort/filter
+          buttons drop onto their own row. */}
       <div className="flex-shrink-0 border-b border-[#1A2130]" style={{ background: '#080B0F' }}>
-        <div className="flex items-center gap-2 px-6 py-2">
-          <div className="relative flex-1 max-w-xs">
+        <div className="flex items-center gap-2 px-3 md:px-6 py-2 flex-wrap">
+          <div className="relative flex-1 min-w-[180px] md:max-w-xs">
             <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[#5A6A7A]" />
             <input value={search} onChange={e => setSearch(e.target.value)}
               placeholder="Search name, phone, email, zip…"
@@ -2183,7 +2190,7 @@ export default function Leads() {
       {/* Content */}
       {view === 'list' ? (
         <div ref={listScrollRef} onScroll={handleListScroll}
-          className="flex-1 overflow-y-auto p-5 space-y-3">
+          className="flex-1 overflow-y-auto p-3 md:p-5 space-y-3">
           {filtered.map(lead => (
             <LeadCard key={lead.id} lead={lead}
               selected={selected.has(lead.id)}
