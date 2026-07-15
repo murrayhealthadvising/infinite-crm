@@ -3,12 +3,60 @@
 @tailwind utilities;
 
 * { box-sizing: border-box; }
+
+/* Full app height that respects iOS URL bar showing/hiding.
+   100vh includes the hidden URL bar (so content spills below the visible area
+   when the bar is showing). 100dvh tracks the actual visible viewport in real
+   time. --app-height gets used by anything that needs true full-height on
+   iOS (Layout.jsx). Falls back to 100vh in browsers that don't support dvh. */
+:root {
+  --app-height: 100vh;
+  --app-height: 100dvh;
+}
+
 body {
   background: #080B0F;
   color: #E8EDF5;
   font-family: 'DM Sans', sans-serif;
   -webkit-font-smoothing: antialiased;
+  /* Remove the blue flash iOS puts on tapped elements. Individual buttons can
+     re-enable via CSS if they want the effect. */
+  -webkit-tap-highlight-color: transparent;
+  /* Prevent horizontal scroll from wide elements at narrow widths. */
+  overflow-x: hidden;
 }
+
+/* Prevent iOS auto-zoom when focusing text inputs. iOS zooms IN whenever an
+   input has computed font-size < 16px. Bump the base to 16px on iOS-sized
+   viewports only — desktop stays with its normal Tailwind sizing. */
+@media (max-width: 640px) {
+  input[type="text"],
+  input[type="email"],
+  input[type="tel"],
+  input[type="password"],
+  input[type="number"],
+  input[type="search"],
+  input[type="url"],
+  input[type="date"],
+  input[type="datetime-local"],
+  input:not([type]),
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+}
+
+/* Safe-area padding on the outermost container so the notch and home
+   indicator don't crop content. Applied via Tailwind's arbitrary values
+   inside components, but a body-level fallback keeps nothing from being
+   clipped by default. */
+body {
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #1A2130; border-radius: 4px; }

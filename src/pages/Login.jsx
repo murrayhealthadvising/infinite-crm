@@ -66,7 +66,7 @@ export default function Login() {
   }[mode]
 
   return (
-    <div className="min-h-screen flex items-center justify-center" style={{ background: '#080B0F' }}>
+    <div className="flex items-center justify-center px-4" style={{ background: '#080B0F', minHeight: 'var(--app-height, 100vh)' }}>
       <div className="w-full max-w-sm">
         {/* Logo */}
         <div className="flex items-center justify-center gap-3 mb-10">
