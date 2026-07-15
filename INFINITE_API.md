@@ -149,7 +149,43 @@ Valid `type` values match the CRM's activity kinds: `call`, `text`, `email`, `no
 
 Response: `{ "ok": true }` (201).
 
-### 6. List available stages / tags
+### 6. Push a contact to Nic's Warm Bucket
+
+```
+POST /warm-bucket
+```
+
+Use this when Kam has decided a contact is high-priority and needs a human callback. The contact shows up in Nic's Warm Bucket page with a "High priority" badge, sorted above the PitchPrfct auto-scan results. Nic can then call, promote to a CRM stage, or dismiss.
+
+Body:
+```json
+{
+  "phone": "+18325550101",
+  "firstName": "Jane",
+  "lastName": "Doe",
+  "email": "jane@example.com",
+  "state": "TX",
+  "zip": "77008",
+  "reason": "Asked about family plan with dental, mentioned husband self-employed",
+  "note": "She wants callback after 6pm CT",
+  "priority": 4,
+  "externalId": "kam-warmbucket-9421"
+}
+```
+
+- `phone` is required. Everything else is optional.
+- `priority` is 1–5 (default 3). Higher = more urgent; the bucket sorts by priority.
+- `reason` and `note` both show up in the focus view — use `reason` for the AI's short summary ("why this one matters") and `note` for detail Nic will want in front of him when calling.
+- `externalId` is your own identifier; used for idempotency, so retrying the same POST won't duplicate.
+
+Response (201 Created):
+```json
+{ "ok": true, "entry": { "id": 42, "phone": "+18325550101", ... }, "action": "queued" }
+```
+
+Idempotent — resending with the same phone updates the same entry instead of duplicating.
+
+### 7. List available stages / tags
 
 ```
 GET /stages

@@ -79,6 +79,7 @@ export default function WarmBucket() {
   const [hours, setHours] = useState(24)
   const [scanning, setScanning] = useState(false)
   const [matches, setMatches] = useState([])
+  const [queueEntries, setQueueEntries] = useState([])  // pushed via public API by Kam
   const [scanNote, setScanNote] = useState(null)
   const [error, setError] = useState(null)
   const [dismissed, setDismissed] = useState(() => new Set())
@@ -97,21 +98,21 @@ export default function WarmBucket() {
   ]
   const safeLeads = Array.isArray(leads) ? leads : []
 
-  // Load persistent notes
-  useEffect(() => {
+  // Load persistent notes AND the manual queue (entries Kam pushed via API).
+  // Queue entries render as bucket contacts too, sitting alongside the PP
+  // scan results in the left rail — higher priority first.
+  const loadState = useCallback(async () => {
     if (!user?.id) return
-    let cancelled = false
-    supabase.from('warm_bucket_notes')
-      .select('pp_contact_uuid, note')
-      .eq('user_id', user.id)
-      .then(({ data }) => {
-        if (cancelled) return
-        const m = {}
-        for (const r of (data || [])) m[r.pp_contact_uuid] = r.note || ''
-        setNotes(m)
-      })
-    return () => { cancelled = true }
+    const [notesRes, queueRes] = await Promise.all([
+      supabase.from('warm_bucket_notes').select('pp_contact_uuid, note').eq('user_id', user.id),
+      supabase.from('warm_bucket_queue').select('*').eq('user_id', user.id).eq('status', 'pending').order('priority', { ascending: false }).order('created_at', { ascending: false }),
+    ])
+    const nm = {}
+    for (const r of (notesRes.data || [])) nm[r.pp_contact_uuid] = r.note || ''
+    setNotes(nm)
+    setQueueEntries(Array.isArray(queueRes.data) ? queueRes.data : [])
   }, [user?.id])
+  useEffect(() => { loadState() }, [loadState])
 
   const runScan = async () => {
     if (!user?.id) return
@@ -135,9 +136,31 @@ export default function WarmBucket() {
     setScanning(false)
   }
 
-  const visible = useMemo(() =>
-    matches.filter(m => !dismissed.has(m.pp_contact_uuid))
-  , [matches, dismissed])
+  // Unified visible list — PP scan matches + queue entries pushed via API.
+  // Queue entries first (they're explicitly high-priority via Kam), then PP
+  // scan results ordered as returned by the scan.
+  const visible = useMemo(() => {
+    const q = (queueEntries || []).map(e => ({
+      _kind: 'queue',
+      _key: `q:${e.id}`,
+      pp_contact_uuid: e.phone,  // used as identifier in dismissed set
+      queue_id: e.id,
+      first_name: e.first_name,
+      last_name: e.last_name,
+      phone: e.phone,
+      email: e.email,
+      state: e.state,
+      zip: e.zip,
+      priority: e.priority,
+      reason: e.reason,
+      queued_note: e.note,
+      source_label: `Pushed via API${e.external_id ? ` · ext:${e.external_id.slice(0, 8)}` : ''}`,
+      last_outbound_at: e.created_at,
+      recent_messages: [],  // no PP messages for queue-pushed contacts unless we look them up
+    }))
+    const pp = (matches || []).map(m => ({ _kind: 'pp', _key: `p:${m.pp_contact_uuid}`, ...m }))
+    return [...q, ...pp].filter(x => !dismissed.has(x.pp_contact_uuid))
+  }, [matches, queueEntries, dismissed])
 
   // Keep selectedIdx in bounds when visible list shrinks
   useEffect(() => {
@@ -171,9 +194,20 @@ export default function WarmBucket() {
     setSavingNote(prev => ({ ...prev, [uuid]: false }))
   }, [notes, user?.id])
 
-  const dismiss = (uuid) => {
-    setDismissed(prev => { const n = new Set(prev); n.add(uuid); return n })
-    // Advance to next remaining contact
+  const dismiss = async (item) => {
+    // `item` can be the string uuid (backward-compat) or the visible entry.
+    const entry = typeof item === 'string' ? visible.find(x => x.pp_contact_uuid === item) : item
+    const key = entry?.pp_contact_uuid || item
+    setDismissed(prev => { const n = new Set(prev); n.add(key); return n })
+    // For queue-pushed entries, persist the dismissal so a page reload doesn't
+    // resurrect it. PP scan matches stay session-only (re-scan brings them back).
+    if (entry?._kind === 'queue' && entry.queue_id) {
+      try {
+        await supabase.from('warm_bucket_queue')
+          .update({ status: 'dismissed' })
+          .eq('id', entry.queue_id)
+      } catch (e) { console.error('dismiss queue entry failed:', e) }
+    }
     setSelectedIdx(i => Math.max(0, i))
   }
 
@@ -209,7 +243,15 @@ export default function WarmBucket() {
         await supabase.from('warm_bucket_notes').delete()
           .eq('user_id', user.id).eq('pp_contact_uuid', current.pp_contact_uuid)
       } catch {}
-      dismiss(current.pp_contact_uuid)
+      // Queue entries get marked 'contacted' so they don't come back either.
+      if (current._kind === 'queue' && current.queue_id) {
+        try {
+          await supabase.from('warm_bucket_queue')
+            .update({ status: 'contacted' })
+            .eq('id', current.queue_id)
+        } catch (e) { console.error('mark queue entry contacted failed:', e) }
+      }
+      dismiss(current)
       const label = safeTags.find(t => t.id === stageId)?.label || stageId
       setMsg({ type: 'success', text: `${fullName(current)} → ${label}`, leadId: newLead?.id })
       setTimeout(() => setMsg(null), 6000)
@@ -230,7 +272,7 @@ export default function WarmBucket() {
       if (!visible.length) return
       if (e.key === 'j' || e.key === 'ArrowDown') { e.preventDefault(); setSelectedIdx(i => Math.min(visible.length - 1, i + 1)) }
       else if (e.key === 'k' || e.key === 'ArrowUp') { e.preventDefault(); setSelectedIdx(i => Math.max(0, i - 1)) }
-      else if (e.key === 'x' && current) { dismiss(current.pp_contact_uuid) }
+      else if (e.key === 'x' && current) { dismiss(current) }
       else if (e.key === 'c' && current?.phone) { window.location.href = `tel:${current.phone}` }
     }
     window.addEventListener('keydown', onKey)
@@ -350,16 +392,27 @@ export default function WarmBucket() {
                 const isSelected = i === selectedIdx
                 const since = c.last_outbound_at ? formatDistanceToNow(new Date(c.last_outbound_at)) : ''
                 return (
-                  <button key={c.pp_contact_uuid}
+                  <button key={c._key || c.pp_contact_uuid}
                     onClick={() => setSelectedIdx(i)}
                     className={`w-full text-left px-3 py-2 border-l-2 transition-colors ${
                       isSelected ? 'border-[#F97316] bg-[#F9731615]' : 'border-transparent hover:bg-[#0E1318]'
                     }`}>
-                    <p className={`text-xs font-semibold truncate ${isSelected ? 'text-white' : 'text-[#C0D0E0]'}`}>
-                      {fullName(c)}
-                    </p>
+                    <div className="flex items-center justify-between gap-2">
+                      <p className={`text-xs font-semibold truncate ${isSelected ? 'text-white' : 'text-[#C0D0E0]'}`}>
+                        {fullName(c)}
+                      </p>
+                      {c._kind === 'queue' && (
+                        <span className="text-[9px] font-mono px-1 rounded flex-shrink-0"
+                          style={{ background: '#F9731625', color: '#F97316' }}
+                          title="High-priority push via API">
+                          P{c.priority || 3}
+                        </span>
+                      )}
+                    </div>
                     <p className="text-[10px] text-[#5A6A7A] font-mono truncate">{displayPhone(c.phone) || c.phone}</p>
-                    <p className="text-[10px] text-[#F97316] font-mono mt-0.5">silent {since}</p>
+                    <p className="text-[10px] text-[#F97316] font-mono mt-0.5">
+                      {c._kind === 'queue' ? 'API push' : `silent ${since}`}
+                    </p>
                   </button>
                 )
               })}
@@ -390,8 +443,15 @@ export default function WarmBucket() {
                       <User size={20} />
                     </div>
                     <div className="min-w-0">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <h2 className="text-xl font-bold text-white truncate">{fullName(current)}</h2>
+                        {current._kind === 'queue' && (
+                          <span className="text-[10px] px-2 py-0.5 rounded font-mono inline-flex items-center gap-1"
+                            style={{ background: '#F9731615', color: '#F97316', border: '1px solid #F9731640' }}
+                            title="Pushed to your bucket via the Infinite API">
+                            High priority · P{current.priority || 3}
+                          </span>
+                        )}
                         {existingLead && (
                           <button onClick={() => navigate(`/leads/${existingLead.id}`)}
                             className="text-[10px] px-2 py-0.5 rounded font-mono inline-flex items-center gap-1"
@@ -449,7 +509,7 @@ export default function WarmBucket() {
                       <StagePicker stages={safeTags} onPick={promote} onCancel={() => setPickerOpen(false)} anchor="left" />
                     )}
                   </div>
-                  <button onClick={() => dismiss(current.pp_contact_uuid)}
+                  <button onClick={() => dismiss(current)}
                     className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border border-[#EF444440] text-[#EF4444] hover:bg-[#EF444415]">
                     <X size={13} /> Dismiss (x)
                   </button>
@@ -468,6 +528,58 @@ export default function WarmBucket() {
                   </button>
                 </div>
               </div>
+
+              {/* Queue-push reason (only for entries pushed via API by Kam etc.) */}
+              {current._kind === 'queue' && (current.reason || current.queued_note) && (
+                <div className="rounded-xl border border-[#F9731640] overflow-hidden"
+                  style={{ background: '#F9731608' }}>
+                  <div className="px-4 py-2 border-b border-[#F9731640] flex items-center justify-between">
+                    <p className="text-[10px] font-mono uppercase tracking-wider text-[#F97316]">
+                      Why this is in your bucket
+                    </p>
+                    <span className="text-[10px] text-[#5A6A7A] font-mono">
+                      {current.source_label || 'pushed'} · priority {current.priority || 3}
+                    </span>
+                  </div>
+                  <div className="px-4 py-3">
+                    {current.reason && (
+                      <p className="text-sm text-[#F97316] mb-2">{current.reason}</p>
+                    )}
+                    {current.queued_note && (
+                      <p className="text-xs text-[#C0D0E0] whitespace-pre-wrap leading-snug">{current.queued_note}</p>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* PitchPrfct contact context — fields PP knows about this person.
+                  Only shows for PP-scanned contacts (queue entries have their
+                  own info block above). */}
+              {current._kind === 'pp' && (current.email || current.state || current.zip || current.city || current.dob || current.source || current.campaign || (current.custom_fields && Object.keys(current.custom_fields).length > 0)) && (
+                <div className="rounded-xl border border-[#8B5CF640] overflow-hidden"
+                  style={{ background: '#8B5CF608' }}>
+                  <div className="px-4 py-2 border-b border-[#8B5CF640]">
+                    <p className="text-[10px] font-mono uppercase tracking-wider text-[#8B5CF6]">From PitchPrfct contact record</p>
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-3 px-4 py-3">
+                    {[
+                      { label: 'Email', value: current.email },
+                      { label: 'State', value: current.state },
+                      { label: 'City', value: current.city },
+                      { label: 'Zip', value: current.zip },
+                      { label: 'DOB', value: current.dob },
+                      { label: 'Source', value: current.source },
+                      { label: 'Campaign', value: current.campaign },
+                      ...Object.entries(current.custom_fields || {}).map(([k, v]) => ({ label: k, value: v })),
+                    ].filter(f => f.value).map((f, i) => (
+                      <div key={f.label + i} className="min-w-0">
+                        <p className="text-[9px] uppercase tracking-wider text-[#5A6A7A] mb-0.5">{f.label}</p>
+                        <p className="text-xs text-white truncate" title={f.value}>{f.value}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Lead context (if they're already in Infinite) */}
               {existingLead && (

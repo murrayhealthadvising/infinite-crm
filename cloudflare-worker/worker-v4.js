@@ -782,6 +782,57 @@ async function handleApiV1(url, req, env, ctx) {
       }
     }
 
+    // POST /warm-bucket — Kam (or any external automation) pushes a high-
+    // priority contact into Nic's Warm Bucket for a callback. Idempotent by
+    // (user_id, phone) — retries with the same phone update the same row
+    // instead of duplicating. Optional externalId lets Kam track its own
+    // reference. Scope: warm_bucket:write (added to default key scopes).
+    //
+    // Body:
+    //   { phone: "+1...", firstName?, lastName?, email?, state?, zip?,
+    //     note?, reason?, priority? (1-5), externalId? }
+    if (method === 'POST' && path === '/warm-bucket') {
+      // Reuse leads:write since callers who can create leads should be able
+      // to add to the bucket. (Separate scope not worth the complexity for MVP.)
+      if (!hasScope(auth, 'leads:write')) return jsonResp({ error: 'Missing scope: leads:write' }, 403)
+      const body = await req.json().catch(() => null)
+      if (!body || typeof body !== 'object') return jsonResp({ error: 'Body must be JSON object' }, 400)
+      const phoneE164 = coercePhoneE164(body.phone)
+      if (!phoneE164) return jsonResp({ error: 'valid phone required' }, 400)
+      const priority = Math.max(1, Math.min(5, parseInt(body.priority, 10) || 3))
+      const row = {
+        user_id: auth.userId,
+        phone: phoneE164,
+        first_name: body.firstName || null,
+        last_name: body.lastName || null,
+        email: (body.email || '').toLowerCase() || null,
+        state: body.state || null,
+        zip: body.zip || null,
+        note: body.note || null,
+        reason: body.reason || null,
+        priority,
+        source: 'api',
+        external_id: body.externalId || null,
+        status: 'pending',
+      }
+      // Upsert by (user_id, phone) — retries safe.
+      const r = await fetch(`${env.SUPABASE_URL}/rest/v1/warm_bucket_queue?on_conflict=user_id,phone`, {
+        method: 'POST',
+        headers: {
+          apikey: env.SUPABASE_SERVICE_KEY,
+          authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}`,
+          'content-type': 'application/json',
+          prefer: 'return=representation,resolution=merge-duplicates',
+        },
+        body: JSON.stringify([row]),
+      })
+      const txt = await r.text()
+      if (!r.ok) return jsonResp({ error: `Warm bucket push failed: ${txt.slice(0, 200)}` }, 500)
+      let saved = null
+      try { saved = JSON.parse(txt)?.[0] || null } catch {}
+      return jsonResp({ ok: true, entry: saved, action: 'queued' }, 201)
+    }
+
     // GET /stages and GET /tags (alias — both return the user's tag/stage catalog)
     if (method === 'GET' && (path === '/stages' || path === '/tags')) {
       if (!hasScope(auth, 'stages:read')) return jsonResp({ error: 'Missing scope: stages:read' }, 403)
@@ -1186,11 +1237,40 @@ async function fetchPPContactsByTag(apiKey, tagName, limit = 200) {
         ? tags.map(t => (typeof t === 'string' ? t : (t?.name || t?.label || '')).toString()).filter(Boolean)
         : []
       if (tagNames.length && !tagNames.some(n => n.toLowerCase() === tagName.toLowerCase())) continue
+      // Custom fields: PP stores extra info in various shapes (custom_fields,
+      // customFields, meta, attributes). Merge everything we recognize into
+      // one bag so the focus view can display it.
+      const customBag = {}
+      const raw = c.custom_fields || c.customFields || c.attributes || c.meta || null
+      if (raw && typeof raw === 'object') {
+        // Array-of-{name,value} shape (common)
+        if (Array.isArray(raw)) {
+          for (const cf of raw) {
+            const k = (cf?.name || cf?.key || cf?.label || '').toString()
+            const v = cf?.value ?? cf?.val ?? ''
+            if (k) customBag[k] = String(v)
+          }
+        } else {
+          // Object map shape
+          for (const [k, v] of Object.entries(raw)) {
+            if (typeof v === 'string' || typeof v === 'number') customBag[k] = String(v)
+          }
+        }
+      }
       out.push({
         uuid,
         phone: c.phone || c.phone_number || c.phoneNumber || '',
         first_name: c.first_name || c.firstName || c.name?.split(' ')?.[0] || '',
         last_name: c.last_name || c.lastName || (c.name?.split(' ')?.slice(1).join(' ')) || '',
+        email: c.email || c.email_address || '',
+        state: c.state || c.state_code || customBag.state || customBag.State || '',
+        zip: c.zip || c.zip_code || c.postal_code || customBag.zip || customBag.Zip || '',
+        city: c.city || customBag.city || customBag.City || '',
+        dob: c.dob || c.date_of_birth || customBag.dob || customBag.DOB || '',
+        source: c.source || customBag.source || customBag.Source || '',
+        campaign: c.campaign || customBag.campaign || customBag.Campaign || '',
+        // Every recognized custom field, in a flat map so the UI can list them
+        custom_fields: customBag,
         tags: tagNames,
       })
     }
@@ -1544,9 +1624,9 @@ export default {
     // every release so a stale deploy is immediately visible.
     if (req.method === 'GET' && url.pathname === '/version') {
       return new Response(JSON.stringify({
-        version: 'v4.26',
-        parser: 'warm-bucket scan endpoint added',
-        deployed_check: 'if you see v4.26 here, the deploy succeeded',
+        version: 'v4.27',
+        parser: 'warm-bucket API push + PP contact context',
+        deployed_check: 'if you see v4.27 here, the deploy succeeded',
       }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
     }
     // Public API v1 — auth via X-API-Key. All routes under /api/v1/*.
@@ -1776,6 +1856,17 @@ export default {
               phone: c.phone,
               first_name: c.first_name,
               last_name: c.last_name,
+              // PP contact fields — surfaced in the focus view so Nic has
+              // real context on the call, not just a phone number.
+              email: c.email,
+              state: c.state,
+              zip: c.zip,
+              city: c.city,
+              dob: c.dob,
+              source: c.source,
+              campaign: c.campaign,
+              custom_fields: c.custom_fields,
+              tags: c.tags,
               last_outbound_at: newest.sent_at,
               recent_messages: history,
             })
