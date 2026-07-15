@@ -98,25 +98,32 @@ export default function ComposeEmailModal({ leadId, to: initialTo, onClose, defa
   // can detect the diff on send and merge those edits back into the HTML.
   const [templateHtml, setTemplateHtml] = useState('')
   const [originalTemplateBody, setOriginalTemplateBody] = useState('')
+  // Ref for the WYSIWYG contentEditable div. When a template with HTML is
+  // picked, we render its markup into this div and let Nic edit it directly.
+  // Whatever's in the div's innerHTML at send time IS what gets sent — no
+  // fragile substring substitution, no "template body couldn't be located"
+  // messages. What you see is what sends.
+  const editableRef = useRef(null)
   const applyTemplate = (tplId) => {
     setSelectedTpl(tplId)
     if (!tplId) {
       setTemplateHtml('')
       setOriginalTemplateBody('')
+      // Clear the editable div too
+      if (editableRef.current) editableRef.current.innerHTML = ''
       return
     }
     const t = (templates || []).find(t => t.id === tplId)
     if (!t) return
     const html = t.html ? substituteVars(t.html) : ''
-    // Derive the plain body from the HTML (not from Gmail's separate plain
-    // MIME part) so it matches exactly what's inside the HTML. This makes
-    // substring-based substitution reliable when the agent edits.
-    // Fall back to Gmail's plain part if the HTML is empty.
     const filledBody = html ? htmlToPlain(html) : substituteVars(t.body || '')
     setSubject(substituteVars(t.subject || ''))
     setBody(filledBody)
     setOriginalTemplateBody(filledBody)
     setTemplateHtml(html)
+    // Load the HTML directly into the editor. Done via ref so React doesn't
+    // re-render the div (which would wipe cursor position mid-edit).
+    if (editableRef.current) editableRef.current.innerHTML = html
   }
 
   // Has the agent edited the body since the template was applied?
@@ -302,14 +309,22 @@ export default function ComposeEmailModal({ leadId, to: initialTo, onClose, defa
       : user?.email
       ? `${user.email.split('@')[0]} <${user.email}>`
       : undefined
-    // Send the HTML that reflects the agent's edits (previewHtml handles the
-    // merge). If no template + no edits, previewHtml is empty and we fall
-    // back to plain-only, same as before.
+    // Send whatever's currently in the WYSIWYG editor as HTML (that IS what
+    // the recipient will see). Also derive plain text from the same div so
+    // the plain-text fallback matches. If no template, fall back to the
+    // previous plainToHtml / textarea behavior.
+    let htmlToSend = previewHtml || undefined
+    let plainToSend = body
+    if (templateHtml && editableRef.current) {
+      htmlToSend = editableRef.current.innerHTML
+      const derivedPlain = editableRef.current.innerText || editableRef.current.textContent || ''
+      if (derivedPlain.trim()) plainToSend = derivedPlain
+    }
     const res = await sendGmailMessage({
       to,
       subject,
-      body,
-      html: previewHtml || undefined,
+      body: plainToSend,
+      html: htmlToSend,
       fromName,
     })
     if (res.ok) {
@@ -416,43 +431,58 @@ export default function ComposeEmailModal({ leadId, to: initialTo, onClose, defa
               className="w-full px-3 py-2 bg-[#080B0F] border border-[#1A2130] rounded-lg text-sm text-white focus:outline-none focus:border-[#3B82F6]" />
           </div>
 
-          <div>
-            <label className="block text-[10px] font-mono uppercase tracking-wider text-[#5A6A7A] mb-1">
-              Body
-              {templateHtml && !hasBodyEdits && <span className="text-[#3B82F6] normal-case"> · HTML template — preview below</span>}
-              {hasBodyEdits && editsMergedIntoTemplate && <span className="text-[#10B981] normal-case"> · edits merged into HTML template ✓</span>}
-              {hasBodyEdits && !editsMergedIntoTemplate && <span className="text-[#F59E0B] normal-case"> · sending as plain text (template body couldn't be located)</span>}
-            </label>
-            <textarea ref={bodyRef} value={body} onChange={e => setBody(e.target.value)}
-              rows={templateHtml ? 5 : 10}
-              placeholder="Hi —&#10;&#10;Wanted to follow up on…"
-              className="w-full px-3 py-2.5 bg-[#080B0F] border border-[#1A2130] rounded-lg text-sm text-white focus:outline-none focus:border-[#3B82F6] resize-y" />
-            {templateHtml && hasBodyEdits && (
-              <div className="flex items-center justify-between gap-2 mt-1">
-                <p className="text-[10px] text-[#5A6A7A]">
-                  {editsMergedIntoTemplate
-                    ? 'Edits are baked into the HTML preview below — that\'s what the recipient sees.'
-                    : 'Couldn\'t match the template body — we\'ll send your edits as plain-formatted HTML so nothing is lost.'}
-                </p>
-                <button onClick={() => setBody(originalTemplateBody)}
+          {/* Body: two modes.
+              • Template picked → WYSIWYG contentEditable div. Click anywhere
+                on the rendered email and start typing. What you see is what
+                sends. No fragile substitution.
+              • No template → plain textarea. Wraps to simple HTML on send. */}
+          {templateHtml ? (
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-[10px] font-mono uppercase tracking-wider text-[#5A6A7A]">
+                  Email <span className="text-[#10B981] normal-case">· click any text to edit — what you see is what sends</span>
+                </label>
+                <button onClick={() => {
+                  if (editableRef.current) editableRef.current.innerHTML = templateHtml
+                }}
                   className="text-[10px] text-[#5A6A7A] hover:text-white underline whitespace-nowrap"
-                  title="Discard edits and restore the template body"
-                >
+                  title="Restore the original template">
                   Reset to template
                 </button>
               </div>
-            )}
-          </div>
-
-          {previewHtml && (
-            <div>
-              <label className="block text-[10px] font-mono uppercase tracking-wider text-[#5A6A7A] mb-1">Preview (what the recipient will see)</label>
-              <iframe
-                title="Email preview"
-                srcDoc={previewHtml}
-                sandbox=""
-                style={{ width: '100%', minHeight: '320px', maxHeight: '50vh', border: '1px solid #1A2130', borderRadius: '8px', background: 'white' }}
+              <div
+                ref={editableRef}
+                contentEditable
+                suppressContentEditableWarning
+                spellCheck
+                // Sync the text-only representation into `body` on each keystroke
+                // so counters / activity log get the current text (not the HTML).
+                onInput={e => {
+                  const el = e.currentTarget
+                  setBody(el.innerText || el.textContent || '')
+                }}
+                className="w-full px-4 py-3 rounded-lg text-sm text-black focus:outline-none overflow-y-auto"
+                style={{
+                  background: 'white',
+                  border: '1px solid #1A2130',
+                  borderRadius: '8px',
+                  minHeight: '320px',
+                  maxHeight: '55vh',
+                  lineHeight: 1.5,
+                }}
               />
+              <p className="text-[10px] text-[#5A6A7A] mt-1">
+                Bold/italic/link formatting from the template is preserved.
+                Cmd+B for bold, Cmd+I for italic while editing.
+              </p>
+            </div>
+          ) : (
+            <div>
+              <label className="block text-[10px] font-mono uppercase tracking-wider text-[#5A6A7A] mb-1">Body</label>
+              <textarea ref={bodyRef} value={body} onChange={e => setBody(e.target.value)}
+                rows={10}
+                placeholder="Hi —&#10;&#10;Wanted to follow up on…"
+                className="w-full px-3 py-2.5 bg-[#080B0F] border border-[#1A2130] rounded-lg text-sm text-white focus:outline-none focus:border-[#3B82F6] resize-y" />
             </div>
           )}
 
