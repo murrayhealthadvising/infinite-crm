@@ -1223,22 +1223,74 @@ async function enrollLeadInPitch(env, userId, lead, ctx) {
   return ok
 }
 
-// Cron scan: for every lead in 'awaiting' status, check PP conversation for
-// any inbound message. If found, flip status to 'responded'. Bounded to 20
-// leads per cron tick so we don't blow the PP rate limit even if a bunch land
-// at once. Only re-checks a lead every ~15 minutes.
+// Cron scan runs every minute and does TWO passes:
+//
+//   Pass 1 — response detection: for every lead in 'awaiting' status, check
+//   PP for inbound. If found, flip to 'responded'.
+//
+//   Pass 2 — self-heal for missed enrolls: find recent leads with NO
+//   pp_response_status set. If they have a PP contact with any outbound
+//   message, backfill status='awaiting' + write the "Auto-enrolled" activity
+//   row. This catches leads whose original verifyAndLogEnroll missed (worker
+//   restart, race condition, enrolled via a legacy code path pre-v4.23, etc.)
+//   so agents always see the response pill + activity for anything PP actually
+//   sent.
+//
+// Both passes bounded to 20 leads per tick so the PP rate limit stays safe.
 async function scanForResponses(env) {
   const now = new Date()
   const cutoff = new Date(now.getTime() - 15 * 60 * 1000).toISOString()
+
+  // ── Pass 1: awaiting → responded
   try {
     const url = `${env.SUPABASE_URL}/rest/v1/leads?pp_response_status=eq.awaiting&or=(pp_response_checked_at.is.null,pp_response_checked_at.lte.${encodeURIComponent(cutoff)})&select=id,phone,user_id&limit=20`
     const r = await fetch(url, {
       headers: { apikey: env.SUPABASE_SERVICE_KEY, authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}` },
     })
-    if (!r.ok) { console.error('[pp-scan] fetch awaiting HTTP', r.status); return }
+    if (r.ok) {
+      const leads = await r.json()
+      if (Array.isArray(leads) && leads.length) {
+        console.log('[pp-scan] checking', leads.length, 'awaiting leads')
+        for (const lead of leads) {
+          try {
+            const apiKey = await getAgentApiKey(env, lead.user_id)
+            if (!apiKey) continue
+            const normPhone = coercePhoneE164(lead.phone)
+            if (!normPhone) continue
+            const contactUuid = await findContactByPhone(apiKey, normPhone)
+            if (!contactUuid) {
+              await patchLeadPPStatus(env, lead.id, 'awaiting', now.toISOString())
+              continue
+            }
+            const messages = await fetchPPMessages(apiKey, contactUuid, 20)
+            const hasInbound = messages.some(m => /in/.test(m.direction) && !/out/.test(m.direction))
+            if (hasInbound) {
+              await patchLeadPPStatus(env, lead.id, 'responded', now.toISOString())
+              console.log('[pp-scan] lead', lead.id, 'RESPONDED')
+            } else {
+              await patchLeadPPStatus(env, lead.id, 'awaiting', now.toISOString())
+            }
+          } catch (e) { console.error('[pp-scan] error on lead', lead.id, String(e)) }
+        }
+      }
+    } else {
+      console.error('[pp-scan] pass1 HTTP', r.status)
+    }
+  } catch (e) { console.error('[pp-scan] pass1 threw', String(e)) }
+
+  // ── Pass 2: self-heal missed enrolls. Look at leads created in the last
+  //    7 days whose pp_response_status is null/unknown. If they have PP
+  //    outbound messages, they SHOULD be marked awaiting + logged.
+  try {
+    const lookback = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString()
+    const url = `${env.SUPABASE_URL}/rest/v1/leads?or=(pp_response_status.is.null,pp_response_status.eq.unknown)&created_at=gte.${encodeURIComponent(lookback)}&select=id,phone,user_id&limit=20&order=created_at.desc`
+    const r = await fetch(url, {
+      headers: { apikey: env.SUPABASE_SERVICE_KEY, authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}` },
+    })
+    if (!r.ok) { console.error('[pp-scan] pass2 HTTP', r.status); return }
     const leads = await r.json()
     if (!Array.isArray(leads) || leads.length === 0) return
-    console.log('[pp-scan] checking', leads.length, 'awaiting leads')
+    console.log('[pp-scan] self-heal checking', leads.length, 'unstatused leads')
     for (const lead of leads) {
       try {
         const apiKey = await getAgentApiKey(env, lead.user_id)
@@ -1246,21 +1298,30 @@ async function scanForResponses(env) {
         const normPhone = coercePhoneE164(lead.phone)
         if (!normPhone) continue
         const contactUuid = await findContactByPhone(apiKey, normPhone)
-        if (!contactUuid) {
-          await patchLeadPPStatus(env, lead.id, 'awaiting', now.toISOString())  // just bump checked
-          continue
-        }
+        if (!contactUuid) continue  // no PP contact = never enrolled, leave status null
         const messages = await fetchPPMessages(apiKey, contactUuid, 20)
+        const hasOutbound = messages.some(m => /out/.test(m.direction))
+        if (!hasOutbound) continue  // contact exists but no outbound = not really enrolled
+        // Something was sent. Determine current state.
         const hasInbound = messages.some(m => /in/.test(m.direction) && !/out/.test(m.direction))
-        if (hasInbound) {
-          await patchLeadPPStatus(env, lead.id, 'responded', now.toISOString())
-          console.log('[pp-scan] lead', lead.id, 'RESPONDED')
+        const newStatus = hasInbound ? 'responded' : 'awaiting'
+        await patchLeadPPStatus(env, lead.id, newStatus, now.toISOString())
+        // Backfill activity log entry if one doesn't already exist for this lead.
+        // Cheapest: query for any Auto-enrolled activity — insert only if absent.
+        const activityUrl = `${env.SUPABASE_URL}/rest/v1/activities?lead_id=eq.${lead.id}&note=like.Auto-enrolled*&select=id&limit=1`
+        const ar = await fetch(activityUrl, {
+          headers: { apikey: env.SUPABASE_SERVICE_KEY, authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}` },
+        })
+        const existing = ar.ok ? await ar.json() : []
+        if (!Array.isArray(existing) || existing.length === 0) {
+          await logEnrollActivity(env, lead.user_id, lead.id, '(recovered)')
+          console.log('[pp-scan] SELF-HEAL lead', lead.id, '→', newStatus, '+ backfilled activity')
         } else {
-          await patchLeadPPStatus(env, lead.id, 'awaiting', now.toISOString())
+          console.log('[pp-scan] SELF-HEAL lead', lead.id, '→', newStatus, '(activity already existed)')
         }
-      } catch (e) { console.error('[pp-scan] error on lead', lead.id, String(e)) }
+      } catch (e) { console.error('[pp-scan] self-heal error on lead', lead.id, String(e)) }
     }
-  } catch (e) { console.error('[pp-scan] threw', String(e)) }
+  } catch (e) { console.error('[pp-scan] pass2 threw', String(e)) }
 }
 
 // ─── PitchPrfct delay queue ────────────────────────────────────────────────
@@ -1429,9 +1490,9 @@ export default {
     // every release so a stale deploy is immediately visible.
     if (req.method === 'GET' && url.pathname === '/version') {
       return new Response(JSON.stringify({
-        version: 'v4.24',
-        parser: 'public Infinite API v1 (per-user keys)',
-        deployed_check: 'if you see v4.24 here, the deploy succeeded',
+        version: 'v4.25',
+        parser: 'cron self-heals missed enroll logging + response status',
+        deployed_check: 'if you see v4.25 here, the deploy succeeded',
       }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
     }
     // Public API v1 — auth via X-API-Key. All routes under /api/v1/*.
