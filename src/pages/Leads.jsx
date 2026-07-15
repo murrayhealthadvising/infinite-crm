@@ -33,7 +33,7 @@ import {
   Search, Plus, LayoutList, Columns, Phone, Copy, Home, DollarSign, Calendar,
   ExternalLink, ChevronDown, ChevronUp, X, Users, Check, Download, Upload,
   Square, CheckSquare, AlertCircle, CheckCircle, Trash2, AlertTriangle, RefreshCw,
-  MessageSquare, StickyNote, AtSign, Zap,
+  MessageSquare, StickyNote, AtSign, Zap, Tag as TagIcon,
 } from 'lucide-react'
 import { format, formatDistanceToNow, differenceInYears, parseISO } from 'date-fns'
 import clsx from 'clsx'
@@ -2003,6 +2003,39 @@ export default function Leads() {
     setTimeout(() => setImportResult(null), 4000)
   }
 
+  // Bulk stage change — moves every selected lead to the picked stage in one
+  // action. Iterates sequentially so we don't overwhelm Supabase / hit rate
+  // limits when a large batch (100+) is picked. Runs updateLeadStage which
+  // also stamps stage_changed_at so the "time in stage" counter resets.
+  const [bulkStagePickerOpen, setBulkStagePickerOpen] = useState(false)
+  const handleBulkChangeStage = async (stageId) => {
+    if (selected.size === 0 || typeof updateLeadStage !== 'function' || !stageId) return
+    setBulkStagePickerOpen(false)
+    const ids = Array.from(selected)
+    const stage = safeTags.find(t => t.id === stageId)
+    const label = stage?.label || stageId
+    // Fire updates sequentially in small batches so UI stays responsive.
+    let done = 0
+    for (const id of ids) {
+      try { await updateLeadStage(id, stageId); done++ } catch (e) { console.error('bulk stage change failed for', id, e) }
+    }
+    setSelected(new Set())
+    setImportResult({ ok: true, imported: 0, errors: 0, total: 0, msg: `Moved ${done} lead${done === 1 ? '' : 's'} → ${label}` })
+    setTimeout(() => setImportResult(null), 4000)
+  }
+  // Close picker on outside click
+  const bulkStagePickerRef = useRef(null)
+  useEffect(() => {
+    if (!bulkStagePickerOpen) return
+    const onClick = (e) => {
+      if (bulkStagePickerRef.current && !bulkStagePickerRef.current.contains(e.target)) {
+        setBulkStagePickerOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onClick)
+    return () => document.removeEventListener('mousedown', onClick)
+  }, [bulkStagePickerOpen])
+
   const handleDeleteAll = async () => {
     if (typeof deleteAllLeadsForUser !== 'function') return
     setDeletingAll(true)
@@ -2029,6 +2062,34 @@ export default function Leads() {
             className="p-2 rounded-lg text-[#5A6A7A] hover:text-white hover:bg-[#1A2130] transition-colors" title="Select all">
             {selected.size === filtered.length && filtered.length > 0 ? <CheckSquare size={16} className="text-[#00E5C3]" /> : <Square size={16} />}
           </button>
+          {/* Bulk stage change — appears when leads are selected. Opens a
+              stage picker; picking a stage moves every selected lead to it. */}
+          {selected.size > 0 && (
+            <div ref={bulkStagePickerRef} className="relative">
+              <button onClick={() => setBulkStagePickerOpen(v => !v)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border border-[#00E5C340] text-[#00E5C3] hover:bg-[#00E5C315] transition-colors"
+                title={`Change stage for ${selected.size} selected lead${selected.size === 1 ? '' : 's'}`}>
+                <TagIcon size={13} /> Change stage · {selected.size}
+                <ChevronDown size={11} className={clsx('transition-transform', bulkStagePickerOpen && 'rotate-180')} />
+              </button>
+              {bulkStagePickerOpen && (
+                <div className="absolute right-0 top-full mt-1 w-56 rounded-xl border border-[#1A2130] overflow-hidden z-30 shadow-xl max-h-96 overflow-y-auto"
+                  style={{ background: '#0E1318' }}>
+                  <div className="px-3 py-2 border-b border-[#1A2130]">
+                    <p className="text-[10px] font-mono uppercase tracking-wider text-[#00E5C3]">Move {selected.size} to…</p>
+                  </div>
+                  {safeTags.map(t => (
+                    <button key={t.id} onClick={() => handleBulkChangeStage(t.id)}
+                      className="w-full flex items-center gap-2 px-3 py-2.5 text-sm hover:bg-[#1A2130] transition-colors text-left"
+                      style={{ color: t.color }}>
+                      <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: t.color }} />
+                      <span className="truncate">{t.label}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           {selected.size > 0 && can?.deleteLeads && (
             <button onClick={handleBulkDelete}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border border-[#EF444440] text-[#EF4444] hover:bg-[#EF444415] transition-colors">
