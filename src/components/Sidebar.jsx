@@ -3,7 +3,7 @@ import { useState } from 'react'
 import {
   LayoutDashboard, Shield, Users, GitBranch, Sun,
   Mail, Calculator, Settings, ChevronLeft,
-  ChevronRight, Menu, LogOut, Cake,
+  ChevronRight, Menu, LogOut, Cake, Thermometer,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import ActionsCounter from './ActionsCounter'
@@ -15,6 +15,7 @@ const NAV_FULL = [
   { to: '/today',        icon: Sun,              label: 'Today' },
   { to: '/leads',        icon: Users,            label: 'Leads' },
   { to: '/pipeline',     icon: GitBranch,        label: 'Pipeline' },
+  { to: '/warm-bucket',  icon: Thermometer,      label: 'Warm Bucket' },
   { to: '/gmail-leads',  icon: Mail,             label: 'Gmail Leads' },
   null, // divider
   { to: '/calculator',   icon: Calculator,       label: 'Calculator' },
@@ -27,6 +28,7 @@ const NAV_RUNNER = [
   { to: '/today',       icon: Sun,         label: 'Today' },
   { to: '/leads',       icon: Users,       label: 'Leads' },
   { to: '/pipeline',    icon: GitBranch,   label: 'Pipeline' },
+  { to: '/warm-bucket', icon: Thermometer, label: 'Warm Bucket' },
   null,
   { to: '/settings',    icon: Settings,    label: 'Settings' },
 ]

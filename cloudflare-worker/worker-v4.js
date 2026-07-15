@@ -1144,6 +1144,60 @@ async function fetchPPMessages(apiKey, contactUuid, limit = 20) {
   return merged
 }
 
+// List PitchPrfct contacts filtered by tag name. PP's contact-list endpoint
+// isn't in a stable public spec for our use case, so we fan out across
+// several plausible URL shapes and merge the successful ones. Returns an
+// array of { uuid, phone, first_name, last_name, tags[] }.
+async function fetchPPContactsByTag(apiKey, tagName, limit = 200) {
+  const t = encodeURIComponent(tagName)
+  const attempts = [
+    `${PITCHPRFCT_API}/contacts?tag=${t}&take=${limit}`,
+    `${PITCHPRFCT_API}/contacts?tags=${t}&take=${limit}`,
+    `${PITCHPRFCT_API}/contacts?tag_name=${t}&take=${limit}`,
+    `${PITCHPRFCT_API}/contacts?filter%5Btag%5D=${t}&take=${limit}`,
+    `${PITCHPRFCT_API}/tags/${t}/contacts?take=${limit}`,
+  ]
+  const settled = await Promise.allSettled(attempts.map(async (u) => {
+    const r = await fetch(u, { headers: { 'x-api-key': apiKey } })
+    return { url: u, ok: r.ok, status: r.status, text: await r.text() }
+  }))
+  const ok = settled.filter(s => s.status === 'fulfilled' && s.value.ok).map(s => s.value)
+  const errors = settled.filter(s => s.status === 'fulfilled' && !s.value.ok).map(s => `${s.value.status}:${s.value.url.split('/api/v1')[1]}`)
+  if (!ok.length) {
+    console.error('[pp] fetchPPContactsByTag no 200s. attempts:', errors.join(' | '))
+    return { contacts: [], errors }
+  }
+  const seen = new Set()
+  const out = []
+  for (const r of ok) {
+    let raw
+    try { raw = JSON.parse(r.text) } catch { continue }
+    const list = (raw?.data?.rows || raw?.data?.contacts || raw?.data || raw?.contacts || (Array.isArray(raw) ? raw : []))
+    if (!Array.isArray(list)) continue
+    for (const c of list) {
+      const uuid = c.uuid || c.id || c.contact_id || null
+      if (!uuid || seen.has(uuid)) continue
+      seen.add(uuid)
+      // Client-side tag re-check: if the row has a tags array, confirm the
+      // Positive tag is present. Some PP endpoints ignore filter params and
+      // return everything — this keeps the bucket honest either way.
+      const tags = c.tags || c.contactTags || c.tag_list || []
+      const tagNames = Array.isArray(tags)
+        ? tags.map(t => (typeof t === 'string' ? t : (t?.name || t?.label || '')).toString()).filter(Boolean)
+        : []
+      if (tagNames.length && !tagNames.some(n => n.toLowerCase() === tagName.toLowerCase())) continue
+      out.push({
+        uuid,
+        phone: c.phone || c.phone_number || c.phoneNumber || '',
+        first_name: c.first_name || c.firstName || c.name?.split(' ')?.[0] || '',
+        last_name: c.last_name || c.lastName || (c.name?.split(' ')?.slice(1).join(' ')) || '',
+        tags: tagNames,
+      })
+    }
+  }
+  return { contacts: out, errors }
+}
+
 // Update the leads row's pp_response_status + checked timestamp.
 async function patchLeadPPStatus(env, leadId, status, checkedAt) {
   try {
@@ -1490,9 +1544,9 @@ export default {
     // every release so a stale deploy is immediately visible.
     if (req.method === 'GET' && url.pathname === '/version') {
       return new Response(JSON.stringify({
-        version: 'v4.25',
-        parser: 'cron self-heals missed enroll logging + response status',
-        deployed_check: 'if you see v4.25 here, the deploy succeeded',
+        version: 'v4.26',
+        parser: 'warm-bucket scan endpoint added',
+        deployed_check: 'if you see v4.26 here, the deploy succeeded',
       }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
     }
     // Public API v1 — auth via X-API-Key. All routes under /api/v1/*.
@@ -1652,6 +1706,89 @@ export default {
       return new Response(JSON.stringify({ ok: true, contact_uuid: cUuid, messages: trimmed }), {
         status: 200, headers: { 'content-type': 'application/json', ...CORS },
       })
+    }
+
+    // Warm Bucket scan — pulls PP contacts tagged "Positive" who've gone
+    // quiet after Nic's last outbound. Frontend calls this from the Warm
+    // Bucket page with an agent_id + hours window (default 24). Returns
+    // matches with the last 5 messages for immediate context.
+    //
+    //   GET /warm-bucket/scan?agent_id=UUID&hours=24&tag=Positive
+    //
+    // Filter logic:
+    //   1) Contact must have the tag (default "Positive", case-insensitive).
+    //   2) Contact's most recent message must be within the `hours` window
+    //      (so the bucket only shows RECENT positives, not months-old ones).
+    //   3) The newest message must be OUTBOUND (from us) AND older than 2h
+    //      (they went quiet after our last text — Nic's exact ask).
+    if (req.method === 'GET' && url.pathname === '/warm-bucket/scan') {
+      const wbAgent = url.searchParams.get('agent_id')
+      const wbHours = Math.max(1, Math.min(720, parseInt(url.searchParams.get('hours'), 10) || 24))
+      const wbTag = url.searchParams.get('tag') || 'Positive'
+      if (!wbAgent) {
+        return new Response(JSON.stringify({ error: 'missing agent_id' }), {
+          status: 400, headers: { 'content-type': 'application/json', ...CORS },
+        })
+      }
+      const wbKey = await getAgentApiKey(env, wbAgent)
+      if (!wbKey) {
+        return new Response(JSON.stringify({ error: 'no PitchPrfct API key saved for this agent' }), {
+          status: 404, headers: { 'content-type': 'application/json', ...CORS },
+        })
+      }
+      try {
+        const now = Date.now()
+        const windowStart = now - wbHours * 60 * 60 * 1000
+        const silentThreshold = now - 2 * 60 * 60 * 1000  // last outbound > 2h old
+        const { contacts, errors } = await fetchPPContactsByTag(wbKey, wbTag)
+        if (!contacts.length) {
+          return new Response(JSON.stringify({
+            ok: true, matches: [],
+            note: `No contacts returned from PP for tag "${wbTag}". Attempts: ${errors.join(', ') || 'all 200s but empty'}`,
+          }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
+        }
+        console.log('[warm-bucket] scanning', contacts.length, 'tagged contacts for agent', wbAgent, 'window', wbHours + 'h')
+        const matches = []
+        // Sequential to avoid PP rate-limit; keep bucket size sane.
+        const capped = contacts.slice(0, 60)
+        for (const c of capped) {
+          try {
+            const msgs = await fetchPPMessages(wbKey, c.uuid, 10)
+            if (!msgs.length) continue
+            // Sort newest first
+            msgs.sort((a, b) => (new Date(b.sent_at || 0)).getTime() - (new Date(a.sent_at || 0)).getTime())
+            const newest = msgs[0]
+            const newestTs = new Date(newest.sent_at || 0).getTime()
+            if (!isFinite(newestTs) || newestTs === 0) continue
+            // Rule 2: latest activity within the window
+            if (newestTs < windowStart) continue
+            // Rule 3: newest is outbound AND older than 2h
+            const isOutbound = /out/.test(newest.direction || '') && !/in/.test(newest.direction || '')
+            if (!isOutbound) continue
+            if (newestTs > silentThreshold) continue  // still within the 2h grace, not silent yet
+            // Match — keep last 5 messages (oldest→newest so the UI reads chronologically)
+            const last5 = msgs.slice(0, 5).reverse()
+            matches.push({
+              pp_contact_uuid: c.uuid,
+              phone: c.phone,
+              first_name: c.first_name,
+              last_name: c.last_name,
+              last_outbound_at: newest.sent_at,
+              recent_messages: last5,
+            })
+          } catch (e) {
+            console.error('[warm-bucket] contact', c.uuid, 'threw', String(e))
+          }
+        }
+        console.log('[warm-bucket]', matches.length, 'matches')
+        return new Response(JSON.stringify({ ok: true, matches, scanned: capped.length, tag: wbTag, hours: wbHours }), {
+          status: 200, headers: { 'content-type': 'application/json', ...CORS },
+        })
+      } catch (e) {
+        return new Response(JSON.stringify({ error: String(e?.message || e) }), {
+          status: 500, headers: { 'content-type': 'application/json', ...CORS },
+        })
+      }
     }
 
     // Manual workflow enrollment — used occasionally from the LeadDetail UI when

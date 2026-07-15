@@ -7,6 +7,7 @@ import PendingApproval from './pages/PendingApproval'
 import Dashboard from './pages/Dashboard'
 import Leads from './pages/Leads'
 import Pipeline from './pages/Pipeline'
+import WarmBucket from './pages/WarmBucket'
 import Today from './pages/Today'
 import GmailLeads from './pages/Gmail'
 import Calculator from './pages/Calculator'
@@ -87,7 +88,8 @@ function AuthGate() {
             <Route path="leads" element={<Leads />} />
             <Route path="leads/:id" element={<LeadDetail />} />
             {/* Old /dial-bucket route redirects to /pipeline — buckets are stages now */}
-            <Route path="dial-bucket" element={<Navigate to="/pipeline" replace />} />
+            <Route path="dial-bucket" element={<Navigate to="/warm-bucket" replace />} />
+            <Route path="warm-bucket" element={<WarmBucket />} />
             <Route path="pipeline" element={<Pipeline />} />
             <Route path="today" element={<Today />} />
             {/* Old workflow routes redirect to the unified Today page */}
