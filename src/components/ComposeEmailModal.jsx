@@ -70,12 +70,32 @@ export default function ComposeEmailModal({ leadId, to: initialTo, onClose, defa
   // Load templates the first time the modal opens (if connected)
   useEffect(() => { if (connected && templates === null) loadTemplates() }, [connected])
 
+  // Extract the plain-text content that lives inside an HTML string, using
+  // the browser's DOM parser. Preserves visible whitespace/newlines so the
+  // body is close to what the recipient sees, and matches what's actually in
+  // the HTML (Gmail's separate plain MIME part uses formatting markers like
+  // *bold* that don't appear in the HTML — using THAT as our "original body"
+  // meant the substring-match on send always failed for edited templates).
+  const htmlToPlain = (html) => {
+    if (!html || typeof document === 'undefined') return ''
+    try {
+      const parser = new DOMParser()
+      const doc = parser.parseFromString(html, 'text/html')
+      // Replace <br> and block-level closing tags with newlines so the plain
+      // text has the same shape as what the recipient sees.
+      doc.querySelectorAll('br').forEach(br => br.replaceWith('\n'))
+      doc.querySelectorAll('p, div, li, tr, h1, h2, h3, h4, h5, h6, blockquote').forEach(el => {
+        // Append a newline after each block so consecutive blocks separate.
+        el.appendChild(doc.createTextNode('\n'))
+      })
+      return (doc.body?.textContent || '').replace(/\n{3,}/g, '\n\n').trim()
+    } catch { return '' }
+  }
+
   // When a template is picked, we capture BOTH the plain and HTML versions
   // (with variables substituted). We ALSO remember the untouched plain body
   // (`originalTemplateBody`) so that when the agent edits the textarea, we
-  // can detect the diff on send and merge those edits back into the HTML —
-  // otherwise the recipient sees the template unchanged and the agent's
-  // tweaks are silently lost. This was the "just goes off the template" bug.
+  // can detect the diff on send and merge those edits back into the HTML.
   const [templateHtml, setTemplateHtml] = useState('')
   const [originalTemplateBody, setOriginalTemplateBody] = useState('')
   const applyTemplate = (tplId) => {
@@ -87,11 +107,16 @@ export default function ComposeEmailModal({ leadId, to: initialTo, onClose, defa
     }
     const t = (templates || []).find(t => t.id === tplId)
     if (!t) return
-    const filledBody = substituteVars(t.body || '')
+    const html = t.html ? substituteVars(t.html) : ''
+    // Derive the plain body from the HTML (not from Gmail's separate plain
+    // MIME part) so it matches exactly what's inside the HTML. This makes
+    // substring-based substitution reliable when the agent edits.
+    // Fall back to Gmail's plain part if the HTML is empty.
+    const filledBody = html ? htmlToPlain(html) : substituteVars(t.body || '')
     setSubject(substituteVars(t.subject || ''))
     setBody(filledBody)
     setOriginalTemplateBody(filledBody)
-    setTemplateHtml(t.html ? substituteVars(t.html) : '')
+    setTemplateHtml(html)
   }
 
   // Has the agent edited the body since the template was applied?
@@ -114,18 +139,103 @@ export default function ComposeEmailModal({ leadId, to: initialTo, onClose, defa
   // agent's edited body IN, preserving whatever header/footer/signature
   // styling the template had. Returns null if we can't confidently locate
   // the original body inside the HTML (caller then falls back to plainToHtml).
+  //
+  // Three-tier matching, cheapest first:
+  //   1) Direct substring — works when the plain body is literally in the HTML
+  //      (which is the common case now that originalTemplateBody is DERIVED
+  //      from the HTML via htmlToPlain).
+  //   2) DOM walk — parse HTML into a tree, find the text nodes that together
+  //      contain the body, and replace them (handles templates where each
+  //      paragraph is wrapped in tags but the visible text is unchanged).
+  //   3) First/last-line anchor — last-resort fallback that gives up cleanly.
+  const escapeAsHtml = (text) => String(text)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/\n/g, '<br>')
+
   const substituteBodyInHtml = (html, oldBody, newBody) => {
     if (!html || !oldBody) return null
-    // Direct substring match — works when the template stores the body verbatim
+
+    // 1) Direct substring match
     if (html.includes(oldBody)) {
-      const escaped = String(newBody)
-        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-        .replace(/\n/g, '<br>')
-      return html.replace(oldBody, escaped)
+      return html.replace(oldBody, escapeAsHtml(newBody))
     }
-    // Anchor-based fallback: find the first and last non-empty line of the
-    // original body inside the HTML. If both are found and in order, replace
-    // everything between with the edited body.
+
+    // 2) DOM walk — find contiguous text nodes whose combined textContent
+    //    contains oldBody, then splice in newBody. Handles the common case
+    //    where the HTML has <div>/<span>/<b> tags between visible words.
+    if (typeof document !== 'undefined') {
+      try {
+        const parser = new DOMParser()
+        const doc = parser.parseFromString(html, 'text/html')
+        const root = doc.body || doc.documentElement
+        // Collect all text nodes with their offsets in a combined string.
+        const nodes = []
+        let combined = ''
+        const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT, null)
+        let n
+        while ((n = walker.nextNode())) {
+          nodes.push({ node: n, start: combined.length, end: combined.length + n.textContent.length })
+          combined += n.textContent
+        }
+        // Normalize both for matching (collapse whitespace).
+        const norm = (s) => s.replace(/\s+/g, ' ').trim()
+        const needle = norm(oldBody)
+        const haystack = norm(combined)
+        if (needle && haystack.includes(needle)) {
+          // Find the same range in the ORIGINAL (non-normalized) combined text
+          // by matching whitespace-insensitively.
+          const startInHay = haystack.indexOf(needle)
+          const endInHay = startInHay + needle.length
+          // Walk combined and skip whitespace runs to map back to original offsets.
+          const mapNormToRaw = (targetNormOffset) => {
+            let rawOffset = 0, normOffset = 0, lastCharWasWs = true
+            while (rawOffset < combined.length && normOffset < targetNormOffset) {
+              const c = combined[rawOffset]
+              if (/\s/.test(c)) {
+                if (!lastCharWasWs) normOffset++
+                lastCharWasWs = true
+              } else {
+                normOffset++
+                lastCharWasWs = false
+              }
+              rawOffset++
+            }
+            return rawOffset
+          }
+          const rawStart = mapNormToRaw(startInHay)
+          const rawEnd = mapNormToRaw(endInHay)
+          // Identify text nodes covered by [rawStart, rawEnd).
+          const covered = nodes.filter(x => x.end > rawStart && x.start < rawEnd)
+          if (covered.length) {
+            // Replace the first covered node's slice with newBody (as text +
+            // <br> for line breaks), and clear the rest.
+            const first = covered[0]
+            const prefix = first.node.textContent.slice(0, Math.max(0, rawStart - first.start))
+            const last = covered[covered.length - 1]
+            const suffix = last.node.textContent.slice(Math.max(0, rawEnd - last.start))
+            // Build a fragment of new content: prefix text, then <br>-split newBody, then suffix text.
+            const parent = first.node.parentNode
+            const frag = doc.createDocumentFragment()
+            if (prefix) frag.appendChild(doc.createTextNode(prefix))
+            const lines = String(newBody).split('\n')
+            lines.forEach((line, i) => {
+              if (i > 0) frag.appendChild(doc.createElement('br'))
+              if (line) frag.appendChild(doc.createTextNode(line))
+            })
+            if (suffix) frag.appendChild(doc.createTextNode(suffix))
+            parent.replaceChild(frag, first.node)
+            // Remove the other covered nodes
+            for (let i = 1; i < covered.length; i++) {
+              const c = covered[i]
+              if (c.node.parentNode) c.node.parentNode.removeChild(c.node)
+            }
+            return root.innerHTML
+          }
+        }
+      } catch { /* fall through */ }
+    }
+
+    // 3) Anchor-based fallback: first + last non-empty line
     const lines = oldBody.split('\n').map(l => l.trim()).filter(Boolean)
     if (lines.length < 2) return null
     const first = lines[0]
@@ -133,10 +243,7 @@ export default function ComposeEmailModal({ leadId, to: initialTo, onClose, defa
     const startIdx = html.indexOf(first)
     const endIdx = html.lastIndexOf(last)
     if (startIdx < 0 || endIdx <= startIdx) return null
-    const escaped = String(newBody)
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-      .replace(/\n/g, '<br>')
-    return html.slice(0, startIdx) + escaped + html.slice(endIdx + last.length)
+    return html.slice(0, startIdx) + escapeAsHtml(newBody) + html.slice(endIdx + last.length)
   }
 
   // Preview HTML — reflects whatever WILL actually be sent (with edits applied).
