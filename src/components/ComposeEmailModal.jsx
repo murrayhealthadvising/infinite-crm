@@ -109,7 +109,6 @@ export default function ComposeEmailModal({ leadId, to: initialTo, onClose, defa
     if (!tplId) {
       setTemplateHtml('')
       setOriginalTemplateBody('')
-      // Clear the editable div too
       if (editableRef.current) editableRef.current.innerHTML = ''
       return
     }
@@ -121,10 +120,25 @@ export default function ComposeEmailModal({ leadId, to: initialTo, onClose, defa
     setBody(filledBody)
     setOriginalTemplateBody(filledBody)
     setTemplateHtml(html)
-    // Load the HTML directly into the editor. Done via ref so React doesn't
-    // re-render the div (which would wipe cursor position mid-edit).
-    if (editableRef.current) editableRef.current.innerHTML = html
+    // Note: DON'T set innerHTML here — the div hasn't rendered yet on the
+    // FIRST template pick (the conditional-render only mounts it when
+    // templateHtml is truthy, which happens on the NEXT render). The effect
+    // below runs post-mount and handles both first-time and subsequent picks.
   }
+
+  // Sync template HTML into the editor after React has mounted the div.
+  // Runs on every template change — including the very first pick, which was
+  // the "goes blank first time" bug. We only push into the div when the
+  // incoming HTML differs from what's already there so we don't wipe an
+  // in-progress edit if templateHtml is re-set to the same value.
+  useEffect(() => {
+    if (!editableRef.current) return
+    if (templateHtml && editableRef.current.innerHTML !== templateHtml) {
+      editableRef.current.innerHTML = templateHtml
+    } else if (!templateHtml) {
+      editableRef.current.innerHTML = ''
+    }
+  }, [templateHtml])
 
   // Has the agent edited the body since the template was applied?
   const hasBodyEdits = !!(originalTemplateBody && body !== originalTemplateBody)
