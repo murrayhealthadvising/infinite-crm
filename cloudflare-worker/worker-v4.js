@@ -1753,7 +1753,9 @@ export default {
         const capped = contacts.slice(0, 60)
         for (const c of capped) {
           try {
-            const msgs = await fetchPPMessages(wbKey, c.uuid, 10)
+            // Pull a fuller history (30) so the focus view in the CRM has real
+            // context for the callback, not just the 5 most-recent bubbles.
+            const msgs = await fetchPPMessages(wbKey, c.uuid, 30)
             if (!msgs.length) continue
             // Sort newest first
             msgs.sort((a, b) => (new Date(b.sent_at || 0)).getTime() - (new Date(a.sent_at || 0)).getTime())
@@ -1766,15 +1768,16 @@ export default {
             const isOutbound = /out/.test(newest.direction || '') && !/in/.test(newest.direction || '')
             if (!isOutbound) continue
             if (newestTs > silentThreshold) continue  // still within the 2h grace, not silent yet
-            // Match — keep last 5 messages (oldest→newest so the UI reads chronologically)
-            const last5 = msgs.slice(0, 5).reverse()
+            // Match — keep the full recent history (oldest→newest so the UI
+            // reads chronologically). Focus mode shows all of them.
+            const history = msgs.slice().reverse()
             matches.push({
               pp_contact_uuid: c.uuid,
               phone: c.phone,
               first_name: c.first_name,
               last_name: c.last_name,
               last_outbound_at: newest.sent_at,
-              recent_messages: last5,
+              recent_messages: history,
             })
           } catch (e) {
             console.error('[warm-bucket] contact', c.uuid, 'threw', String(e))

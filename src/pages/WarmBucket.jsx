@@ -1,18 +1,19 @@
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Thermometer, RefreshCw, Search, X, Phone, Send, User, Clock,
-  ChevronDown, AlertCircle, CheckCircle, Loader,
+  Thermometer, Search, X, Phone, Send, User, Clock,
+  ChevronDown, ChevronLeft, ChevronRight,
+  AlertCircle, CheckCircle, Loader, Copy, Check, MapPin, ExternalLink,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { supabase } from '../lib/supabase'
 import { displayPhone } from '../lib/phone'
+import { timezoneFor, tzLabelFor, localTimeFor } from '../lib/timezone'
 import { format, formatDistanceToNow } from 'date-fns'
 
-// Warm Bucket — pulls contacts tagged "Positive" in PitchPrfct who've gone
-// quiet after Nic's last outbound. Manually triggered (Scan button + hours
-// input), keeps everyone visible until Nic X's them out or promotes them
-// to a real lead in the CRM.
+// Warm Bucket — one contact at a time, everything you need to make the call.
+// Left rail: minimized list to skip/next between contacts.
+// Center: full conversation, existing lead context, notes, actions.
 
 const WORKER_URL = (import.meta.env.VITE_CRM_WORKER_URL
   || 'https://infinite-crm-webhook.murrayhealthadvising.workers.dev').replace(/\/+$/, '')
@@ -21,29 +22,31 @@ function fullName(c) {
   return [c?.first_name, c?.last_name].filter(Boolean).join(' ').trim() || '(no name)'
 }
 
-// Compact message bubble — matches the ConversationPanel style.
-function MessageBubble({ msg }) {
+// Chat bubble — larger + spacious for the focus view.
+function MessageBubble({ msg, spacious = false }) {
   const isOut = /out/.test(msg?.direction || '') && !/in/.test(msg?.direction || '')
   const time = msg?.sent_at
     ? format(new Date(msg.sent_at), 'MMM d h:mma').toLowerCase()
     : ''
   return (
     <div className={`flex ${isOut ? 'justify-end' : 'justify-start'}`}>
-      <div className={`max-w-[85%] rounded-lg px-2.5 py-1.5 border`}
+      <div className={`${spacious ? 'max-w-[75%] px-3 py-2' : 'max-w-[85%] px-2.5 py-1.5'} rounded-lg border`}
         style={{
           background: isOut ? '#3B82F615' : '#0E1318',
           borderColor: isOut ? '#3B82F640' : '#1A2130',
         }}>
-        <p className="text-xs text-[#C0D0E0] leading-snug whitespace-pre-wrap break-words">{msg?.body || '(empty)'}</p>
-        <p className="text-[9px] text-[#5A6A7A] font-mono mt-0.5">{time}</p>
+        <p className={`text-[#E8EDF5] leading-snug whitespace-pre-wrap break-words ${spacious ? 'text-sm' : 'text-xs'}`}>
+          {msg?.body || '(empty)'}
+        </p>
+        <p className={`${spacious ? 'text-[10px]' : 'text-[9px]'} text-[#5A6A7A] font-mono mt-1 ${isOut ? 'text-right' : ''}`}>
+          {isOut ? 'you' : 'them'} · {time}
+        </p>
       </div>
     </div>
   )
 }
 
-// Stage picker dropdown — used when promoting a warm-bucket contact to a
-// real lead. No default; Nic must pick.
-function StagePicker({ stages, onPick, onCancel }) {
+function StagePicker({ stages, onPick, onCancel, anchor = 'right' }) {
   const ref = useRef(null)
   useEffect(() => {
     const onClick = e => { if (ref.current && !ref.current.contains(e.target)) onCancel() }
@@ -51,7 +54,8 @@ function StagePicker({ stages, onPick, onCancel }) {
     return () => document.removeEventListener('mousedown', onClick)
   }, [onCancel])
   return (
-    <div ref={ref} className="absolute right-0 top-full mt-1 w-48 rounded-xl border border-[#1A2130] overflow-hidden z-30 shadow-xl max-h-72 overflow-y-auto"
+    <div ref={ref}
+      className={`absolute ${anchor === 'right' ? 'right-0' : 'left-0'} top-full mt-1 w-52 rounded-xl border border-[#1A2130] overflow-hidden z-30 shadow-2xl max-h-72 overflow-y-auto`}
       style={{ background: '#0E1318' }}>
       <div className="px-3 py-2 border-b border-[#1A2130]">
         <p className="text-[10px] font-mono uppercase tracking-wider text-[#00E5C3]">Set stage → add to CRM</p>
@@ -69,29 +73,31 @@ function StagePicker({ stages, onPick, onCancel }) {
 }
 
 export default function WarmBucket() {
-  const { user, tags, addLead } = useApp()
+  const { user, tags, leads, addLead } = useApp()
   const navigate = useNavigate()
+
   const [hours, setHours] = useState(24)
   const [scanning, setScanning] = useState(false)
   const [matches, setMatches] = useState([])
   const [scanNote, setScanNote] = useState(null)
   const [error, setError] = useState(null)
-  const [dismissed, setDismissed] = useState(() => new Set())  // session-only
-  const [notes, setNotes] = useState({})  // uuid → text
-  const [notesDirty, setNotesDirty] = useState({})  // uuid → boolean
+  const [dismissed, setDismissed] = useState(() => new Set())
+  const [selectedIdx, setSelectedIdx] = useState(0)
+  const [notes, setNotes] = useState({})
+  const [notesDirty, setNotesDirty] = useState({})
   const [savingNote, setSavingNote] = useState({})
-  const [pickerOpenFor, setPickerOpenFor] = useState(null)
+  const [pickerOpen, setPickerOpen] = useState(false)
   const [promoting, setPromoting] = useState(null)
   const [msg, setMsg] = useState(null)
+  const [copiedField, setCopiedField] = useState('')
 
   const safeTags = Array.isArray(tags) && tags.length ? tags : [
     { id: 'interested', label: 'Interested', color: '#3B82F6' },
     { id: 'apt', label: 'Appointment', color: '#F59E0B' },
   ]
+  const safeLeads = Array.isArray(leads) ? leads : []
 
-  // Load any existing notes for the current user from Supabase on mount.
-  // Keyed by pp_contact_uuid so a note survives the contact leaving and
-  // re-entering the bucket on subsequent scans.
+  // Load persistent notes
   useEffect(() => {
     if (!user?.id) return
     let cancelled = false
@@ -119,6 +125,8 @@ export default function WarmBucket() {
         setMatches([])
       } else {
         setMatches(Array.isArray(j.matches) ? j.matches : [])
+        setSelectedIdx(0)
+        setDismissed(new Set())
         if (j.note) setScanNote(j.note)
       }
     } catch (e) {
@@ -127,37 +135,58 @@ export default function WarmBucket() {
     setScanning(false)
   }
 
-  const dismiss = (uuid) => {
-    setDismissed(prev => { const n = new Set(prev); n.add(uuid); return n })
-  }
+  const visible = useMemo(() =>
+    matches.filter(m => !dismissed.has(m.pp_contact_uuid))
+  , [matches, dismissed])
 
-  const saveNote = async (uuid) => {
-    if (!user?.id) return
+  // Keep selectedIdx in bounds when visible list shrinks
+  useEffect(() => {
+    if (selectedIdx >= visible.length && visible.length > 0) setSelectedIdx(0)
+  }, [visible.length, selectedIdx])
+
+  const current = visible[selectedIdx] || null
+
+  // Look up any existing lead for the current contact by phone. Gives the
+  // focus view lead-context (state, income, DOB, etc.) if they were previously
+  // imported. Falls back to warm-bucket-only display when nothing matches.
+  const existingLead = useMemo(() => {
+    if (!current?.phone) return null
+    const digits = String(current.phone).replace(/\D/g, '')
+    return safeLeads.find(l => {
+      const lp = String(l.phone || '').replace(/\D/g, '')
+      return lp && (lp === digits || lp.endsWith(digits.slice(-10)))
+    }) || null
+  }, [current?.phone, safeLeads])
+
+  // Save note (debounced-ish via blur + explicit save)
+  const saveNote = useCallback(async (uuid) => {
+    if (!user?.id || !uuid) return
     setSavingNote(prev => ({ ...prev, [uuid]: true }))
     try {
       const text = notes[uuid] || ''
       await supabase.from('warm_bucket_notes')
         .upsert({ user_id: user.id, pp_contact_uuid: uuid, note: text }, { onConflict: 'user_id,pp_contact_uuid' })
       setNotesDirty(prev => ({ ...prev, [uuid]: false }))
-    } catch (e) {
-      console.error('save note failed:', e)
-    }
+    } catch (e) { console.error('save note failed:', e) }
     setSavingNote(prev => ({ ...prev, [uuid]: false }))
+  }, [notes, user?.id])
+
+  const dismiss = (uuid) => {
+    setDismissed(prev => { const n = new Set(prev); n.add(uuid); return n })
+    // Advance to next remaining contact
+    setSelectedIdx(i => Math.max(0, i))
   }
 
-  const promote = async (contact, stageId) => {
-    if (!user?.id || typeof addLead !== 'function') return
-    setPromoting(contact.pp_contact_uuid)
-    setPickerOpenFor(null)
+  const promote = async (stageId) => {
+    if (!current || !user?.id || typeof addLead !== 'function') return
+    setPromoting(current.pp_contact_uuid)
+    setPickerOpen(false)
     try {
-      const note = notes[contact.pp_contact_uuid] || ''
-      // Compose a starting notes body: Nic's warm-bucket note (if any) + a
-      // condensed record of the last few PP messages so context follows the
-      // lead into the CRM.
-      const messagesRecap = (contact.recent_messages || []).map(m => {
+      const note = notes[current.pp_contact_uuid] || ''
+      const messagesRecap = (current.recent_messages || []).map(m => {
         const dir = /out/.test(m.direction || '') && !/in/.test(m.direction || '') ? '→' : '←'
         const t = m.sent_at ? format(new Date(m.sent_at), 'MMM d h:mma').toLowerCase() : ''
-        return `${dir} ${t}: ${(m.body || '').slice(0, 200)}`
+        return `${dir} ${t}: ${(m.body || '').slice(0, 240)}`
       }).join('\n')
       const combinedNote = [
         note.trim(),
@@ -166,24 +195,23 @@ export default function WarmBucket() {
       ].filter(Boolean).join('\n')
 
       const newLead = await addLead({
-        first_name: contact.first_name || '',
-        last_name: contact.last_name || '',
-        phone: contact.phone,
+        first_name: current.first_name || '',
+        last_name: current.last_name || '',
+        phone: current.phone,
         source: 'warm-bucket',
         campaign: 'Warm Bucket (positive from PP)',
         stage: stageId,
         stage_changed_at: new Date().toISOString(),
         notes: combinedNote,
-        pp_response_status: 'responded',  // they're positive; keep the tag consistent
+        pp_response_status: 'responded',
       })
-      // Clean up the note from warm_bucket_notes since it's now on the lead.
       try {
         await supabase.from('warm_bucket_notes').delete()
-          .eq('user_id', user.id).eq('pp_contact_uuid', contact.pp_contact_uuid)
+          .eq('user_id', user.id).eq('pp_contact_uuid', current.pp_contact_uuid)
       } catch {}
-      dismiss(contact.pp_contact_uuid)
+      dismiss(current.pp_contact_uuid)
       const label = safeTags.find(t => t.id === stageId)?.label || stageId
-      setMsg({ type: 'success', text: `${fullName(contact)} → CRM as ${label}. Click name to open.`, leadId: newLead?.id })
+      setMsg({ type: 'success', text: `${fullName(current)} → ${label}`, leadId: newLead?.id })
       setTimeout(() => setMsg(null), 6000)
     } catch (e) {
       console.error('promote failed:', e)
@@ -193,24 +221,54 @@ export default function WarmBucket() {
     setPromoting(null)
   }
 
-  const visible = useMemo(() =>
-    matches.filter(m => !dismissed.has(m.pp_contact_uuid))
-  , [matches, dismissed])
+  // Keyboard: j/k = next/prev, ↓/↑, x = dismiss, c = call, m = focus note, / = new scan
+  useEffect(() => {
+    const onKey = (e) => {
+      const t = document.activeElement
+      const inField = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)
+      if (inField) return
+      if (!visible.length) return
+      if (e.key === 'j' || e.key === 'ArrowDown') { e.preventDefault(); setSelectedIdx(i => Math.min(visible.length - 1, i + 1)) }
+      else if (e.key === 'k' || e.key === 'ArrowUp') { e.preventDefault(); setSelectedIdx(i => Math.max(0, i - 1)) }
+      else if (e.key === 'x' && current) { dismiss(current.pp_contact_uuid) }
+      else if (e.key === 'c' && current?.phone) { window.location.href = `tel:${current.phone}` }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current, visible.length])
+
+  const copy = async (label, value) => {
+    if (!value) return
+    try { await navigator.clipboard.writeText(value); setCopiedField(label); setTimeout(() => setCopiedField(''), 1200) } catch {}
+  }
+
+  // Build a synthetic "lead-shaped" object so timezoneFor + localTimeFor
+  // work whether the contact has an existing lead or not.
+  const contactAsLead = useMemo(() => {
+    if (!current) return null
+    if (existingLead) return existingLead
+    return { phone: current.phone, state: '', zip: '' }
+  }, [current, existingLead])
+  const localTime = current ? localTimeFor(contactAsLead) : ''
+  const tzLabel = current ? tzLabelFor(contactAsLead) : ''
 
   return (
     <div className="flex flex-col h-full overflow-hidden animate-fade-in">
-      {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-y-2 px-3 md:px-6 py-3 md:py-4 border-b border-[#1A2130] flex-shrink-0">
+      {/* Top bar */}
+      <div className="flex flex-wrap items-center justify-between gap-y-2 px-3 md:px-6 py-3 border-b border-[#1A2130] flex-shrink-0"
+        style={{ background: '#0A0E14' }}>
         <div className="flex items-center gap-3 min-w-0">
           <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
             style={{ background: 'linear-gradient(135deg, #F97316, #EF4444)' }}>
             <Thermometer size={18} className="text-white" />
           </div>
           <div className="min-w-0">
-            <h1 className="text-xl font-display font-bold text-white">Warm Bucket</h1>
-            <p className="text-xs text-[#5A6A7A] mt-0.5 truncate">
-              Positive PitchPrfct contacts who went quiet after your last text.
-              Scan to pull the latest — dismissed contacts return on the next scan.
+            <h1 className="text-lg font-display font-bold text-white">Warm Bucket</h1>
+            <p className="text-[11px] text-[#5A6A7A] mt-0.5 truncate">
+              {visible.length > 0
+                ? `${selectedIdx + 1} of ${visible.length} · ↑↓ or j/k to move · c = call · x = dismiss`
+                : `Positive PitchPrfct contacts who went quiet after your last text`}
             </p>
           </div>
         </div>
@@ -223,7 +281,6 @@ export default function WarmBucket() {
               className="w-14 bg-transparent border-b border-[#1A2130] text-center text-white focus:outline-none focus:border-[#00E5C340]" />
             <span>hrs</span>
           </label>
-          {/* Quick shortcuts */}
           <div className="flex items-center gap-0.5">
             {[6, 24, 72, 168].map(h => (
               <button key={h} onClick={() => setHours(h)}
@@ -237,173 +294,265 @@ export default function WarmBucket() {
           <button onClick={runScan} disabled={scanning}
             className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold text-black transition-opacity hover:opacity-90 disabled:opacity-50"
             style={{ background: 'linear-gradient(135deg, #F97316, #EF4444)' }}>
-            {scanning ? <><Loader size={13} className="animate-spin" /> Scanning…</> : <><Search size={13} /> Scan PitchPrfct</>}
+            {scanning ? <><Loader size={13} className="animate-spin" /> Scanning…</> : <><Search size={13} /> Scan</>}
           </button>
         </div>
       </div>
 
+      {msg && (
+        <div className={`mx-3 md:mx-6 mt-3 flex items-start gap-2 px-3 py-2 rounded-lg text-xs border ${
+          msg.type === 'success'
+            ? 'bg-[#10B98115] text-[#10B981] border-[#10B98140]'
+            : 'bg-[#EF444415] text-[#EF4444] border-[#EF444440]'
+        }`}>
+          {msg.type === 'success' ? <CheckCircle size={13} className="flex-shrink-0 mt-0.5" /> : <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />}
+          <div className="flex-1">
+            <p>{msg.text}</p>
+            {msg.leadId && (
+              <button onClick={() => navigate(`/leads/${msg.leadId}`)} className="mt-1 underline hover:text-white">
+                Open lead →
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <div className="mx-3 md:mx-6 mt-3 p-3 rounded-lg border border-[#EF444440] text-xs text-[#EF4444]" style={{ background: '#EF444408' }}>
+          <p className="font-semibold mb-1">Scan failed</p>
+          <p>{error}</p>
+        </div>
+      )}
+      {scanNote && (
+        <div className="mx-3 md:mx-6 mt-3 p-3 rounded-lg border border-[#F59E0B40] text-xs text-[#F59E0B]" style={{ background: '#F59E0B08' }}>
+          {scanNote}
+        </div>
+      )}
+
       {/* Body */}
-      <div className="flex-1 overflow-y-auto p-3 md:p-6">
-        {msg && (
-          <div className={`mb-4 flex items-start gap-2 px-3 py-2 rounded-lg text-xs border ${
-            msg.type === 'success'
-              ? 'bg-[#10B98115] text-[#10B981] border-[#10B98140]'
-              : 'bg-[#EF444415] text-[#EF4444] border-[#EF444440]'
-          }`}>
-            {msg.type === 'success' ? <CheckCircle size={13} className="flex-shrink-0 mt-0.5" /> : <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />}
-            <div className="flex-1">
-              <p>{msg.text}</p>
-              {msg.leadId && (
-                <button onClick={() => navigate(`/leads/${msg.leadId}`)}
-                  className="mt-1 underline hover:text-white">
-                  Open lead →
-                </button>
-              )}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Minimized rail */}
+        <aside className="w-56 flex-shrink-0 border-r border-[#1A2130] overflow-y-auto"
+          style={{ background: '#0A0E14' }}>
+          <div className="px-3 py-2 border-b border-[#1A2130] sticky top-0 z-10"
+            style={{ background: '#0A0E14' }}>
+            <p className="text-[10px] font-mono uppercase tracking-wider text-[#F97316]">
+              Queue · {visible.length}
+            </p>
+          </div>
+          {visible.length === 0 ? (
+            <p className="p-3 text-[11px] text-[#5A6A7A] italic">
+              {matches.length === 0 ? 'Scan to load queue.' : 'All caught up.'}
+            </p>
+          ) : (
+            <div className="py-1">
+              {visible.map((c, i) => {
+                const isSelected = i === selectedIdx
+                const since = c.last_outbound_at ? formatDistanceToNow(new Date(c.last_outbound_at)) : ''
+                return (
+                  <button key={c.pp_contact_uuid}
+                    onClick={() => setSelectedIdx(i)}
+                    className={`w-full text-left px-3 py-2 border-l-2 transition-colors ${
+                      isSelected ? 'border-[#F97316] bg-[#F9731615]' : 'border-transparent hover:bg-[#0E1318]'
+                    }`}>
+                    <p className={`text-xs font-semibold truncate ${isSelected ? 'text-white' : 'text-[#C0D0E0]'}`}>
+                      {fullName(c)}
+                    </p>
+                    <p className="text-[10px] text-[#5A6A7A] font-mono truncate">{displayPhone(c.phone) || c.phone}</p>
+                    <p className="text-[10px] text-[#F97316] font-mono mt-0.5">silent {since}</p>
+                  </button>
+                )
+              })}
             </div>
-          </div>
-        )}
+          )}
+        </aside>
 
-        {error && (
-          <div className="mb-4 p-3 rounded-lg border border-[#EF444440] text-xs text-[#EF4444]" style={{ background: '#EF444408' }}>
-            <p className="font-semibold mb-1">Scan failed</p>
-            <p>{error}</p>
-          </div>
-        )}
-        {scanNote && (
-          <div className="mb-4 p-3 rounded-lg border border-[#F59E0B40] text-xs text-[#F59E0B]" style={{ background: '#F59E0B08' }}>
-            {scanNote}
-          </div>
-        )}
-
-        {!scanning && matches.length === 0 && !error && (
-          <div className="text-center py-16 text-[#5A6A7A]">
-            <Thermometer size={32} className="mx-auto mb-3 opacity-50" />
-            <p className="text-sm">Nothing scanned yet.</p>
-            <p className="text-xs mt-1">Click <span className="text-white">Scan PitchPrfct</span> above to pull positive contacts who went quiet.</p>
-          </div>
-        )}
-
-        {visible.length === 0 && matches.length > 0 && (
-          <div className="text-center py-16 text-[#5A6A7A]">
-            <CheckCircle size={32} className="mx-auto mb-3 text-[#10B981] opacity-70" />
-            <p className="text-sm">You're all caught up.</p>
-            <p className="text-xs mt-1">Every contact in the scan has been dismissed or promoted.</p>
-          </div>
-        )}
-
-        <div className="space-y-3">
-          {visible.map(c => {
-            const noteText = notes[c.pp_contact_uuid] || ''
-            const isDirty = !!notesDirty[c.pp_contact_uuid]
-            const isSaving = !!savingNote[c.pp_contact_uuid]
-            const isPromoting = promoting === c.pp_contact_uuid
-            const sinceLastOut = c.last_outbound_at
-              ? formatDistanceToNow(new Date(c.last_outbound_at), { addSuffix: true })
-              : ''
-            return (
-              <div key={c.pp_contact_uuid}
-                className="rounded-xl border border-[#1A2130] overflow-hidden"
-                style={{ background: '#0E1318' }}>
-                {/* Header row */}
-                <div className="flex items-start justify-between gap-3 px-4 py-3 border-b border-[#1A2130]"
+        {/* Focus view */}
+        <main className="flex-1 overflow-y-auto">
+          {!current ? (
+            <div className="text-center py-20 text-[#5A6A7A]">
+              <Thermometer size={40} className="mx-auto mb-3 opacity-50" />
+              <p className="text-sm">
+                {matches.length === 0
+                  ? 'Nothing scanned yet — hit Scan above.'
+                  : 'Every contact in the scan has been dismissed or promoted.'}
+              </p>
+            </div>
+          ) : (
+            <div className="max-w-4xl mx-auto p-4 md:p-6 space-y-4">
+              {/* Header card */}
+              <div className="rounded-xl border border-[#1A2130] overflow-hidden" style={{ background: '#0E1318' }}>
+                <div className="flex items-start justify-between gap-4 px-5 py-4 border-b border-[#1A2130]"
                   style={{ background: '#F9731608' }}>
                   <div className="flex items-center gap-3 min-w-0 flex-1">
-                    <div className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0"
+                    <div className="w-12 h-12 rounded-full flex items-center justify-center flex-shrink-0"
                       style={{ background: '#F9731620', color: '#F97316' }}>
-                      <User size={14} />
+                      <User size={20} />
                     </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-semibold text-white truncate">{fullName(c)}</p>
-                      <p className="text-xs text-[#8899AA] font-mono">{displayPhone(c.phone) || c.phone}</p>
-                    </div>
-                  </div>
-                  <div className="flex flex-col items-end gap-1 flex-shrink-0">
-                    <div className="text-[10px] text-[#F97316] font-mono uppercase tracking-wider">
-                      Silent {sinceLastOut}
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      {c.phone && (
-                        <a href={`tel:${c.phone}`}
-                          className="p-1.5 rounded text-[#10B981] hover:bg-[#10B98115]"
-                          title="Call">
-                          <Phone size={13} />
-                        </a>
-                      )}
-                      {c.phone && (
-                        <a href={`sms:${c.phone}`}
-                          className="p-1.5 rounded text-[#3B82F6] hover:bg-[#3B82F615]"
-                          title="Text">
-                          <Send size={13} />
-                        </a>
-                      )}
-                      <div className="relative">
-                        <button onClick={() => setPickerOpenFor(pickerOpenFor === c.pp_contact_uuid ? null : c.pp_contact_uuid)}
-                          disabled={isPromoting}
-                          className="flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold text-black disabled:opacity-50"
-                          style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
-                          {isPromoting ? <><Loader size={11} className="animate-spin" /> Adding…</> : <>Promote <ChevronDown size={11} /></>}
-                        </button>
-                        {pickerOpenFor === c.pp_contact_uuid && (
-                          <StagePicker
-                            stages={safeTags}
-                            onPick={(stageId) => promote(c, stageId)}
-                            onCancel={() => setPickerOpenFor(null)} />
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <h2 className="text-xl font-bold text-white truncate">{fullName(current)}</h2>
+                        {existingLead && (
+                          <button onClick={() => navigate(`/leads/${existingLead.id}`)}
+                            className="text-[10px] px-2 py-0.5 rounded font-mono inline-flex items-center gap-1"
+                            style={{ background: '#00E5C315', color: '#00E5C3', border: '1px solid #00E5C340' }}
+                            title="This contact is already in your CRM">
+                            In CRM <ExternalLink size={10} />
+                          </button>
                         )}
                       </div>
-                      <button onClick={() => dismiss(c.pp_contact_uuid)}
-                        className="p-1.5 rounded text-[#5A6A7A] hover:text-[#EF4444] hover:bg-[#EF444415]"
-                        title="Dismiss (returns on next scan)">
-                        <X size={13} />
+                      <button onClick={() => copy('phone', current.phone)}
+                        className="text-sm font-mono text-[#8899AA] hover:text-white inline-flex items-center gap-1.5">
+                        {displayPhone(current.phone) || current.phone}
+                        {copiedField === 'phone' ? <Check size={11} className="text-[#00E5C3]" /> : <Copy size={11} />}
                       </button>
                     </div>
                   </div>
+                  <div className="flex flex-col items-end gap-2 flex-shrink-0">
+                    <div className="text-xs text-[#F97316] font-mono">
+                      Silent {current.last_outbound_at ? formatDistanceToNow(new Date(current.last_outbound_at)) : ''}
+                    </div>
+                    {(localTime || tzLabel) && (
+                      <div className="text-xs text-[#8899AA] font-mono inline-flex items-center gap-1">
+                        <MapPin size={11} /> {tzLabel} · {localTime}
+                      </div>
+                    )}
+                  </div>
                 </div>
 
-                {/* Message thread */}
-                <div className="px-4 py-3 space-y-1.5" style={{ background: '#080B0F' }}>
-                  {(c.recent_messages || []).length === 0 ? (
-                    <p className="text-xs text-[#5A6A7A] italic">No recent messages returned by PitchPrfct.</p>
+                {/* Action row */}
+                <div className="flex items-center flex-wrap gap-2 px-5 py-3">
+                  {current.phone && (
+                    <a href={`tel:${current.phone}`}
+                      className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold text-black transition-opacity hover:opacity-90"
+                      style={{ background: 'linear-gradient(135deg, #10B981, #00E5C3)' }}>
+                      <Phone size={14} /> Call
+                    </a>
+                  )}
+                  {current.phone && (
+                    <a href={`sms:${current.phone}`}
+                      className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold text-white transition-opacity hover:opacity-90"
+                      style={{ background: 'linear-gradient(135deg, #3B82F6, #8B5CF6)' }}>
+                      <Send size={13} /> Text
+                    </a>
+                  )}
+                  <div className="relative">
+                    <button onClick={() => setPickerOpen(v => !v)}
+                      disabled={promoting === current.pp_contact_uuid}
+                      className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-semibold text-black disabled:opacity-50"
+                      style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
+                      {promoting === current.pp_contact_uuid
+                        ? <><Loader size={13} className="animate-spin" /> Adding…</>
+                        : <>Promote to CRM <ChevronDown size={13} /></>}
+                    </button>
+                    {pickerOpen && (
+                      <StagePicker stages={safeTags} onPick={promote} onCancel={() => setPickerOpen(false)} anchor="left" />
+                    )}
+                  </div>
+                  <button onClick={() => dismiss(current.pp_contact_uuid)}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border border-[#EF444440] text-[#EF4444] hover:bg-[#EF444415]">
+                    <X size={13} /> Dismiss (x)
+                  </button>
+                  <div className="flex-1" />
+                  <button onClick={() => setSelectedIdx(i => Math.max(0, i - 1))}
+                    disabled={selectedIdx === 0}
+                    className="p-2 rounded-lg text-[#8899AA] hover:text-white hover:bg-[#1A2130] disabled:opacity-30"
+                    title="Previous (k / ↑)">
+                    <ChevronLeft size={14} />
+                  </button>
+                  <button onClick={() => setSelectedIdx(i => Math.min(visible.length - 1, i + 1))}
+                    disabled={selectedIdx >= visible.length - 1}
+                    className="p-2 rounded-lg text-[#8899AA] hover:text-white hover:bg-[#1A2130] disabled:opacity-30"
+                    title="Next (j / ↓)">
+                    <ChevronRight size={14} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Lead context (if they're already in Infinite) */}
+              {existingLead && (
+                <div className="rounded-xl border border-[#00E5C320] overflow-hidden"
+                  style={{ background: '#00E5C308' }}>
+                  <div className="px-4 py-2 border-b border-[#00E5C320]">
+                    <p className="text-[10px] font-mono uppercase tracking-wider text-[#00E5C3]">CRM record</p>
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 px-4 py-3">
+                    {[
+                      { label: 'State', value: existingLead.state },
+                      { label: 'Zip', value: existingLead.zip },
+                      { label: 'DOB', value: existingLead.dob ? String(existingLead.dob).slice(0, 10) : '' },
+                      { label: 'Household', value: existingLead.household || existingLead.household_size },
+                      { label: 'Income', value: existingLead.income },
+                      { label: 'Campaign', value: existingLead.campaign },
+                      { label: 'Stage', value: safeTags.find(t => t.id === existingLead.stage)?.label || existingLead.stage },
+                      { label: 'Email', value: existingLead.email },
+                    ].filter(f => f.value).map(f => (
+                      <div key={f.label}>
+                        <p className="text-[9px] uppercase tracking-wider text-[#5A6A7A] mb-0.5">{f.label}</p>
+                        <p className="text-xs text-white truncate">{f.value}</p>
+                      </div>
+                    ))}
+                  </div>
+                  {existingLead.notes && (
+                    <div className="px-4 py-2 border-t border-[#00E5C320]">
+                      <p className="text-[9px] uppercase tracking-wider text-[#5A6A7A] mb-1">Previous notes</p>
+                      <p className="text-xs text-[#C0D0E0] whitespace-pre-wrap leading-snug">{existingLead.notes}</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Full conversation */}
+              <div className="rounded-xl border border-[#1A2130] overflow-hidden" style={{ background: '#0E1318' }}>
+                <div className="flex items-center justify-between px-4 py-2 border-b border-[#1A2130]">
+                  <p className="text-[10px] font-mono uppercase tracking-wider text-[#8899AA]">
+                    Conversation · {(current.recent_messages || []).length} messages
+                  </p>
+                  <p className="text-[10px] text-[#5A6A7A]">Read this before the call</p>
+                </div>
+                <div className="p-4 space-y-2" style={{ background: '#080B0F', maxHeight: '50vh', overflowY: 'auto' }}>
+                  {(current.recent_messages || []).length === 0 ? (
+                    <p className="text-xs text-[#5A6A7A] italic">No message history returned by PitchPrfct.</p>
                   ) : (
-                    (c.recent_messages || []).map((m, i) => (
-                      <MessageBubble key={m.id || i} msg={m} />
+                    (current.recent_messages || []).map((m, i) => (
+                      <MessageBubble key={m.id || i} msg={m} spacious />
                     ))
                   )}
                 </div>
-
-                {/* Notes */}
-                <div className="px-4 py-3 border-t border-[#1A2130]">
-                  <div className="flex items-center justify-between mb-1.5">
-                    <span className="text-[10px] font-mono uppercase tracking-wider text-[#5A6A7A]">Note</span>
-                    {isDirty && (
-                      <button onClick={() => saveNote(c.pp_contact_uuid)}
-                        disabled={isSaving}
-                        className="text-[10px] px-2 py-0.5 rounded font-semibold text-black disabled:opacity-50"
-                        style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
-                        {isSaving ? 'Saving…' : 'Save'}
-                      </button>
-                    )}
-                    {!isDirty && noteText && (
-                      <span className="text-[10px] text-[#10B981] inline-flex items-center gap-1">
-                        <CheckCircle size={10} /> Saved
-                      </span>
-                    )}
-                  </div>
-                  <textarea
-                    value={noteText}
-                    onChange={e => {
-                      const v = e.target.value
-                      setNotes(prev => ({ ...prev, [c.pp_contact_uuid]: v }))
-                      setNotesDirty(prev => ({ ...prev, [c.pp_contact_uuid]: true }))
-                    }}
-                    onBlur={() => { if (isDirty) saveNote(c.pp_contact_uuid) }}
-                    placeholder="Quick note — what caught your attention, what to say when you call…"
-                    rows={2}
-                    className="w-full text-xs bg-[#080B0F] border border-[#1A2130] rounded px-2 py-1.5 text-white focus:outline-none focus:border-[#00E5C340] resize-y" />
-                </div>
               </div>
-            )
-          })}
-        </div>
+
+              {/* Notes */}
+              <div className="rounded-xl border border-[#1A2130] overflow-hidden" style={{ background: '#0E1318' }}>
+                <div className="flex items-center justify-between px-4 py-2 border-b border-[#1A2130]">
+                  <p className="text-[10px] font-mono uppercase tracking-wider text-[#F59E0B]">Note</p>
+                  {notesDirty[current.pp_contact_uuid] ? (
+                    <button onClick={() => saveNote(current.pp_contact_uuid)}
+                      disabled={savingNote[current.pp_contact_uuid]}
+                      className="text-[10px] px-2 py-0.5 rounded font-semibold text-black disabled:opacity-50"
+                      style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
+                      {savingNote[current.pp_contact_uuid] ? 'Saving…' : 'Save'}
+                    </button>
+                  ) : (notes[current.pp_contact_uuid] ? (
+                    <span className="text-[10px] text-[#10B981] inline-flex items-center gap-1">
+                      <CheckCircle size={10} /> Saved
+                    </span>
+                  ) : null)}
+                </div>
+                <textarea
+                  value={notes[current.pp_contact_uuid] || ''}
+                  onChange={e => {
+                    const v = e.target.value
+                    setNotes(prev => ({ ...prev, [current.pp_contact_uuid]: v }))
+                    setNotesDirty(prev => ({ ...prev, [current.pp_contact_uuid]: true }))
+                  }}
+                  onBlur={() => { if (notesDirty[current.pp_contact_uuid]) saveNote(current.pp_contact_uuid) }}
+                  placeholder="What jumped out? Talking points, family size, budget, callback prefs — whatever you'll want in front of you when they pick up."
+                  rows={4}
+                  className="w-full text-sm bg-[#080B0F] border-0 px-4 py-3 text-white focus:outline-none resize-y" />
+              </div>
+            </div>
+          )}
+        </main>
       </div>
     </div>
   )
