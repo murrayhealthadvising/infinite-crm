@@ -337,6 +337,30 @@ export function AppProvider({ children }) {
       const hasDetails = lead && (lead.carrier || lead.plan_choice || lead.premium)
       if (!hasDetails) setPendingSoldLeadId(leadId)
     }
+    // Auto-unenroll from PitchPrfct on terminal-ish stages so drip texts stop
+    // firing after a lead is booked / sold / opted out. Fire-and-forget — a
+    // failure here should never block the stage change. Also cancels any
+    // pending queue row so a delayed enroll doesn't fire post-unenroll.
+    const STOP_TEXTING_STAGES = new Set(['apt', 'sold', 'stop', 'dnq'])
+    if (STOP_TEXTING_STAGES.has(stageId) && session?.user?.id) {
+      const WORKER_URL = (import.meta.env.VITE_CRM_WORKER_URL
+        || 'https://infinite-crm-webhook.murrayhealthadvising.workers.dev').replace(/\/+$/, '')
+      fetch(`${WORKER_URL}/pp-unenroll`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ agent_id: session.user.id, lead_id: leadId }),
+      })
+        .then(r => r.json().catch(() => ({})))
+        .then(j => {
+          if (j?.ok) {
+            console.info('[pp-unenroll] lead', leadId, 'stage=' + stageId, '→ unenrolled')
+            addActivity(leadId, 'status', `Auto-unenrolled from PitchPrfct workflows (stage → ${stageLabel || stageId})`).catch(() => {})
+          } else {
+            console.warn('[pp-unenroll] failed for lead', leadId, j)
+          }
+        })
+        .catch(e => console.warn('[pp-unenroll] threw for lead', leadId, e))
+    }
   }
 
   // Whitelist of columns the leads table actually has. Prevents PGRST204

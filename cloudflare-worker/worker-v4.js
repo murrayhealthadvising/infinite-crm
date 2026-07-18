@@ -1154,6 +1154,47 @@ async function enrollInWorkflow(apiKey, workflowId, contactUuid) {
 // Fetch recent PitchPrfct messages for a contact. Reuses the same URL-attempt
 // fan-out the /pp-conversation HTTP endpoint uses so both stay in sync when
 // PP's undocumented messages endpoint moves. Returns [] on total failure.
+// Pause/unenroll a contact from ALL PitchPrfct workflows. Called when a lead's
+// stage moves to something that means "stop texting them" (apt / sold / stop /
+// dnq). PP's unenroll API isn't published in a form we can rely on, so we fan
+// out across the plausible endpoint shapes and consider ANY 2xx a success —
+// worst case a couple extra 404s hit their edge; no client-visible impact.
+async function unenrollAllPPWorkflows(apiKey, contactUuid) {
+  if (!apiKey || !contactUuid) return { ok: false, tried: [], reason: 'missing key or contact' }
+  const attempts = [
+    { method: 'POST',   url: `${PITCHPRFCT_API}/contacts/${encodeURIComponent(contactUuid)}/pause` },
+    { method: 'POST',   url: `${PITCHPRFCT_API}/contacts/${encodeURIComponent(contactUuid)}/unenroll` },
+    { method: 'DELETE', url: `${PITCHPRFCT_API}/contacts/${encodeURIComponent(contactUuid)}/workflows` },
+    { method: 'POST',   url: `${PITCHPRFCT_API}/contacts/${encodeURIComponent(contactUuid)}/unsubscribe` },
+    { method: 'POST',   url: `${PITCHPRFCT_API}/workflows/unenroll`,
+      body: JSON.stringify({ contactUuid, contact_id: contactUuid }) },
+  ]
+  const results = []
+  for (const a of attempts) {
+    try {
+      const r = await fetch(a.url, {
+        method: a.method,
+        headers: { 'x-api-key': apiKey, ...(a.body ? { 'content-type': 'application/json' } : {}) },
+        body: a.body,
+      })
+      const txt = await r.text().catch(() => '')
+      results.push({ url: a.url.split('/api/v1')[1], status: r.status, ok: r.ok })
+      if (r.ok) {
+        console.log('[pp] UNENROLLED contact', contactUuid, 'via', a.method, a.url)
+        return { ok: true, via: a.url, results }
+      }
+      // 404s are expected for endpoint shapes PP doesn't implement.
+      if (r.status !== 404) {
+        console.warn('[pp] unenroll non-404 error', r.status, txt.slice(0, 160))
+      }
+    } catch (e) {
+      results.push({ url: a.url.split('/api/v1')[1], status: 0, ok: false, error: String(e) })
+    }
+  }
+  console.error('[pp] unenroll FAILED for contact', contactUuid, 'attempts:', results)
+  return { ok: false, results }
+}
+
 async function fetchPPMessages(apiKey, contactUuid, limit = 20) {
   const attempts = [
     `${PITCHPRFCT_API}/contacts/${encodeURIComponent(contactUuid)}/messages?take=${limit}`,
@@ -1624,9 +1665,9 @@ export default {
     // every release so a stale deploy is immediately visible.
     if (req.method === 'GET' && url.pathname === '/version') {
       return new Response(JSON.stringify({
-        version: 'v4.27',
-        parser: 'warm-bucket API push + PP contact context',
-        deployed_check: 'if you see v4.27 here, the deploy succeeded',
+        version: 'v4.28',
+        parser: 'auto-unenroll on stage change (apt/sold/stop/dnq)',
+        deployed_check: 'if you see v4.28 here, the deploy succeeded',
       }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
     }
     // Public API v1 — auth via X-API-Key. All routes under /api/v1/*.
@@ -1883,6 +1924,82 @@ export default {
           status: 500, headers: { 'content-type': 'application/json', ...CORS },
         })
       }
+    }
+
+    // Unenroll a contact from ALL PitchPrfct workflows. Called from the CRM
+    // frontend whenever a lead moves to a stage that means "stop texting them"
+    // (apt/sold/stop/dnq). Fire-and-forget from the frontend — a failure
+    // doesn't block the stage change.
+    //
+    //   POST /pp-unenroll  { agent_id, lead_id }  OR  { agent_id, phone }
+    //
+    // Looks up the PP contact via phone, then fans out unenroll attempts.
+    if (req.method === 'POST' && url.pathname === '/pp-unenroll') {
+      let payload = {}
+      try { payload = await req.json() } catch {
+        return new Response(JSON.stringify({ error: 'bad json' }), {
+          status: 400, headers: { 'content-type': 'application/json', ...CORS },
+        })
+      }
+      const agentId = payload.agent_id
+      const leadId = payload.lead_id
+      let phone = payload.phone
+      if (!agentId || (!leadId && !phone)) {
+        return new Response(JSON.stringify({ error: 'missing agent_id and (lead_id or phone)' }), {
+          status: 400, headers: { 'content-type': 'application/json', ...CORS },
+        })
+      }
+      // Resolve lead → phone if only lead_id was given
+      if (!phone && leadId) {
+        try {
+          const r = await fetch(`${env.SUPABASE_URL}/rest/v1/leads?id=eq.${encodeURIComponent(leadId)}&select=phone&limit=1`, {
+            headers: { apikey: env.SUPABASE_SERVICE_KEY, authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}` },
+          })
+          const rows = r.ok ? await r.json() : []
+          phone = rows?.[0]?.phone
+        } catch {}
+      }
+      const normPhone = coercePhoneE164(phone || '')
+      if (!normPhone) {
+        return new Response(JSON.stringify({ error: 'lead has no usable phone' }), {
+          status: 400, headers: { 'content-type': 'application/json', ...CORS },
+        })
+      }
+      const apiKey = await getAgentApiKey(env, agentId)
+      if (!apiKey) {
+        return new Response(JSON.stringify({ error: 'no PitchPrfct API key saved for this agent' }), {
+          status: 404, headers: { 'content-type': 'application/json', ...CORS },
+        })
+      }
+      const contactUuid = await findContactByPhone(apiKey, normPhone)
+      if (!contactUuid) {
+        // No PP contact means nothing to unenroll — treat as success so callers
+        // don't retry noisily.
+        return new Response(JSON.stringify({ ok: true, note: 'no PitchPrfct contact for this phone — nothing to unenroll' }), {
+          status: 200, headers: { 'content-type': 'application/json', ...CORS },
+        })
+      }
+      const result = await unenrollAllPPWorkflows(apiKey, contactUuid)
+      // Also cancel any pending queue row for this lead so a delayed enroll
+      // doesn't fire AFTER we unenrolled.
+      if (leadId) {
+        try {
+          await fetch(`${env.SUPABASE_URL}/rest/v1/pitchprfct_queue?lead_id=eq.${encodeURIComponent(leadId)}&status=eq.pending`, {
+            method: 'PATCH',
+            headers: {
+              apikey: env.SUPABASE_SERVICE_KEY,
+              authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}`,
+              'content-type': 'application/json',
+              prefer: 'return=minimal',
+            },
+            body: JSON.stringify({ status: 'cancelled' }),
+          })
+        } catch {}
+      }
+      return new Response(JSON.stringify(result), {
+        status: result.ok ? 200 : 502,
+        headers: { 'content-type': 'application/json', ...CORS },
+      })
     }
 
     // Manual workflow enrollment — used occasionally from the LeadDetail UI when
