@@ -197,6 +197,14 @@ function PipelineCard({ lead, onDragStart, onDragEnd, onClick }) {
 export default function Pipeline() {
   const { leads, tags, updateLeadStage, updateTag, refreshLeads, user, dialsToday } = useApp()
   const navigate = useNavigate()
+
+  // Record where LeadDetail's X should return to. Pipeline sets '/pipeline'
+  // so opening a lead from here and hitting X takes you back to the Pipeline
+  // — not one step back in browser history (which would drop you on the
+  // previous lead if you'd been arrowing through them).
+  useEffect(() => {
+    try { sessionStorage.setItem('leads:returnTo', '/pipeline') } catch {}
+  }, [])
   const [drawerLeadId, setDrawerLeadId] = useState(null)
   const [drawerBucket, setDrawerBucket] = useState([])  // ids of leads in the column the drawer was opened from
   const openDrawer = (leadId, bucketIds) => {

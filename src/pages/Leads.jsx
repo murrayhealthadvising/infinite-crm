@@ -1774,6 +1774,9 @@ export default function Leads() {
   useEffect(() => {
     try {
       sessionStorage.setItem('leads:visibleIds', JSON.stringify(filtered.map(l => l.id)))
+      // Also record where the user came from so LeadDetail's X button returns
+      // here (not to some intermediate arrow-history step).
+      sessionStorage.setItem('leads:returnTo', '/leads')
     } catch {}
   }, [filtered])
 

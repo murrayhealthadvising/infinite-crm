@@ -114,6 +114,12 @@ export default function WarmBucket() {
   }, [user?.id])
   useEffect(() => { loadState() }, [loadState])
 
+  // Record where LeadDetail's X should return to when opening a lead from
+  // the Warm Bucket (via the In-CRM badge). Same pattern as Leads/Pipeline.
+  useEffect(() => {
+    try { sessionStorage.setItem('leads:returnTo', '/warm-bucket') } catch {}
+  }, [])
+
   const runScan = async () => {
     if (!user?.id) return
     setScanning(true); setError(null); setScanNote(null)

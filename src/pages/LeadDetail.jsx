@@ -411,11 +411,19 @@ export default function LeadDetail() {
     }
   }, [id])
 
-  // Smart back: if there's history (came from /pipeline, /leads, etc.) go back,
-  // otherwise fall through to /leads as a sensible default.
+  // Smart back — jump straight to the LIST the agent came from, not one step
+  // back in browser history. Prevents "X → previous lead → previous lead" when
+  // arrowing through the queue. Each list page (Leads / Pipeline / WarmBucket)
+  // writes its own path to sessionStorage on mount; we read it here.
   const goBack = () => {
-    if (window.history.length > 1) navigate(-1)
-    else navigate('/leads')
+    let target = '/leads'
+    try {
+      const stored = sessionStorage.getItem('leads:returnTo')
+      if (stored && stored.startsWith('/') && !stored.startsWith('/leads/')) {
+        target = stored
+      }
+    } catch {}
+    navigate(target)
   }
 
   // Prev/Next navigation through the filtered Leads list. The Leads page writes
