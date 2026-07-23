@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { useApp } from '../context/AppContext'
 import { CheckCircle, X, Award, Calendar, Cake, Info } from 'lucide-react'
-import { buildRetentionSchedule, buildBirthdaySchedule, findExistingRetentionReminders } from '../lib/retention'
+import { buildRetentionSchedule, buildBirthdaySchedule, buildACAPaymentSchedule, findExistingRetentionReminders } from '../lib/retention'
 import { format } from 'date-fns'
 
 export default function SoldDetailsModal() {
@@ -40,6 +40,10 @@ export default function SoldDetailsModal() {
   // effective-date checkbox so it works even for backdated policies.
   const birthdays = useMemo(() => buildBirthdaySchedule(lead?.dob), [lead?.dob])
   const [birthdayEnabled, setBirthdayEnabled] = useState(true)
+  // ACA / government-plan flag — off by default. When on, generates 12 monthly
+  // payment reminders on the 1st of each month after the effective date.
+  const [acaEnabled, setAcaEnabled] = useState(false)
+  const acaPayments = useMemo(() => buildACAPaymentSchedule(effective), [effective])
 
   const isStepEnabled = (key) => enabledSteps[key] !== false  // default true
   const toggleStep = (key) => setEnabledSteps(prev => ({ ...prev, [key]: !isStepEnabled(key) }))
@@ -112,6 +116,19 @@ export default function SoldDetailsModal() {
         }
         // Birthday reminders — independent of effective date. Only fire if
         // the client has a DOB on file and the checkbox is on.
+        // ACA monthly payment reminders on the 1st.
+        if (acaEnabled && Array.isArray(acaPayments) && acaPayments.length) {
+          for (const p of acaPayments) {
+            try {
+              await addReminder({
+                lead_id: lead.id,
+                kind: p.kind,
+                due_at: p.due_at,
+                note: p.note,
+              })
+            } catch (e) { console.error('add ACA reminder failed:', p.key, e) }
+          }
+        }
         if (birthdayEnabled && Array.isArray(birthdays) && birthdays.length) {
           for (const b of birthdays) {
             try {
@@ -239,6 +256,31 @@ export default function SoldDetailsModal() {
                     </p>
                     <p className="text-[9px] text-[#5A6A7A] font-mono">
                       Starts {format(new Date(birthdays[0].due_at), 'MMM d, yyyy')}
+                    </p>
+                  </div>
+                </label>
+              )}
+              {/* ACA / government plan sub-section — for policies that pay on
+                  the 1st every month. Off by default (most policies aren't
+                  government). Requires an effective date to compute the
+                  monthly cadence. */}
+              {acaPayments.length > 0 && (
+                <label className="flex items-center gap-2 p-1.5 rounded-md hover:bg-[#00E5C308] cursor-pointer transition-colors border-t border-[#00E5C320] mt-2 pt-2">
+                  <input
+                    type="checkbox"
+                    checked={acaEnabled}
+                    onChange={() => setAcaEnabled(v => !v)}
+                    className="accent-[#3B82F6] flex-shrink-0" />
+                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded flex-shrink-0"
+                    style={{ background: '#3B82F615', color: '#3B82F6', border: '1px solid #3B82F640' }}>
+                    ACA
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <p className={`text-[11px] ${acaEnabled ? 'text-[#C0D0E0]' : 'text-[#3A4A5A] line-through'}`}>
+                      ACA / government plan — remind on the 1st every month
+                    </p>
+                    <p className="text-[9px] text-[#5A6A7A] font-mono">
+                      {acaPayments.length} monthly payment reminders starting {format(new Date(acaPayments[0].due_at), 'MMM 1, yyyy')}
                     </p>
                   </div>
                 </label>

@@ -15,9 +15,10 @@
 //   3) Everything defaults to 10 AM local (birthdays default to 9 AM so
 //      they're the first thing seen that morning).
 
-// Anything whose `note` starts with `[R...]` OR `[BDAY]` is an auto-generated
-// retention/birthday reminder. Used to clean up before writing a new batch.
-export const RETENTION_MARKER_RE = /^(\[R[+-]?\d+\]|\[BDAY\])/
+// Anything whose `note` starts with `[R...]`, `[BDAY]`, or `[ACA-PAY]` is an
+// auto-generated retention/birthday/ACA-premium reminder. Used to clean up
+// before writing a new batch.
+export const RETENTION_MARKER_RE = /^(\[R[+-]?\d+\]|\[BDAY\]|\[ACA-PAY\])/
 
 // Parse YYYY-MM-DD as LOCAL date (not UTC) so a policy effective July 15
 // doesn't slip to July 14 for Pacific-tz agents. new Date('2026-07-15') is UTC
@@ -102,6 +103,42 @@ export function buildBirthdaySchedule(dob, { years = 5 } = {}) {
       age,
       why: `Warm touchpoint. Often surfaces life changes (job, marriage, baby) that affect coverage.`,
     })
+  }
+  return out
+}
+
+// ACA / government-plan monthly premium reminders. These policies bill on
+// the 1st of each month, so Nic wants a reminder ON THE 1ST of every month
+// following the effective date. Default 12 months of reminders — enough for
+// one full policy year without stuffing the calendar.
+//
+// If effective date is May 15 → first reminder is June 1, then July 1, etc.
+// If effective date IS the 1st (e.g. June 1) → first reminder is July 1
+// (skip the effective month since the retention system already reminds on
+// the effective date itself).
+export function buildACAPaymentSchedule(effectiveDate, { months = 12 } = {}) {
+  const eff = parseLocalYMD(effectiveDate, 10, 0)
+  if (!eff) return []
+  const out = []
+  // Anchor at the 1st of the month AFTER the effective month
+  let year = eff.getFullYear()
+  let month = eff.getMonth() + 1  // month AFTER effective
+  if (month > 11) { month = 0; year += 1 }
+  for (let i = 0; i < months; i++) {
+    const t = new Date(year, month, 1, 10, 0, 0, 0)
+    out.push({
+      key: `aca-${year}-${month + 1}`,
+      marker: '[ACA-PAY]',
+      offsetDays: null,
+      kind: 'task',
+      note: `[ACA-PAY] Payment reminder — ACA premium due today (month ${i + 1})`,
+      due_at: t.toISOString(),
+      enabled: true,
+      why: 'ACA/government plans bill on the 1st. Text or call to confirm the payment cleared.',
+    })
+    // Advance one month
+    month += 1
+    if (month > 11) { month = 0; year += 1 }
   }
   return out
 }

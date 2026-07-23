@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect } from 'react'
 import { supabase, DEFAULT_TAGS } from '../lib/supabase'
+import { isGcalConnected, createCalendarEvent } from '../lib/gcal'
 
 const AppContext = createContext(null)
 
@@ -851,7 +852,47 @@ export function AppProvider({ children }) {
     }
     try {
       const { data } = await supabase.from('lead_reminders').insert([row]).select().single()
-      if (data) { setReminders(prev => [...prev, data].sort((a, b) => new Date(a.due_at || 0) - new Date(b.due_at || 0))); return data }
+      if (data) {
+        setReminders(prev => [...prev, data].sort((a, b) => new Date(a.due_at || 0) - new Date(b.due_at || 0)))
+        // Fire-and-forget Google Calendar sync so reminders land on Nic's
+        // phone/laptop calendar automatically. Only if he's connected GCal
+        // in Settings. Failures never block the reminder itself.
+        if (data.due_at && isGcalConnected()) {
+          try {
+            // Look up the lead for a nicer title, best-effort.
+            const lead = (Array.isArray(leads) ? leads : []).find(l => l.id === data.lead_id)
+            const leadName = lead
+              ? ([lead.first_name, lead.last_name].filter(Boolean).join(' ').trim() || lead.name || lead.phone || '')
+              : ''
+            // Strip our internal [Rx] / [ACA-PAY] / [BDAY] markers from the
+            // note before it hits Google Calendar (they look like noise there).
+            const cleanNote = String(data.note || '').replace(/^\[(R[+-]?\d+|ACA-PAY|BDAY)\]\s*/, '').trim()
+            const kindLabel = { call: 'Call', appt: 'Appt', task: 'Task' }[data.kind] || 'Reminder'
+            const title = `${kindLabel}${leadName ? `: ${leadName}` : ''}${cleanNote ? ` — ${cleanNote}` : ''}`
+            // Random hour 9a-4p if the reminder was saved as day-based (10:00
+            // sharp is our day-mode anchor). Keeps calendar visually varied so
+            // stacked reminders on the same day don't collide at a single hour.
+            let startsAt = data.due_at
+            try {
+              const d = new Date(data.due_at)
+              const isDayMode = d.getMinutes() === 0 && d.getHours() === 10
+              if (isDayMode) {
+                const hour = 9 + Math.floor(Math.random() * 8)  // 9..16
+                const minute = Math.floor(Math.random() * 12) * 5  // 0..55 in 5s
+                d.setHours(hour, minute, 0, 0)
+                startsAt = d.toISOString()
+              }
+            } catch {}
+            createCalendarEvent({
+              title,
+              startsAt,
+              durationMinutes: 15,
+              details: cleanNote + (leadName ? `\n\nLead: ${leadName}` : ''),
+            }).catch(e => console.warn('[gcal] add-reminder sync failed:', e))
+          } catch (e) { console.warn('[gcal] add-reminder sync setup failed:', e) }
+        }
+        return data
+      }
     } catch (e) { console.error('addReminder failed:', e) }
     return null
   }

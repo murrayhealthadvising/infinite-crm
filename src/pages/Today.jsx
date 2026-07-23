@@ -486,20 +486,35 @@ function MonthCalendar({ anchor, reminders, gcalEvents = [], leadById, onSlotCli
                   const lead = leadById.get(r.lead_id)
                   const meta = KIND_META[r.kind] || KIND_META.call
                   const overdue = r.due_at && isPast(new Date(r.due_at))
-                  const timeLabel = r.due_at ? format(new Date(r.due_at), 'h:mma').toLowerCase() : ''
+                  // Day-based display: skip the time chip on the month view so
+                  // stacked reminders read like the mockup (label + name only).
+                  // "Auto" reminders (retention / ACA / birthday) get a short
+                  // label prefix from their [Rx] / [ACA-PAY] / [BDAY] markers.
+                  const noteText = r.note || ''
+                  const markerMatch = noteText.match(/^\[(R[+-]?\d+|ACA-PAY|BDAY)\]\s*/)
+                  const marker = markerMatch ? markerMatch[1] : ''
+                  const cleanNote = markerMatch ? noteText.slice(markerMatch[0].length) : noteText
+                  const label =
+                    marker === 'ACA-PAY' ? 'Payment reminder' :
+                    marker === 'BDAY'    ? 'Birthday text' :
+                    marker === 'R0'      ? 'Policy start' :
+                    marker === 'R+30'    ? '30-day check-in' :
+                    marker.startsWith('R+') ? `Day ${marker.slice(1)} check-in` :
+                    meta.label
+                  const timeLabelFull = r.due_at ? format(new Date(r.due_at), 'h:mma').toLowerCase() : ''
                   return (
                     <div key={r.id}
                       draggable
                       onDragStart={(e) => { e.stopPropagation(); e.dataTransfer.setData('text/reminder-id', r.id); e.dataTransfer.effectAllowed = 'move' }}
                       onClick={(e) => { e.stopPropagation(); onReminderClick(r) }}
-                      title={`${timeLabel} · ${leadName(lead)} · ${r.note || ''}`}
-                      className="flex items-center gap-1 px-1 py-0.5 rounded text-[10px] cursor-grab active:cursor-grabbing truncate hover:brightness-125"
+                      title={`${timeLabelFull} · ${label} · ${leadName(lead)} · ${cleanNote}`}
+                      className="flex flex-col gap-0 px-1 py-0.5 rounded text-[10px] cursor-grab active:cursor-grabbing hover:brightness-125"
                       style={{
                         background: (overdue ? '#EF4444' : meta.color) + '25',
                         borderLeft: `2px solid ${overdue ? '#EF4444' : meta.color}`,
                       }}>
-                      {timeLabel && <span className="text-[9px] font-mono flex-shrink-0" style={{ color: overdue ? '#EF4444' : meta.color }}>{timeLabel}</span>}
-                      <span className="text-white truncate">{leadName(lead)}</span>
+                      <span className="text-[8px] font-mono truncate" style={{ color: overdue ? '#EF4444' : meta.color }}>{label}</span>
+                      <span className="text-white truncate leading-tight">{leadName(lead)}</span>
                     </div>
                   )
                 })}
@@ -925,6 +940,17 @@ function ReminderModal({ leads, seed, editing, onClose, onSubmit, onDelete }) {
   const [multi, setMulti] = useState(!!seed?.end_at)
   const [note, setNote] = useState(seed?.note || '')
   const [saving, setSaving] = useState(false)
+  // Day-first UX. Reminders default to "some time that day" — no time picker
+  // needed. Nic can toggle `withTime` if he wants to pin a specific hour;
+  // otherwise the calendar shows it as a day-level chip.
+  const [withTime, setWithTime] = useState(() => {
+    // Editing an existing reminder that has a non-default time → keep time on
+    if (!seed?.due_at) return false
+    try {
+      const d = new Date(seed.due_at)
+      return d.getMinutes() !== 0 || (d.getHours() !== 9 && d.getHours() !== 10)
+    } catch { return false }
+  })
 
   const filteredLeads = (leadSearch
     ? leads.filter(l => {
@@ -1000,17 +1026,36 @@ function ReminderModal({ leads, seed, editing, onClose, onSubmit, onDelete }) {
             )}
           </div>
           <div>
-            <div className="flex items-center justify-between mb-1">
+            <div className="flex items-center justify-between mb-1 flex-wrap gap-y-1">
               <label className="text-xs font-mono uppercase tracking-wider text-[#5A6A7A]">
                 {multi ? 'Starts' : 'When'}
               </label>
-              <label className="flex items-center gap-1.5 text-[10px] text-[#5A6A7A] cursor-pointer">
-                <input type="checkbox" checked={multi} onChange={e => setMulti(e.target.checked)} className="accent-[#00E5C3]" />
-                Multi-day / spans time
-              </label>
+              <div className="flex items-center gap-3">
+                <label className="flex items-center gap-1.5 text-[10px] text-[#5A6A7A] cursor-pointer">
+                  <input type="checkbox" checked={withTime} onChange={e => setWithTime(e.target.checked)} className="accent-[#3B82F6]" />
+                  Specific time
+                </label>
+                <label className="flex items-center gap-1.5 text-[10px] text-[#5A6A7A] cursor-pointer">
+                  <input type="checkbox" checked={multi} onChange={e => setMulti(e.target.checked)} className="accent-[#00E5C3]" />
+                  Multi-day
+                </label>
+              </div>
             </div>
-            <input type="datetime-local" value={due} onChange={e => setDue(e.target.value)}
-              className="w-full bg-[#080B0F] border border-[#1A2130] rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-[#00E5C340]" />
+            {/* Day-based by default. When `withTime` is off, we show a date
+                input and behind the scenes anchor the reminder at 10 AM so
+                Google Calendar has SOMETHING to render. The Today month view
+                hides the time chip when we're in day-mode. */}
+            {withTime ? (
+              <input type="datetime-local" value={due} onChange={e => setDue(e.target.value)}
+                className="w-full bg-[#080B0F] border border-[#1A2130] rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-[#00E5C340]" />
+            ) : (
+              <input type="date" value={(due || '').slice(0, 10)}
+                onChange={e => {
+                  // Preserve 10:00 as the anchor time so re-toggling doesn't lose data.
+                  setDue(e.target.value ? `${e.target.value}T10:00` : '')
+                }}
+                className="w-full bg-[#080B0F] border border-[#1A2130] rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-[#00E5C340]" />
+            )}
             <div className="flex gap-1.5 mt-2 flex-wrap">
               {[
                 ['+ 1h',   () => isoToLocalInput(addHours(new Date(), 1).toISOString())],
