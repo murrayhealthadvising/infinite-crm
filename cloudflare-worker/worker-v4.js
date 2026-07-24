@@ -1243,12 +1243,18 @@ async function fetchPPMessages(apiKey, contactUuid, limit = 20) {
       const key = id ? `id:${id}` : `c:${sentAt || ''}|${body}`
       if (seen.has(key)) continue
       seen.add(key)
-      merged.push({
-        id, body,
-        direction: (m.direction || m.type ||
-          (m.outbound || m.isOutbound || m.fromMe ? 'outbound' : 'inbound')).toString().toLowerCase(),
-        sent_at: sentAt,
-      })
+      // Explicit direction detection — NEVER default to inbound. If PP returns
+      // a message without a clear direction indicator we mark it 'unknown'.
+      // Previously we defaulted-to-inbound, which made every drip-only contact
+      // look like they'd replied. Warm bucket then let them through even
+      // though the visible convo was all outbound.
+      const rawDir = String(m.direction || m.type || '').toLowerCase().trim()
+      let direction = 'unknown'
+      if (rawDir === 'outbound' || rawDir === 'out' || rawDir === 'sent' || rawDir === 'mt') direction = 'outbound'
+      else if (rawDir === 'inbound' || rawDir === 'in' || rawDir === 'received' || rawDir === 'mo' || rawDir === 'reply') direction = 'inbound'
+      else if (m.outbound === true || m.isOutbound === true || m.fromMe === true || m.from_me === true) direction = 'outbound'
+      else if (m.inbound === true || m.isInbound === true || m.fromContact === true || m.from_contact === true) direction = 'inbound'
+      merged.push({ id, body, direction, sent_at: sentAt })
     }
   }
   return merged
@@ -1367,7 +1373,7 @@ async function verifyAndLogEnroll(env, userId, leadId, apiKey, contactUuid, work
     const messages = await fetchPPMessages(apiKey, contactUuid, 10)
     const cutoff = Date.now() - 90 * 1000  // messages in the last 90 sec
     const hasFreshOutbound = messages.some(m => {
-      if (!/out/.test(m.direction)) return false
+      if (m.direction !== 'outbound') return false
       if (!m.sent_at) return false
       const t = new Date(m.sent_at).getTime()
       return isFinite(t) && t >= cutoff
@@ -1456,7 +1462,7 @@ async function scanForResponses(env) {
               continue
             }
             const messages = await fetchPPMessages(apiKey, contactUuid, 20)
-            const hasInbound = messages.some(m => /in/.test(m.direction) && !/out/.test(m.direction))
+            const hasInbound = messages.some(m => m.direction === 'inbound')
             if (hasInbound) {
               await patchLeadPPStatus(env, lead.id, 'responded', now.toISOString())
               console.log('[pp-scan] lead', lead.id, 'RESPONDED')
@@ -1493,10 +1499,10 @@ async function scanForResponses(env) {
         const contactUuid = await findContactByPhone(apiKey, normPhone)
         if (!contactUuid) continue  // no PP contact = never enrolled, leave status null
         const messages = await fetchPPMessages(apiKey, contactUuid, 20)
-        const hasOutbound = messages.some(m => /out/.test(m.direction))
+        const hasOutbound = messages.some(m => m.direction === 'outbound')
         if (!hasOutbound) continue  // contact exists but no outbound = not really enrolled
         // Something was sent. Determine current state.
-        const hasInbound = messages.some(m => /in/.test(m.direction) && !/out/.test(m.direction))
+        const hasInbound = messages.some(m => m.direction === 'inbound')
         const newStatus = hasInbound ? 'responded' : 'awaiting'
         await patchLeadPPStatus(env, lead.id, newStatus, now.toISOString())
         // Backfill activity log entry if one doesn't already exist for this lead.
@@ -1683,9 +1689,9 @@ export default {
     // every release so a stale deploy is immediately visible.
     if (req.method === 'GET' && url.pathname === '/version') {
       return new Response(JSON.stringify({
-        version: 'v4.30',
-        parser: 'warm bucket requires at least one inbound reply (no drip failures)',
-        deployed_check: 'if you see v4.30 here, the deploy succeeded',
+        version: 'v4.31',
+        parser: 'strict direction classification — no more ambiguous inbound',
+        deployed_check: 'if you see v4.31 here, the deploy succeeded',
       }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
     }
     // Public API v1 — auth via X-API-Key. All routes under /api/v1/*.
@@ -1906,17 +1912,22 @@ export default {
             if (!isFinite(newestTs) || newestTs === 0) continue
             // Rule 2: latest activity within the window
             if (newestTs < windowStart) continue
-            // Rule 3: newest is outbound AND older than 2h
-            const isOutbound = /out/.test(newest.direction || '') && !/in/.test(newest.direction || '')
+            // Rule 3: newest is outbound AND older than 2h. STRICT check —
+            // only messages explicitly marked outbound count. 'unknown'
+            // direction messages don't qualify (avoids false positives when
+            // PP returns messages we can't classify).
+            const isOutbound = newest.direction === 'outbound'
             if (!isOutbound) continue
-            if (newestTs > silentThreshold) continue  // still within the 2h grace, not silent yet
-            // Rule 4: contact must have replied AT LEAST ONCE. Otherwise this
-            // is just a cold drip (Nic sends 1-3 texts, no engagement ever) —
-            // that's not "warm gone quiet," that's "never was warm." The
-            // Positive tag alone isn't proof of engagement because it can be
-            // applied for other reasons; require an actual inbound message.
-            const hasInbound = msgs.some(m => /in/.test(m.direction || '') && !/out/.test(m.direction || ''))
-            if (!hasInbound) continue
+            if (newestTs > silentThreshold) continue
+            // Rule 4: contact must have replied AT LEAST ONCE. Same STRICT
+            // rule — only explicit 'inbound' counts. This is what excludes
+            // drip failures: Nic's blast + retries with zero engagement
+            // never satisfy this so the contact stays out of the bucket.
+            const hasInbound = msgs.some(m => m.direction === 'inbound')
+            if (!hasInbound) {
+              console.log('[warm-bucket] skip', c.uuid, 'no explicit inbound in', msgs.length, 'msgs — directions:', msgs.map(m => m.direction).slice(0, 5).join(','))
+              continue
+            }
             // Match — keep the full recent history (oldest→newest so the UI
             // reads chronologically). Focus mode shows all of them.
             const history = msgs.slice().reverse()

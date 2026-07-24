@@ -23,8 +23,10 @@ function fullName(c) {
 }
 
 // Chat bubble — larger + spacious for the focus view.
+// STRICT direction check — matches the worker's classifier so what you see
+// here is what the warm-bucket filter used to include this contact.
 function MessageBubble({ msg, spacious = false }) {
-  const isOut = /out/.test(msg?.direction || '') && !/in/.test(msg?.direction || '')
+  const isOut = msg?.direction === 'outbound'
   const time = msg?.sent_at
     ? format(new Date(msg.sent_at), 'MMM d h:mma').toLowerCase()
     : ''
