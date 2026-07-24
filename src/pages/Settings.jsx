@@ -1598,6 +1598,9 @@ function PitchPerfectPanel() {
       id: x.id || `r${i}_${Date.now()}`,
       keyword: x.keyword || '',
       workflowId: x.workflowId || '',
+      // New: which lead field to match against ('comments' default, or 'campaign').
+      // Old rules without this field default to 'comments' — full backward compat.
+      field: x.field || 'comments',
     })))
     setDefaultWorkflowId(pitchprfctRules?.defaultWorkflowId || '')
     setDelayMinutes(Math.max(0, parseInt(pitchprfctRules?.delayMinutes, 10) || 0))
@@ -1664,7 +1667,7 @@ function PitchPerfectPanel() {
   }, [reloadKey, keyState, uid])
 
   const wfName = (id) => (workflows.find(w => w.id === id) || {}).name || ''
-  const addRule = () => setRules(rs => [...rs, { id: `r${Date.now()}`, keyword: '', workflowId: '' }])
+  const addRule = () => setRules(rs => [...rs, { id: `r${Date.now()}`, keyword: '', workflowId: '', field: 'comments' }])
   const removeRule = (id) => setRules(rs => rs.filter(r => r.id !== id))
   const patchRule = (id, patch) => setRules(rs => rs.map(r => r.id === id ? { ...r, ...patch } : r))
 
@@ -1672,7 +1675,13 @@ function PitchPerfectPanel() {
     setSaving(true); setMsg(null)
     const cleanRules = rules
       .filter(r => r.keyword.trim() && r.workflowId)
-      .map(r => ({ id: r.id, keyword: r.keyword.trim(), workflowId: r.workflowId, workflowName: wfName(r.workflowId) }))
+      .map(r => ({
+        id: r.id,
+        keyword: r.keyword.trim(),
+        workflowId: r.workflowId,
+        workflowName: wfName(r.workflowId),
+        field: r.field || 'comments',
+      }))
     const res = await savePitchprfctRules({
       rules: cleanRules,
       defaultWorkflowId,
@@ -1808,20 +1817,31 @@ function PitchPerfectPanel() {
             No rules yet — every lead uses the default workflow. Add a rule to route specific leads.
           </div>
         )}
-        {rules.map(r => (
-          <div key={r.id} className="flex items-center gap-2 flex-wrap">
-            <span className="text-xs text-[#5A6A7A] flex-shrink-0">Comments contain</span>
-            <input value={r.keyword} onChange={e => patchRule(r.id, { keyword: e.target.value })}
-              placeholder="e.g. ACN"
-              className="w-32 px-2 py-2 rounded-lg text-sm text-white bg-[#080B0F] border border-[#1A2130] focus:outline-none focus:border-[#00E5C340]" />
-            <span className="text-xs text-[#5A6A7A] flex-shrink-0">enroll in</span>
-            {workflowSelect(r.workflowId, (v) => patchRule(r.id, { workflowId: v }))}
-            <button onClick={() => removeRule(r.id)}
-              className="p-1.5 rounded text-[#3A4A5A] hover:text-[#EF4444] hover:bg-[#EF444415] flex-shrink-0">
-              <Trash2 size={13} />
-            </button>
-          </div>
-        ))}
+        {rules.map(r => {
+          const field = r.field || 'comments'
+          return (
+            <div key={r.id} className="flex items-center gap-2 flex-wrap">
+              {/* Field selector — comments (contains-match) OR campaign
+                  (exact/contains match). Lets Nic route by lead source (e.g.
+                  campaign="america-choice-network" → workflow X) without
+                  relying on marketplace-specific keywords hidden in comments. */}
+              <select value={field} onChange={e => patchRule(r.id, { field: e.target.value })}
+                className="px-2 py-2 rounded-lg text-xs text-white bg-[#080B0F] border border-[#1A2130] focus:outline-none focus:border-[#00E5C340]">
+                <option value="comments">Comments contain</option>
+                <option value="campaign">Campaign is</option>
+              </select>
+              <input value={r.keyword} onChange={e => patchRule(r.id, { keyword: e.target.value })}
+                placeholder={field === 'campaign' ? 'e.g. america-choice-network' : 'e.g. ACN'}
+                className="flex-1 min-w-[180px] px-2 py-2 rounded-lg text-sm text-white bg-[#080B0F] border border-[#1A2130] focus:outline-none focus:border-[#00E5C340]" />
+              <span className="text-xs text-[#5A6A7A] flex-shrink-0">enroll in</span>
+              {workflowSelect(r.workflowId, (v) => patchRule(r.id, { workflowId: v }))}
+              <button onClick={() => removeRule(r.id)}
+                className="p-1.5 rounded text-[#3A4A5A] hover:text-[#EF4444] hover:bg-[#EF444415] flex-shrink-0">
+                <Trash2 size={13} />
+              </button>
+            </div>
+          )
+        })}
       </div>
 
       <div className="flex items-center gap-2">

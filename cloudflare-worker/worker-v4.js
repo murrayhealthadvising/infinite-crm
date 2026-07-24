@@ -1026,16 +1026,34 @@ async function getAgentApiKey(env, userId) {
 // Decide the workflow ID by scanning the lead's marketplace comments for the
 // agent's keywords. First rule that matches wins; otherwise the default.
 function pickWorkflowId(rules, lead) {
-  const hay = String(lead.comments || '').toLowerCase()
+  // Rules can now match against either `comments` (default, contains-match)
+  // or `campaign` (exact case-insensitive match). Field is optional on the
+  // rule — omitted means comments, keeping every existing rule working
+  // unchanged. First rule that matches wins.
   const list = Array.isArray(rules && rules.rules) ? rules.rules : []
+  const comments = String(lead.comments || '').toLowerCase()
+  const campaign = String(lead.campaign || '').toLowerCase().trim()
   for (const rule of list) {
     const kw = String((rule && rule.keyword) || '').trim().toLowerCase()
-    if (kw && rule.workflowId && hay.includes(kw)) {
-      return { id: rule.workflowId, name: rule.workflowName || '', why: `comments matched "${rule.keyword}"` }
+    if (!kw || !rule.workflowId) continue
+    const field = (rule.field || 'comments').toLowerCase()
+    if (field === 'campaign') {
+      // Exact match on campaign (case-insensitive). Handles "america-choice"
+      // matching "america-choice-network" via a substring check too, so agents
+      // don't have to type the exact vendor string when their marketplace
+      // sometimes tacks on suffixes.
+      if (campaign === kw || (campaign && campaign.includes(kw))) {
+        return { id: rule.workflowId, name: rule.workflowName || '', why: `campaign matched "${rule.keyword}"` }
+      }
+    } else {
+      // Comments contains-match (legacy default)
+      if (comments.includes(kw)) {
+        return { id: rule.workflowId, name: rule.workflowName || '', why: `comments matched "${rule.keyword}"` }
+      }
     }
   }
   if (rules && rules.defaultWorkflowId) {
-    return { id: rules.defaultWorkflowId, name: rules.defaultWorkflowName || '', why: 'no keyword match — default workflow' }
+    return { id: rules.defaultWorkflowId, name: rules.defaultWorkflowName || '', why: 'no rule matched — default workflow' }
   }
   return null
 }
@@ -1665,9 +1683,9 @@ export default {
     // every release so a stale deploy is immediately visible.
     if (req.method === 'GET' && url.pathname === '/version') {
       return new Response(JSON.stringify({
-        version: 'v4.28',
-        parser: 'auto-unenroll on stage change (apt/sold/stop/dnq)',
-        deployed_check: 'if you see v4.28 here, the deploy succeeded',
+        version: 'v4.29',
+        parser: 'PP rules can match by campaign or comments',
+        deployed_check: 'if you see v4.29 here, the deploy succeeded',
       }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
     }
     // Public API v1 — auth via X-API-Key. All routes under /api/v1/*.
