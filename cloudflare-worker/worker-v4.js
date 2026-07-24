@@ -1683,9 +1683,9 @@ export default {
     // every release so a stale deploy is immediately visible.
     if (req.method === 'GET' && url.pathname === '/version') {
       return new Response(JSON.stringify({
-        version: 'v4.29',
-        parser: 'PP rules can match by campaign or comments',
-        deployed_check: 'if you see v4.29 here, the deploy succeeded',
+        version: 'v4.30',
+        parser: 'warm bucket requires at least one inbound reply (no drip failures)',
+        deployed_check: 'if you see v4.30 here, the deploy succeeded',
       }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
     }
     // Public API v1 — auth via X-API-Key. All routes under /api/v1/*.
@@ -1860,6 +1860,9 @@ export default {
     //      (so the bucket only shows RECENT positives, not months-old ones).
     //   3) The newest message must be OUTBOUND (from us) AND older than 2h
     //      (they went quiet after our last text — Nic's exact ask).
+    //   4) Contact must have replied AT LEAST ONCE at some point in the
+    //      history. Prevents cold-drip failures from cluttering the bucket
+    //      (contacts that got the tag but never actually engaged).
     if (req.method === 'GET' && url.pathname === '/warm-bucket/scan') {
       const wbAgent = url.searchParams.get('agent_id')
       const wbHours = Math.max(1, Math.min(720, parseInt(url.searchParams.get('hours'), 10) || 24))
@@ -1907,6 +1910,13 @@ export default {
             const isOutbound = /out/.test(newest.direction || '') && !/in/.test(newest.direction || '')
             if (!isOutbound) continue
             if (newestTs > silentThreshold) continue  // still within the 2h grace, not silent yet
+            // Rule 4: contact must have replied AT LEAST ONCE. Otherwise this
+            // is just a cold drip (Nic sends 1-3 texts, no engagement ever) —
+            // that's not "warm gone quiet," that's "never was warm." The
+            // Positive tag alone isn't proof of engagement because it can be
+            // applied for other reasons; require an actual inbound message.
+            const hasInbound = msgs.some(m => /in/.test(m.direction || '') && !/out/.test(m.direction || ''))
+            if (!hasInbound) continue
             // Match — keep the full recent history (oldest→newest so the UI
             // reads chronologically). Focus mode shows all of them.
             const history = msgs.slice().reverse()
