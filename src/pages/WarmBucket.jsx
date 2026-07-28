@@ -136,12 +136,10 @@ export default function WarmBucket() {
         setMatches(Array.isArray(j.matches) ? j.matches : [])
         setSelectedIdx(0)
         setDismissed(new Set())
-        if (j.note) setScanNote(j.note)
-        // Diagnostic surface when the scan returns empty. Shows the skip-
-        // reason breakdown so we can see exactly WHY nothing landed in the
-        // bucket (never was warm, still within the 2h grace, tag not
-        // returning contacts, etc.).
-        else if (j.debug && (!j.matches || j.matches.length === 0)) {
+        // Always show the scan funnel — Nic wants to see the filter
+        // breakdown even when there ARE matches, so he can tell whether
+        // he needs to widen his time window.
+        if (j.debug) {
           const c = j.debug.skip_counts || {}
           const parts = []
           if (c.no_msgs) parts.push(`${c.no_msgs} had no PP messages`)
@@ -149,11 +147,14 @@ export default function WarmBucket() {
           if (c.newest_not_out) parts.push(`${c.newest_not_out} already replied to your latest text`)
           if (c.no_inbound) parts.push(`${c.no_inbound} never actually replied (cold drip, PP auto-tagged)`)
           if (c.bad_ts) parts.push(`${c.bad_ts} messages had no timestamp`)
-          const summary = parts.length
-            ? `Found ${j.debug.contacts_found_by_tag} Positive-tagged contacts. Scanned ${j.debug.scanned}. Reasons none matched: ${parts.join(' · ')}.`
-            : `Found ${j.debug.contacts_found_by_tag} Positive-tagged contacts but scanned 0.`
+          const matchCount = (j.matches || []).length
+          const summary = matchCount > 0
+            ? `${matchCount} match${matchCount === 1 ? '' : 'es'} · scanned ${j.debug.scanned} of ${j.debug.contacts_found_by_tag} Positive-tagged. Filtered out: ${parts.join(' · ') || 'none'}. Try widening the time window if you expected more.`
+            : (parts.length
+                ? `0 matches. Scanned ${j.debug.scanned} of ${j.debug.contacts_found_by_tag} Positive-tagged. All filtered out: ${parts.join(' · ')}.`
+                : `Found ${j.debug.contacts_found_by_tag} Positive-tagged contacts but scanned 0.`)
           setScanNote(summary)
-        }
+        } else if (j.note) setScanNote(j.note)
       }
     } catch (e) {
       setError(String(e?.message || e))

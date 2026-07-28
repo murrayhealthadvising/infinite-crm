@@ -1696,9 +1696,9 @@ export default {
     // every release so a stale deploy is immediately visible.
     if (req.method === 'GET' && url.pathname === '/version') {
       return new Response(JSON.stringify({
-        version: 'v4.38',
-        parser: 'warm bucket: require at least one real inbound (PP auto-tags cold contacts)',
-        deployed_check: 'if you see v4.38 here, the deploy succeeded',
+        version: 'v4.39',
+        parser: 'warm bucket: 500 cap + always-visible scan funnel',
+        deployed_check: 'if you see v4.39 here, the deploy succeeded',
       }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
     }
     // Public API v1 — auth via X-API-Key. All routes under /api/v1/*.
@@ -1904,11 +1904,11 @@ export default {
         const matches = []
         const skipCounts = { no_msgs: 0, bad_ts: 0, out_of_window: 0, newest_not_out: 0, no_inbound: 0 }
         const skipSamples = []  // first ~5 skips with detail
-        // Scan up to 300 tagged contacts. Nic can have hundreds of Positives
-        // and the interesting warm ones aren't always first in PP's list.
-        // Run in concurrent batches of 15 so PP isn't blasted but we still
-        // process 300 in ~10-20s of CPU (well inside Cloudflare's budget).
-        const capped = contacts.slice(0, 300)
+        // Scan up to 500 tagged contacts — covers Nic's ~400 Positives with
+        // headroom. PP doesn't sort contacts by activity so a recently-active
+        // one could sit anywhere in the list. Concurrent batches of 15
+        // finish 500 in ~15s (well inside Cloudflare's 30s CPU budget).
+        const capped = contacts.slice(0, 500)
         const BATCH_SIZE = 15
         const processContact = async (c) => {
           try {
@@ -1990,9 +1990,14 @@ export default {
           await Promise.allSettled(batch.map(processContact))
         }
         console.log('[warm-bucket]', matches.length, 'matches · skip counts:', skipCounts)
-        const debug = matches.length === 0
-          ? { contacts_found_by_tag: contacts.length, scanned: capped.length, skip_counts: skipCounts, skip_samples: skipSamples }
-          : undefined
+        // Always return the funnel — Nic wants to see how many got filtered
+        // even when there ARE matches, so he can adjust his time window.
+        const debug = {
+          contacts_found_by_tag: contacts.length,
+          scanned: capped.length,
+          skip_counts: skipCounts,
+          skip_samples: skipSamples,
+        }
         return new Response(JSON.stringify({ ok: true, matches, scanned: capped.length, tag: wbTag, hours: wbHours, debug }), {
           status: 200, headers: { 'content-type': 'application/json', ...CORS },
         })
