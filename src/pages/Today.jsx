@@ -160,7 +160,11 @@ export default function Today() {
     return m
   }, [safeLeads])
 
-  const activeReminders = (reminders || []).filter(r => !r.done_at)
+  // Everything for the calendar (includes completed so history stays visible).
+  // Active-only for the sidebar and header counters — done reminders shouldn't
+  // clutter "overdue" or "open" counts.
+  const allReminders = (reminders || [])
+  const activeReminders = allReminders.filter(r => !r.done_at)
   const overdue = useMemo(() => activeReminders
     .filter(r => r.due_at && isPast(new Date(r.due_at)))
     .sort((a, b) => new Date(a.due_at) - new Date(b.due_at)), [activeReminders])
