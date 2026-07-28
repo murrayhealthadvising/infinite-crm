@@ -1,0 +1,15 @@
+# Wrangler config for the Infinite CRM worker.
+#
+# Minimal by design — env vars (SUPABASE_URL, SUPABASE_SERVICE_KEY, PP config),
+# email routes, and any secrets stay managed in the Cloudflare dashboard.
+# Wrangler deploy WON'T touch them as long as this file doesn't declare them.
+#
+# Ship with:  npx wrangler deploy
+name = "infinite-crm-webhook"
+main = "worker-v4.js"
+compatibility_date = "2024-11-01"
+
+# Cron trigger — every minute. Matches the current dashboard-configured
+# */1 * * * * schedule so a wrangler deploy preserves it.
+[triggers]
+crons = ["*/1 * * * *"]
