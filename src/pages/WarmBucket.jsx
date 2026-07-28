@@ -147,6 +147,7 @@ export default function WarmBucket() {
           if (c.no_msgs) parts.push(`${c.no_msgs} had no PP messages`)
           if (c.out_of_window) parts.push(`${c.out_of_window} last activity outside your ${hours}h window`)
           if (c.newest_not_out) parts.push(`${c.newest_not_out} already replied to your latest text`)
+          if (c.no_inbound) parts.push(`${c.no_inbound} never actually replied (cold drip, PP auto-tagged)`)
           if (c.bad_ts) parts.push(`${c.bad_ts} messages had no timestamp`)
           const summary = parts.length
             ? `Found ${j.debug.contacts_found_by_tag} Positive-tagged contacts. Scanned ${j.debug.scanned}. Reasons none matched: ${parts.join(' · ')}.`

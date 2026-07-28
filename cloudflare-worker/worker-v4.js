@@ -1696,9 +1696,9 @@ export default {
     // every release so a stale deploy is immediately visible.
     if (req.method === 'GET' && url.pathname === '/version') {
       return new Response(JSON.stringify({
-        version: 'v4.37',
-        parser: 'warm bucket: simplified — Positive tag + newest is outbound = in bucket',
-        deployed_check: 'if you see v4.37 here, the deploy succeeded',
+        version: 'v4.38',
+        parser: 'warm bucket: require at least one real inbound (PP auto-tags cold contacts)',
+        deployed_check: 'if you see v4.38 here, the deploy succeeded',
       }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
     }
     // Public API v1 — auth via X-API-Key. All routes under /api/v1/*.
@@ -1867,12 +1867,14 @@ export default {
     //
     //   GET /warm-bucket/scan?agent_id=UUID&hours=24&tag=Positive
     //
-    // Filter logic — trust the tag. If Nic tagged them Positive, the tag
-    // itself IS the engagement proof; no need to re-verify with message
-    // heuristics that misclassify PP's system events. Just show:
-    //   1) Contact has the tag (default "Positive", case-insensitive).
-    //   2) Contact's most recent message is within the `hours` window.
-    //   3) The newest message is OUTBOUND — they haven't replied to it yet.
+    // Filter logic — Positive tag alone isn't enough (PP auto-tags some
+    // contacts who never actually replied). Real warmth requires an inbound
+    // message in the history. Rules:
+    //   1) Contact has the Positive tag (case-insensitive).
+    //   2) Latest message is within the `hours` window.
+    //   3) Newest message is OUTBOUND — Nic sent last, they haven't replied.
+    //   4) At least ONE inbound message with real body text exists in the
+    //      history — proves they actually engaged at some point.
     if (req.method === 'GET' && url.pathname === '/warm-bucket/scan') {
       const wbAgent = url.searchParams.get('agent_id')
       const wbHours = Math.max(1, Math.min(720, parseInt(url.searchParams.get('hours'), 10) || 24))
@@ -1900,7 +1902,7 @@ export default {
         }
         console.log('[warm-bucket] scanning', contacts.length, 'tagged contacts for agent', wbAgent, 'window', wbHours + 'h')
         const matches = []
-        const skipCounts = { no_msgs: 0, bad_ts: 0, out_of_window: 0, newest_not_out: 0 }
+        const skipCounts = { no_msgs: 0, bad_ts: 0, out_of_window: 0, newest_not_out: 0, no_inbound: 0 }
         const skipSamples = []  // first ~5 skips with detail
         // Scan up to 300 tagged contacts. Nic can have hundreds of Positives
         // and the interesting warm ones aren't always first in PP's list.
@@ -1935,11 +1937,14 @@ export default {
             const newestTs = new Date(newest.sent_at || 0).getTime()
             if (!isFinite(newestTs) || newestTs === 0) { noteSkip('bad_ts'); return }
             if (newestTs < windowStart) { noteSkip('out_of_window', { newest_at: newest.sent_at }); return }
-            // Only rule left: the newest message must be OUTBOUND from us —
-            // meaning they haven't replied to it yet. Nic already curates the
-            // Positive tag manually, so we trust that engagement happened.
             const isOutbound = newest.direction === 'outbound'
             if (!isOutbound) { noteSkip('newest_not_out', { newest_dir: newest.direction }); return }
+            // Rule 4 — require at least one inbound MESSAGE (with body) in
+            // the history. Nic's Positive tag isn't perfectly reliable — PP
+            // seems to auto-apply it in some cases. Actual inbound proves
+            // engagement.
+            const hasInbound = msgs.some(m => m.direction === 'inbound' && m.body && m.body.trim().length > 0)
+            if (!hasInbound) { noteSkip('no_inbound'); return }
             // Per-contact stats — surfaced on each match so we can verify the
             // worker's classification against what the UI displays. If a
             // match shows 0 inbound in the UI but this reports 1+, we know
