@@ -1696,9 +1696,9 @@ export default {
     // every release so a stale deploy is immediately visible.
     if (req.method === 'GET' && url.pathname === '/version') {
       return new Response(JSON.stringify({
-        version: 'v4.33',
-        parser: 'warm bucket: full skip diagnostics on empty results',
-        deployed_check: 'if you see v4.33 here, the deploy succeeded',
+        version: 'v4.34',
+        parser: 'warm bucket: filter out PP system events (no-body messages)',
+        deployed_check: 'if you see v4.34 here, the deploy succeeded',
       }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
     }
     // Public API v1 — auth via X-API-Key. All routes under /api/v1/*.
@@ -1910,7 +1910,12 @@ export default {
         const capped = contacts.slice(0, 60)
         for (const c of capped) {
           try {
-            const msgs = await fetchPPMessages(wbKey, c.uuid, 30)
+            const rawMsgs = await fetchPPMessages(wbKey, c.uuid, 30)
+            // Only count messages with actual body text. PP's messages
+            // endpoint mixes in system events (workflow started, tag added,
+            // notifications) that have no body — those were falsely inflating
+            // hasInbound and letting drip-only contacts through.
+            const msgs = rawMsgs.filter(m => m.body && m.body.trim())
             const noteSkip = (reason, extra = {}) => {
               skipCounts[reason] = (skipCounts[reason] || 0) + 1
               if (skipSamples.length < 5) {
@@ -1933,7 +1938,10 @@ export default {
             const isOutbound = newest.direction === 'outbound'
             if (!isOutbound) { noteSkip('newest_not_out', { newest_dir: newest.direction }); continue }
             if (newestTs > silentThreshold) { noteSkip('still_within_grace', { newest_at: newest.sent_at }); continue }
-            const hasInbound = msgs.some(m => m.direction === 'inbound')
+            // hasInbound: at least ONE inbound with a real body. Double-guard
+            // against system-event noise (already filtered above but belt-and-
+            // suspenders since this is the rule that gates warm-vs-cold).
+            const hasInbound = msgs.some(m => m.direction === 'inbound' && m.body && m.body.trim().length > 0)
             if (!hasInbound) { noteSkip('no_inbound'); continue }
             // Match — keep the full recent history (oldest→newest so the UI
             // reads chronologically). Focus mode shows all of them.
