@@ -207,6 +207,7 @@ export default function Today() {
   const dropReminderOnDay = (reminderId, newDay) => {
     const r = (reminders || []).find(x => x.id === reminderId)
     if (!r) return
+    if (r.done_at) return  // completed reminders don't reschedule — they're history now
     const newDue = setDayPreservingTime(r.due_at, newDay)
     let newEnd = null
     if (r.end_at) {
@@ -313,7 +314,7 @@ export default function Today() {
         {view === 'month' ? (
           <MonthCalendar
             anchor={anchor}
-            reminders={activeReminders}
+            reminders={allReminders}
             gcalEvents={gcalEvents}
             leadById={leadById}
             onSlotClick={(day) => seedFromSlot(day)}
@@ -325,7 +326,7 @@ export default function Today() {
         ) : (
           <WeekCalendar
             anchor={anchor}
-            reminders={activeReminders}
+            reminders={allReminders}
             gcalEvents={gcalEvents}
             leadById={leadById}
             onSlotClick={seedFromSlot}
@@ -489,7 +490,8 @@ function MonthCalendar({ anchor, reminders, gcalEvents = [], leadById, onSlotCli
                 {items.slice(0, reminderSlots).map(r => {
                   const lead = leadById.get(r.lead_id)
                   const meta = KIND_META[r.kind] || KIND_META.call
-                  const overdue = r.due_at && isPast(new Date(r.due_at))
+                  const isDone = !!r.done_at
+                  const overdue = !isDone && r.due_at && isPast(new Date(r.due_at))
                   // Day-based display: skip the time chip on the month view so
                   // stacked reminders read like the mockup (label + name only).
                   // "Auto" reminders (retention / ACA / birthday) get a short
@@ -506,19 +508,30 @@ function MonthCalendar({ anchor, reminders, gcalEvents = [], leadById, onSlotCli
                     marker.startsWith('R+') ? `Day ${marker.slice(1)} check-in` :
                     meta.label
                   const timeLabelFull = r.due_at ? format(new Date(r.due_at), 'h:mma').toLowerCase() : ''
+                  // Completed reminders stay visible for historical recall but
+                  // are dimmed + strikethrough + green ✓ so they read as "done"
+                  // at a glance. Not draggable (already handled).
+                  const chipStyle = isDone
+                    ? { background: '#10B98115', borderLeft: '2px solid #10B98160', opacity: 0.65 }
+                    : { background: (overdue ? '#EF4444' : meta.color) + '25',
+                        borderLeft: `2px solid ${overdue ? '#EF4444' : meta.color}` }
                   return (
                     <div key={r.id}
-                      draggable
-                      onDragStart={(e) => { e.stopPropagation(); e.dataTransfer.setData('text/reminder-id', r.id); e.dataTransfer.effectAllowed = 'move' }}
+                      draggable={!isDone}
+                      onDragStart={isDone ? undefined : (e) => { e.stopPropagation(); e.dataTransfer.setData('text/reminder-id', r.id); e.dataTransfer.effectAllowed = 'move' }}
                       onClick={(e) => { e.stopPropagation(); onReminderClick(r) }}
-                      title={`${timeLabelFull} · ${label} · ${leadName(lead)} · ${cleanNote}`}
-                      className="flex flex-col gap-0 px-1 py-0.5 rounded text-[10px] cursor-grab active:cursor-grabbing hover:brightness-125"
-                      style={{
-                        background: (overdue ? '#EF4444' : meta.color) + '25',
-                        borderLeft: `2px solid ${overdue ? '#EF4444' : meta.color}`,
-                      }}>
-                      <span className="text-[8px] font-mono truncate" style={{ color: overdue ? '#EF4444' : meta.color }}>{label}</span>
-                      <span className="text-white truncate leading-tight">{leadName(lead)}</span>
+                      title={`${isDone ? '✓ done · ' : ''}${timeLabelFull} · ${label} · ${leadName(lead)} · ${cleanNote}`}
+                      className={`flex items-center gap-1 px-1 py-0.5 rounded text-[10px] ${isDone ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'} hover:brightness-125`}
+                      style={chipStyle}>
+                      {isDone && <Check size={9} className="text-[#10B981] flex-shrink-0" />}
+                      <div className="flex flex-col gap-0 min-w-0 flex-1">
+                        <span className="text-[8px] font-mono truncate" style={{ color: isDone ? '#10B981' : (overdue ? '#EF4444' : meta.color) }}>
+                          {label}{isDone ? ' · done' : ''}
+                        </span>
+                        <span className={`truncate leading-tight ${isDone ? 'text-[#8899AA] line-through' : 'text-white'}`}>
+                          {leadName(lead)}
+                        </span>
+                      </div>
                     </div>
                   )
                 })}

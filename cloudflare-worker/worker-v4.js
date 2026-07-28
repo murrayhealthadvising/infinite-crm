@@ -1696,9 +1696,9 @@ export default {
     // every release so a stale deploy is immediately visible.
     if (req.method === 'GET' && url.pathname === '/version') {
       return new Response(JSON.stringify({
-        version: 'v4.32',
-        parser: 'warm bucket: permissive direction detection + debug output on empty results',
-        deployed_check: 'if you see v4.32 here, the deploy succeeded',
+        version: 'v4.33',
+        parser: 'warm bucket: full skip diagnostics on empty results',
+        deployed_check: 'if you see v4.33 here, the deploy succeeded',
       }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
     }
     // Public API v1 — auth via X-API-Key. All routes under /api/v1/*.
@@ -1899,42 +1899,42 @@ export default {
         if (!contacts.length) {
           return new Response(JSON.stringify({
             ok: true, matches: [],
-            note: `No contacts returned from PP for tag "${wbTag}". Attempts: ${errors.join(', ') || 'all 200s but empty'}`,
+            note: `No contacts returned from PP for tag "${wbTag}". PP endpoint attempts: ${errors.join(', ') || 'all 200s but empty results'}. Check tag name is exact (case-insensitive).`,
           }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
         }
         console.log('[warm-bucket] scanning', contacts.length, 'tagged contacts for agent', wbAgent, 'window', wbHours + 'h')
         const matches = []
+        const skipCounts = { no_msgs: 0, bad_ts: 0, out_of_window: 0, newest_not_out: 0, still_within_grace: 0, no_inbound: 0 }
+        const skipSamples = []  // first ~5 skips with detail
         // Sequential to avoid PP rate-limit; keep bucket size sane.
         const capped = contacts.slice(0, 60)
         for (const c of capped) {
           try {
-            // Pull a fuller history (30) so the focus view in the CRM has real
-            // context for the callback, not just the 5 most-recent bubbles.
             const msgs = await fetchPPMessages(wbKey, c.uuid, 30)
-            if (!msgs.length) continue
-            // Sort newest first
+            const noteSkip = (reason, extra = {}) => {
+              skipCounts[reason] = (skipCounts[reason] || 0) + 1
+              if (skipSamples.length < 5) {
+                skipSamples.push({
+                  contact: `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.uuid,
+                  phone: c.phone,
+                  reason,
+                  msg_count: msgs.length,
+                  directions: msgs.slice(0, 5).map(m => m.direction),
+                  ...extra,
+                })
+              }
+            }
+            if (!msgs.length) { noteSkip('no_msgs'); continue }
             msgs.sort((a, b) => (new Date(b.sent_at || 0)).getTime() - (new Date(a.sent_at || 0)).getTime())
             const newest = msgs[0]
             const newestTs = new Date(newest.sent_at || 0).getTime()
-            if (!isFinite(newestTs) || newestTs === 0) continue
-            // Rule 2: latest activity within the window
-            if (newestTs < windowStart) continue
-            // Rule 3: newest is outbound AND older than 2h. STRICT check —
-            // only messages explicitly marked outbound count. 'unknown'
-            // direction messages don't qualify (avoids false positives when
-            // PP returns messages we can't classify).
+            if (!isFinite(newestTs) || newestTs === 0) { noteSkip('bad_ts'); continue }
+            if (newestTs < windowStart) { noteSkip('out_of_window', { newest_at: newest.sent_at }); continue }
             const isOutbound = newest.direction === 'outbound'
-            if (!isOutbound) continue
-            if (newestTs > silentThreshold) continue
-            // Rule 4: contact must have replied AT LEAST ONCE. Same STRICT
-            // rule — only explicit 'inbound' counts. This is what excludes
-            // drip failures: Nic's blast + retries with zero engagement
-            // never satisfy this so the contact stays out of the bucket.
+            if (!isOutbound) { noteSkip('newest_not_out', { newest_dir: newest.direction }); continue }
+            if (newestTs > silentThreshold) { noteSkip('still_within_grace', { newest_at: newest.sent_at }); continue }
             const hasInbound = msgs.some(m => m.direction === 'inbound')
-            if (!hasInbound) {
-              console.log('[warm-bucket] skip', c.uuid, 'no explicit inbound in', msgs.length, 'msgs — directions:', msgs.map(m => m.direction).slice(0, 5).join(','))
-              continue
-            }
+            if (!hasInbound) { noteSkip('no_inbound'); continue }
             // Match — keep the full recent history (oldest→newest so the UI
             // reads chronologically). Focus mode shows all of them.
             const history = msgs.slice().reverse()
@@ -1961,22 +1961,10 @@ export default {
             console.error('[warm-bucket] contact', c.uuid, 'threw', String(e))
           }
         }
-        console.log('[warm-bucket]', matches.length, 'matches')
-        // Debug: on empty results, capture one contact's raw message shape so
-        // Nic can see what PP actually returned. Helps diagnose classifier
-        // gaps (e.g. PP added a new direction value we haven't seen).
-        let debug = undefined
-        if (matches.length === 0 && capped.length > 0) {
-          try {
-            const sample = await fetchPPMessages(wbKey, capped[0].uuid, 5)
-            debug = {
-              first_contact_uuid: capped[0].uuid,
-              first_contact_name: `${capped[0].first_name || ''} ${capped[0].last_name || ''}`.trim(),
-              sample_message_directions: sample.map(m => m.direction),
-              sample_count: sample.length,
-            }
-          } catch {}
-        }
+        console.log('[warm-bucket]', matches.length, 'matches · skip counts:', skipCounts)
+        const debug = matches.length === 0
+          ? { contacts_found_by_tag: contacts.length, scanned: capped.length, skip_counts: skipCounts, skip_samples: skipSamples }
+          : undefined
         return new Response(JSON.stringify({ ok: true, matches, scanned: capped.length, tag: wbTag, hours: wbHours, debug }), {
           status: 200, headers: { 'content-type': 'application/json', ...CORS },
         })

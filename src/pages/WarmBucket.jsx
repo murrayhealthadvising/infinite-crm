@@ -137,16 +137,23 @@ export default function WarmBucket() {
         setSelectedIdx(0)
         setDismissed(new Set())
         if (j.note) setScanNote(j.note)
-        // Debug surface — when the scan returns empty but scanned > 0, the
-        // worker sends back a sample of what PP returned so we can see if the
-        // direction classifier is missing a value.
+        // Diagnostic surface when the scan returns empty. Shows the skip-
+        // reason breakdown so we can see exactly WHY nothing landed in the
+        // bucket (never was warm, still within the 2h grace, tag not
+        // returning contacts, etc.).
         else if (j.debug && (!j.matches || j.matches.length === 0)) {
-          setScanNote(
-            `Scanned ${j.scanned} tagged contacts, 0 matched the "warm gone quiet" rules. ` +
-            `Sample directions PP returned for ${j.debug.first_contact_name || 'first contact'}: ` +
-            `[${(j.debug.sample_message_directions || []).join(', ') || 'none'}]. ` +
-            `Send this to Claude if you expected matches.`
-          )
+          const c = j.debug.skip_counts || {}
+          const parts = []
+          if (c.no_msgs) parts.push(`${c.no_msgs} had no PP messages`)
+          if (c.out_of_window) parts.push(`${c.out_of_window} last activity outside your ${hours}h window`)
+          if (c.newest_not_out) parts.push(`${c.newest_not_out} newest message wasn't outbound (they replied last)`)
+          if (c.still_within_grace) parts.push(`${c.still_within_grace} still within the 2h silent grace`)
+          if (c.no_inbound) parts.push(`${c.no_inbound} never replied at least once (cold drip)`)
+          if (c.bad_ts) parts.push(`${c.bad_ts} messages had no timestamp`)
+          const summary = parts.length
+            ? `Found ${j.debug.contacts_found_by_tag} Positive-tagged contacts. Scanned ${j.debug.scanned}. Reasons none matched: ${parts.join(' · ')}.`
+            : `Found ${j.debug.contacts_found_by_tag} Positive-tagged contacts but scanned 0.`
+          setScanNote(summary)
         }
       }
     } catch (e) {
