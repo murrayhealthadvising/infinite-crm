@@ -137,6 +137,17 @@ export default function WarmBucket() {
         setSelectedIdx(0)
         setDismissed(new Set())
         if (j.note) setScanNote(j.note)
+        // Debug surface — when the scan returns empty but scanned > 0, the
+        // worker sends back a sample of what PP returned so we can see if the
+        // direction classifier is missing a value.
+        else if (j.debug && (!j.matches || j.matches.length === 0)) {
+          setScanNote(
+            `Scanned ${j.scanned} tagged contacts, 0 matched the "warm gone quiet" rules. ` +
+            `Sample directions PP returned for ${j.debug.first_contact_name || 'first contact'}: ` +
+            `[${(j.debug.sample_message_directions || []).join(', ') || 'none'}]. ` +
+            `Send this to Claude if you expected matches.`
+          )
+        }
       }
     } catch (e) {
       setError(String(e?.message || e))

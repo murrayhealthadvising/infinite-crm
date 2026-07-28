@@ -1243,17 +1243,24 @@ async function fetchPPMessages(apiKey, contactUuid, limit = 20) {
       const key = id ? `id:${id}` : `c:${sentAt || ''}|${body}`
       if (seen.has(key)) continue
       seen.add(key)
-      // Explicit direction detection — NEVER default to inbound. If PP returns
-      // a message without a clear direction indicator we mark it 'unknown'.
-      // Previously we defaulted-to-inbound, which made every drip-only contact
-      // look like they'd replied. Warm bucket then let them through even
-      // though the visible convo was all outbound.
-      const rawDir = String(m.direction || m.type || '').toLowerCase().trim()
+      // Direction detection — permissive on strings, strict on the default:
+      // if we truly cannot classify, mark 'unknown' (never default to inbound,
+      // that's the bug that let cold drips through). Regex-tolerant so shapes
+      // like "outbound", "OUTGOING", "sms.outbound", "MT", "sent_by_agent"
+      // all classify correctly.
+      const rawDir = String(m.direction || m.type || m.status || '').toLowerCase().trim()
       let direction = 'unknown'
-      if (rawDir === 'outbound' || rawDir === 'out' || rawDir === 'sent' || rawDir === 'mt') direction = 'outbound'
-      else if (rawDir === 'inbound' || rawDir === 'in' || rawDir === 'received' || rawDir === 'mo' || rawDir === 'reply') direction = 'inbound'
-      else if (m.outbound === true || m.isOutbound === true || m.fromMe === true || m.from_me === true) direction = 'outbound'
-      else if (m.inbound === true || m.isInbound === true || m.fromContact === true || m.from_contact === true) direction = 'inbound'
+      if (/(^|[^a-z])(outbound|outgoing|sent|mt|from[_ ]?me|from[_ ]?agent|agent[_ ]?to)($|[^a-z])/i.test(rawDir)) direction = 'outbound'
+      else if (/(^|[^a-z])(inbound|incoming|received|mo|reply|from[_ ]?contact|contact[_ ]?to)($|[^a-z])/i.test(rawDir)) direction = 'inbound'
+      // Boolean field fallback (many APIs use these)
+      if (direction === 'unknown') {
+        if (m.outbound === true || m.isOutbound === true || m.fromMe === true || m.from_me === true || m.is_outgoing === true || m.sent_by_agent === true) direction = 'outbound'
+        else if (m.inbound === true || m.isInbound === true || m.fromContact === true || m.from_contact === true || m.is_incoming === true) direction = 'inbound'
+      }
+      // "from" field fallback — if the from-number equals the agent's PP
+      // number, it's outbound. We don't know the agent number here, so this
+      // is a last-resort heuristic: presence of a bidirectional pair of
+      // known agent-like flags. Kept as unknown otherwise.
       merged.push({ id, body, direction, sent_at: sentAt })
     }
   }
@@ -1689,9 +1696,9 @@ export default {
     // every release so a stale deploy is immediately visible.
     if (req.method === 'GET' && url.pathname === '/version') {
       return new Response(JSON.stringify({
-        version: 'v4.31',
-        parser: 'strict direction classification — no more ambiguous inbound',
-        deployed_check: 'if you see v4.31 here, the deploy succeeded',
+        version: 'v4.32',
+        parser: 'warm bucket: permissive direction detection + debug output on empty results',
+        deployed_check: 'if you see v4.32 here, the deploy succeeded',
       }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
     }
     // Public API v1 — auth via X-API-Key. All routes under /api/v1/*.
@@ -1955,7 +1962,22 @@ export default {
           }
         }
         console.log('[warm-bucket]', matches.length, 'matches')
-        return new Response(JSON.stringify({ ok: true, matches, scanned: capped.length, tag: wbTag, hours: wbHours }), {
+        // Debug: on empty results, capture one contact's raw message shape so
+        // Nic can see what PP actually returned. Helps diagnose classifier
+        // gaps (e.g. PP added a new direction value we haven't seen).
+        let debug = undefined
+        if (matches.length === 0 && capped.length > 0) {
+          try {
+            const sample = await fetchPPMessages(wbKey, capped[0].uuid, 5)
+            debug = {
+              first_contact_uuid: capped[0].uuid,
+              first_contact_name: `${capped[0].first_name || ''} ${capped[0].last_name || ''}`.trim(),
+              sample_message_directions: sample.map(m => m.direction),
+              sample_count: sample.length,
+            }
+          } catch {}
+        }
+        return new Response(JSON.stringify({ ok: true, matches, scanned: capped.length, tag: wbTag, hours: wbHours, debug }), {
           status: 200, headers: { 'content-type': 'application/json', ...CORS },
         })
       } catch (e) {
