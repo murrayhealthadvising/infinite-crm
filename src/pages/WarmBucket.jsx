@@ -146,9 +146,7 @@ export default function WarmBucket() {
           const parts = []
           if (c.no_msgs) parts.push(`${c.no_msgs} had no PP messages`)
           if (c.out_of_window) parts.push(`${c.out_of_window} last activity outside your ${hours}h window`)
-          if (c.newest_not_out) parts.push(`${c.newest_not_out} newest message wasn't outbound (they replied last)`)
-          if (c.still_within_grace) parts.push(`${c.still_within_grace} still within the 2h silent grace`)
-          if (c.no_inbound) parts.push(`${c.no_inbound} never replied at least once (cold drip)`)
+          if (c.newest_not_out) parts.push(`${c.newest_not_out} already replied to your latest text`)
           if (c.bad_ts) parts.push(`${c.bad_ts} messages had no timestamp`)
           const summary = parts.length
             ? `Found ${j.debug.contacts_found_by_tag} Positive-tagged contacts. Scanned ${j.debug.scanned}. Reasons none matched: ${parts.join(' · ')}.`
@@ -336,7 +334,7 @@ export default function WarmBucket() {
             <p className="text-[11px] text-[#5A6A7A] mt-0.5 truncate">
               {visible.length > 0
                 ? `${selectedIdx + 1} of ${visible.length} · ↑↓ or j/k to move · c = call · x = dismiss`
-                : `Positive PitchPrfct contacts who went quiet after your last text`}
+                : `All Positive-tagged contacts who haven't replied to your latest text`}
             </p>
           </div>
         </div>
