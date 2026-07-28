@@ -1271,7 +1271,7 @@ async function fetchPPMessages(apiKey, contactUuid, limit = 20) {
 // isn't in a stable public spec for our use case, so we fan out across
 // several plausible URL shapes and merge the successful ones. Returns an
 // array of { uuid, phone, first_name, last_name, tags[] }.
-async function fetchPPContactsByTag(apiKey, tagName, limit = 200) {
+async function fetchPPContactsByTag(apiKey, tagName, limit = 500) {
   const t = encodeURIComponent(tagName)
   const attempts = [
     `${PITCHPRFCT_API}/contacts?tag=${t}&take=${limit}`,
@@ -1696,9 +1696,9 @@ export default {
     // every release so a stale deploy is immediately visible.
     if (req.method === 'GET' && url.pathname === '/version') {
       return new Response(JSON.stringify({
-        version: 'v4.35',
-        parser: 'warm bucket: reply must come AFTER our first outbound + per-match stats',
-        deployed_check: 'if you see v4.35 here, the deploy succeeded',
+        version: 'v4.36',
+        parser: 'warm bucket: scan up to 300 contacts in parallel batches of 15',
+        deployed_check: 'if you see v4.36 here, the deploy succeeded',
       }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
     }
     // Public API v1 — auth via X-API-Key. All routes under /api/v1/*.
@@ -1906,9 +1906,13 @@ export default {
         const matches = []
         const skipCounts = { no_msgs: 0, bad_ts: 0, out_of_window: 0, newest_not_out: 0, still_within_grace: 0, no_inbound: 0 }
         const skipSamples = []  // first ~5 skips with detail
-        // Sequential to avoid PP rate-limit; keep bucket size sane.
-        const capped = contacts.slice(0, 60)
-        for (const c of capped) {
+        // Scan up to 300 tagged contacts. Nic can have hundreds of Positives
+        // and the interesting warm ones aren't always first in PP's list.
+        // Run in concurrent batches of 15 so PP isn't blasted but we still
+        // process 300 in ~10-20s of CPU (well inside Cloudflare's budget).
+        const capped = contacts.slice(0, 300)
+        const BATCH_SIZE = 15
+        const processContact = async (c) => {
           try {
             const rawMsgs = await fetchPPMessages(wbKey, c.uuid, 30)
             // Only count messages with actual body text. PP's messages
@@ -1929,15 +1933,15 @@ export default {
                 })
               }
             }
-            if (!msgs.length) { noteSkip('no_msgs'); continue }
+            if (!msgs.length) { noteSkip('no_msgs'); return }
             msgs.sort((a, b) => (new Date(b.sent_at || 0)).getTime() - (new Date(a.sent_at || 0)).getTime())
             const newest = msgs[0]
             const newestTs = new Date(newest.sent_at || 0).getTime()
-            if (!isFinite(newestTs) || newestTs === 0) { noteSkip('bad_ts'); continue }
-            if (newestTs < windowStart) { noteSkip('out_of_window', { newest_at: newest.sent_at }); continue }
+            if (!isFinite(newestTs) || newestTs === 0) { noteSkip('bad_ts'); return }
+            if (newestTs < windowStart) { noteSkip('out_of_window', { newest_at: newest.sent_at }); return }
             const isOutbound = newest.direction === 'outbound'
-            if (!isOutbound) { noteSkip('newest_not_out', { newest_dir: newest.direction }); continue }
-            if (newestTs > silentThreshold) { noteSkip('still_within_grace', { newest_at: newest.sent_at }); continue }
+            if (!isOutbound) { noteSkip('newest_not_out', { newest_dir: newest.direction }); return }
+            if (newestTs > silentThreshold) { noteSkip('still_within_grace', { newest_at: newest.sent_at }); return }
             // hasInbound: at least ONE inbound with a real body AND it must
             // come AFTER at least one outbound. This is the real "they
             // engaged in a conversation" signal — form submissions, opt-ins,
@@ -1956,7 +1960,7 @@ export default {
               const t = m.sent_at ? new Date(m.sent_at).getTime() : NaN
               return isFinite(t) && t > earliestOutboundTs
             })
-            if (!hasReplyAfterOurText) { noteSkip('no_inbound'); continue }
+            if (!hasReplyAfterOurText) { noteSkip('no_inbound'); return }
             // Per-contact stats — surfaced on each match so we can verify the
             // worker's classification against what the UI displays. If a
             // match shows 0 inbound in the UI but this reports 1+, we know
@@ -1993,6 +1997,13 @@ export default {
           } catch (e) {
             console.error('[warm-bucket] contact', c.uuid, 'threw', String(e))
           }
+        }
+        // Run in concurrent batches. Cloudflare Workers handle plenty of
+        // concurrent subrequests; keeping the batch at 15 stays polite to
+        // PP and finishes 300 contacts in a few seconds.
+        for (let i = 0; i < capped.length; i += BATCH_SIZE) {
+          const batch = capped.slice(i, i + BATCH_SIZE)
+          await Promise.allSettled(batch.map(processContact))
         }
         console.log('[warm-bucket]', matches.length, 'matches · skip counts:', skipCounts)
         const debug = matches.length === 0
