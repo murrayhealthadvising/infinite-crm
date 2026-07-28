@@ -1696,9 +1696,9 @@ export default {
     // every release so a stale deploy is immediately visible.
     if (req.method === 'GET' && url.pathname === '/version') {
       return new Response(JSON.stringify({
-        version: 'v4.34',
-        parser: 'warm bucket: filter out PP system events (no-body messages)',
-        deployed_check: 'if you see v4.34 here, the deploy succeeded',
+        version: 'v4.35',
+        parser: 'warm bucket: reply must come AFTER our first outbound + per-match stats',
+        deployed_check: 'if you see v4.35 here, the deploy succeeded',
       }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
     }
     // Public API v1 — auth via X-API-Key. All routes under /api/v1/*.
@@ -1938,11 +1938,35 @@ export default {
             const isOutbound = newest.direction === 'outbound'
             if (!isOutbound) { noteSkip('newest_not_out', { newest_dir: newest.direction }); continue }
             if (newestTs > silentThreshold) { noteSkip('still_within_grace', { newest_at: newest.sent_at }); continue }
-            // hasInbound: at least ONE inbound with a real body. Double-guard
-            // against system-event noise (already filtered above but belt-and-
-            // suspenders since this is the rule that gates warm-vs-cold).
-            const hasInbound = msgs.some(m => m.direction === 'inbound' && m.body && m.body.trim().length > 0)
-            if (!hasInbound) { noteSkip('no_inbound'); continue }
+            // hasInbound: at least ONE inbound with a real body AND it must
+            // come AFTER at least one outbound. This is the real "they
+            // engaged in a conversation" signal — form submissions, opt-ins,
+            // or pre-existing PP data that PP marks as "inbound" before
+            // Nic's first outbound don't count as replies.
+            // msgs is sorted newest first; find the earliest outbound and
+            // require an inbound with sent_at > that outbound.
+            const outboundTs = msgs
+              .filter(m => m.direction === 'outbound' && m.sent_at)
+              .map(m => new Date(m.sent_at).getTime())
+              .filter(t => isFinite(t))
+            const earliestOutboundTs = outboundTs.length ? Math.min(...outboundTs) : Infinity
+            const hasReplyAfterOurText = msgs.some(m => {
+              if (m.direction !== 'inbound') return false
+              if (!m.body || !m.body.trim()) return false
+              const t = m.sent_at ? new Date(m.sent_at).getTime() : NaN
+              return isFinite(t) && t > earliestOutboundTs
+            })
+            if (!hasReplyAfterOurText) { noteSkip('no_inbound'); continue }
+            // Per-contact stats — surfaced on each match so we can verify the
+            // worker's classification against what the UI displays. If a
+            // match shows 0 inbound in the UI but this reports 1+, we know
+            // PP's returning something my classifier tags as inbound that
+            // the UI is hiding (e.g. a system event with a hidden body).
+            const inboundCount = msgs.filter(m => m.direction === 'inbound').length
+            const outboundCount = msgs.filter(m => m.direction === 'outbound').length
+            const unknownCount = msgs.filter(m => m.direction === 'unknown').length
+            const rawCount = rawMsgs.length
+            const _msg_stats = { total_from_pp: rawCount, with_body: msgs.length, inbound: inboundCount, outbound: outboundCount, unknown: unknownCount }
             // Match — keep the full recent history (oldest→newest so the UI
             // reads chronologically). Focus mode shows all of them.
             const history = msgs.slice().reverse()
@@ -1964,6 +1988,7 @@ export default {
               tags: c.tags,
               last_outbound_at: newest.sent_at,
               recent_messages: history,
+              _msg_stats,
             })
           } catch (e) {
             console.error('[warm-bucket] contact', c.uuid, 'threw', String(e))

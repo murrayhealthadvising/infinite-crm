@@ -642,11 +642,15 @@ export default function WarmBucket() {
 
               {/* Full conversation */}
               <div className="rounded-xl border border-[#1A2130] overflow-hidden" style={{ background: '#0E1318' }}>
-                <div className="flex items-center justify-between px-4 py-2 border-b border-[#1A2130]">
+                <div className="flex items-center justify-between px-4 py-2 border-b border-[#1A2130] flex-wrap gap-y-1">
                   <p className="text-[10px] font-mono uppercase tracking-wider text-[#8899AA]">
                     Conversation · {(current.recent_messages || []).length} messages
                   </p>
-                  <p className="text-[10px] text-[#5A6A7A]">Read this before the call</p>
+                  {current._msg_stats && (
+                    <p className="text-[10px] text-[#5A6A7A] font-mono" title="What the worker's PP classifier saw. If in=0, this contact shouldn't be in the bucket — that means the deploy is stale.">
+                      pp raw: {current._msg_stats.total_from_pp} · body: {current._msg_stats.with_body} · in: <span className="text-[#10B981]">{current._msg_stats.inbound}</span> · out: <span className="text-[#3B82F6]">{current._msg_stats.outbound}</span>{current._msg_stats.unknown > 0 ? ` · unk: ${current._msg_stats.unknown}` : ''}
+                    </p>
+                  )}
                 </div>
                 <div className="p-4 space-y-2" style={{ background: '#080B0F', maxHeight: '50vh', overflowY: 'auto' }}>
                   {(current.recent_messages || []).length === 0 ? (
