@@ -83,6 +83,8 @@ export default function WarmBucket() {
   const [matches, setMatches] = useState([])
   const [queueEntries, setQueueEntries] = useState([])  // pushed via public API by Kam
   const [scanNote, setScanNote] = useState(null)
+  const [skipSamples, setSkipSamples] = useState([])  // filtered contacts for debug
+  const [showSkipped, setShowSkipped] = useState(false)
   const [error, setError] = useState(null)
   const [dismissed, setDismissed] = useState(() => new Set())
   const [selectedIdx, setSelectedIdx] = useState(0)
@@ -154,6 +156,7 @@ export default function WarmBucket() {
                 ? `0 matches. Scanned ${j.debug.scanned} of ${j.debug.contacts_found_by_tag} Positive-tagged. All filtered out: ${parts.join(' · ')}.`
                 : `Found ${j.debug.contacts_found_by_tag} Positive-tagged contacts but scanned 0.`)
           setScanNote(summary)
+          setSkipSamples(Array.isArray(j.debug.skip_samples) ? j.debug.skip_samples : [])
         } else if (j.note) setScanNote(j.note)
       }
     } catch (e) {
@@ -393,7 +396,43 @@ export default function WarmBucket() {
       )}
       {scanNote && (
         <div className="mx-3 md:mx-6 mt-3 p-3 rounded-lg border border-[#F59E0B40] text-xs text-[#F59E0B]" style={{ background: '#F59E0B08' }}>
-          {scanNote}
+          <div className="flex items-start justify-between gap-3">
+            <p className="flex-1">{scanNote}</p>
+            {skipSamples.length > 0 && (
+              <button onClick={() => setShowSkipped(v => !v)}
+                className="text-[10px] px-2 py-1 rounded border border-[#F59E0B60] text-[#F59E0B] hover:bg-[#F59E0B15] whitespace-nowrap">
+                {showSkipped ? 'Hide' : 'See'} filtered ({skipSamples.length})
+              </button>
+            )}
+          </div>
+          {showSkipped && skipSamples.length > 0 && (
+            <div className="mt-3 space-y-1.5 border-t border-[#F59E0B30] pt-3 max-h-[40vh] overflow-y-auto">
+              <p className="text-[10px] text-[#8899AA] mb-2">
+                A sample of contacts my filter removed. If any of these look like real warm leads that shouldn't be here, screenshot and send to Claude — the "directions" tell me which classification rule missed them.
+              </p>
+              {skipSamples.map((s, i) => (
+                <div key={i} className="p-2 rounded border border-[#F59E0B30]" style={{ background: '#F59E0B04' }}>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-[11px] text-white font-semibold">{s.contact}</span>
+                    {s.phone && <span className="text-[10px] text-[#8899AA] font-mono">{s.phone}</span>}
+                    <span className="text-[9px] font-mono px-1.5 py-0.5 rounded" style={{ background: '#F59E0B15', color: '#F59E0B' }}>
+                      {s.reason}
+                    </span>
+                    <span className="text-[9px] text-[#8899AA] font-mono ml-auto">
+                      {s.msg_count} msgs · directions: [{(s.directions || []).join(', ') || 'none'}]
+                    </span>
+                  </div>
+                  {s.bodies && s.bodies.some(b => b) && (
+                    <div className="mt-1.5 space-y-0.5">
+                      {s.bodies.filter(b => b).map((b, j) => (
+                        <p key={j} className="text-[10px] text-[#C0D0E0] truncate">"{b}"</p>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -416,7 +455,12 @@ export default function WarmBucket() {
             <div className="py-1">
               {visible.map((c, i) => {
                 const isSelected = i === selectedIdx
-                const since = c.last_outbound_at ? formatDistanceToNow(new Date(c.last_outbound_at)) : ''
+                // "Quiet" duration measured from THEIR last inbound reply
+                // (not from Nic's last outbound). Falls back to last_outbound
+                // for queue-pushed entries that don't have a real message
+                // history.
+                const quietAnchor = c.last_inbound_at || c.last_outbound_at
+                const since = quietAnchor ? formatDistanceToNow(new Date(quietAnchor)) : ''
                 return (
                   <button key={c._key || c.pp_contact_uuid}
                     onClick={() => setSelectedIdx(i)}
@@ -496,7 +540,9 @@ export default function WarmBucket() {
                   </div>
                   <div className="flex flex-col items-end gap-2 flex-shrink-0">
                     <div className="text-xs text-[#F97316] font-mono">
-                      Silent {current.last_outbound_at ? formatDistanceToNow(new Date(current.last_outbound_at)) : ''}
+                      Quiet {current.last_inbound_at
+                        ? formatDistanceToNow(new Date(current.last_inbound_at))
+                        : (current.last_outbound_at ? formatDistanceToNow(new Date(current.last_outbound_at)) : '')}
                     </div>
                     {(localTime || tzLabel) && (
                       <div className="text-xs text-[#8899AA] font-mono inline-flex items-center gap-1">

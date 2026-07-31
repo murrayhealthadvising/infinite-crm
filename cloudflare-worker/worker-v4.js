@@ -1476,6 +1476,22 @@ async function scanForResponses(env) {
             } else {
               await patchLeadPPStatus(env, lead.id, 'awaiting', now.toISOString())
             }
+            // ── Activity log backfill for awaiting leads. verifyAndLogEnroll's
+            //    15s window can miss the outbound if PP sends slowly or the
+            //    worker got recycled mid-verify. If there's real outbound in
+            //    PP but no "Auto-enrolled" activity in Supabase, write it.
+            const hasOutbound = messages.some(m => m.direction === 'outbound')
+            if (hasOutbound) {
+              const activityUrl = `${env.SUPABASE_URL}/rest/v1/activities?lead_id=eq.${lead.id}&note=like.Auto-enrolled*&select=id&limit=1`
+              const ar = await fetch(activityUrl, {
+                headers: { apikey: env.SUPABASE_SERVICE_KEY, authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}` },
+              })
+              const existing = ar.ok ? await ar.json() : []
+              if (!Array.isArray(existing) || existing.length === 0) {
+                await logEnrollActivity(env, lead.user_id, lead.id, '(recovered)')
+                console.log('[pp-scan] pass1 BACKFILLED activity for lead', lead.id)
+              }
+            }
           } catch (e) { console.error('[pp-scan] error on lead', lead.id, String(e)) }
         }
       }
@@ -1696,9 +1712,9 @@ export default {
     // every release so a stale deploy is immediately visible.
     if (req.method === 'GET' && url.pathname === '/version') {
       return new Response(JSON.stringify({
-        version: 'v4.39',
-        parser: 'warm bucket: 500 cap + always-visible scan funnel',
-        deployed_check: 'if you see v4.39 here, the deploy succeeded',
+        version: 'v4.42',
+        parser: 'cron pass1 also backfills missing Auto-enrolled activity for awaiting leads',
+        deployed_check: 'if you see v4.42 here, the deploy succeeded',
       }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
     }
     // Public API v1 — auth via X-API-Key. All routes under /api/v1/*.
@@ -1903,7 +1919,7 @@ export default {
         console.log('[warm-bucket] scanning', contacts.length, 'tagged contacts for agent', wbAgent, 'window', wbHours + 'h')
         const matches = []
         const skipCounts = { no_msgs: 0, bad_ts: 0, out_of_window: 0, newest_not_out: 0, no_inbound: 0 }
-        const skipSamples = []  // first ~5 skips with detail
+        const skipSamples = []  // first ~30 skips with detail (grouped by reason)
         // Scan up to 500 tagged contacts — covers Nic's ~400 Positives with
         // headroom. PP doesn't sort contacts by activity so a recently-active
         // one could sit anywhere in the list. Concurrent batches of 15
@@ -1920,13 +1936,18 @@ export default {
             const msgs = rawMsgs.filter(m => m.body && m.body.trim())
             const noteSkip = (reason, extra = {}) => {
               skipCounts[reason] = (skipCounts[reason] || 0) + 1
-              if (skipSamples.length < 5) {
+              // Grab up to 5 samples PER REASON so Nic can see specific
+              // contacts (esp. the "no_inbound" bucket where classifier
+              // mistakes hide). Fair sampling across reasons.
+              const perReason = skipSamples.filter(s => s.reason === reason).length
+              if (perReason < 5) {
                 skipSamples.push({
                   contact: `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.uuid,
                   phone: c.phone,
                   reason,
                   msg_count: msgs.length,
-                  directions: msgs.slice(0, 5).map(m => m.direction),
+                  directions: msgs.slice(0, 8).map(m => m.direction),
+                  bodies: msgs.slice(0, 3).map(m => (m.body || '').slice(0, 60)),
                   ...extra,
                 })
               }
@@ -1936,15 +1957,27 @@ export default {
             const newest = msgs[0]
             const newestTs = new Date(newest.sent_at || 0).getTime()
             if (!isFinite(newestTs) || newestTs === 0) { noteSkip('bad_ts'); return }
-            if (newestTs < windowStart) { noteSkip('out_of_window', { newest_at: newest.sent_at }); return }
             const isOutbound = newest.direction === 'outbound'
             if (!isOutbound) { noteSkip('newest_not_out', { newest_dir: newest.direction }); return }
             // Rule 4 — require at least one inbound MESSAGE (with body) in
             // the history. Nic's Positive tag isn't perfectly reliable — PP
             // seems to auto-apply it in some cases. Actual inbound proves
             // engagement.
-            const hasInbound = msgs.some(m => m.direction === 'inbound' && m.body && m.body.trim().length > 0)
-            if (!hasInbound) { noteSkip('no_inbound'); return }
+            const inboundWithBody = msgs
+              .filter(m => m.direction === 'inbound' && m.body && m.body.trim().length > 0 && m.sent_at)
+              .map(m => ({ ts: new Date(m.sent_at).getTime(), body: m.body }))
+              .filter(x => isFinite(x.ts))
+              .sort((a, b) => b.ts - a.ts)
+            if (!inboundWithBody.length) { noteSkip('no_inbound'); return }
+            // Quiet time — Nic's ask: measure silence from THEIR last reply,
+            // not from Nic's last outbound. Nic's follow-up drips shouldn't
+            // artificially reset the perceived quiet duration.
+            const lastInboundTs = inboundWithBody[0].ts
+            const quietDurationMs = now - lastInboundTs
+            if (quietDurationMs > wbHours * 60 * 60 * 1000) {
+              noteSkip('out_of_window', { last_inbound_at: new Date(lastInboundTs).toISOString() })
+              return
+            }
             // Per-contact stats — surfaced on each match so we can verify the
             // worker's classification against what the UI displays. If a
             // match shows 0 inbound in the UI but this reports 1+, we know
@@ -1974,7 +2007,12 @@ export default {
               campaign: c.campaign,
               custom_fields: c.custom_fields,
               tags: c.tags,
+              // Nic's last outbound (kept for reference / drag interactions)
               last_outbound_at: newest.sent_at,
+              // NEW: their last inbound = start of the quiet period. This is
+              // what the UI shows as "silent about X hours" — the actual
+              // time since the contact last spoke.
+              last_inbound_at: new Date(lastInboundTs).toISOString(),
               recent_messages: history,
               _msg_stats,
             })
