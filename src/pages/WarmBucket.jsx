@@ -75,9 +75,13 @@ function StagePicker({ stages, onPick, onCancel, anchor = 'right' }) {
 }
 
 export default function WarmBucket() {
-  const { user, tags, leads, addLead } = useApp()
+  const { user, tags, leads, addLead, updateLeadStage } = useApp()
   const navigate = useNavigate()
 
+  // Mode determines what fills the queue on the left rail:
+  //   'pr'          — current warm bucket behavior (PP scan for Positives)
+  //   <stage_id>    — leads from the CRM in that pipeline stage
+  const [mode, setMode] = useState('pr')
   const [hours, setHours] = useState(24)
   const [scanning, setScanning] = useState(false)
   const [matches, setMatches] = useState([])
@@ -169,10 +173,49 @@ export default function WarmBucket() {
   // Queue entries first (they're explicitly high-priority via Kam), then PP
   // scan results ordered as returned by the scan.
   const visible = useMemo(() => {
+    // Stage mode — pull leads from AppContext filtered by pipeline stage.
+    // Sort by last activity so recently-touched leads bubble up. Each entry
+    // is shaped like a PP match so the focus view can render the same way,
+    // with _kind='stage' to unlock stage-specific UI.
+    if (mode !== 'pr') {
+      const stageLeads = safeLeads
+        .filter(l => l.stage === mode)
+        .sort((a, b) => {
+          const ta = new Date(a.last_activity || a.stage_changed_at || a.created_at || 0).getTime()
+          const tb = new Date(b.last_activity || b.stage_changed_at || b.created_at || 0).getTime()
+          return tb - ta
+        })
+        .map(l => ({
+          _kind: 'stage',
+          _key: `s:${l.id}`,
+          pp_contact_uuid: l.id,  // reused as identifier for dismissed set / notes
+          lead_id: l.id,
+          first_name: l.first_name,
+          last_name: l.last_name,
+          phone: l.phone,
+          email: l.email,
+          state: l.state,
+          zip: l.zip,
+          city: l.city,
+          dob: l.dob,
+          campaign: l.campaign,
+          source: l.source,
+          stage: l.stage,
+          stage_changed_at: l.stage_changed_at,
+          created_at: l.created_at,
+          last_activity: l.last_activity,
+          last_outbound_at: l.last_activity || l.stage_changed_at || l.created_at,
+          // Reuse lead.notes as the pre-existing note for these entries
+          existing_notes: l.notes || '',
+          recent_messages: [],  // stage mode doesn't fetch PP messages inline
+        }))
+      return stageLeads.filter(x => !dismissed.has(x.pp_contact_uuid))
+    }
+    // PR mode — original behavior: queue-pushed entries + PP scan matches.
     const q = (queueEntries || []).map(e => ({
       _kind: 'queue',
       _key: `q:${e.id}`,
-      pp_contact_uuid: e.phone,  // used as identifier in dismissed set
+      pp_contact_uuid: e.phone,
       queue_id: e.id,
       first_name: e.first_name,
       last_name: e.last_name,
@@ -185,11 +228,17 @@ export default function WarmBucket() {
       queued_note: e.note,
       source_label: `Pushed via API${e.external_id ? ` · ext:${e.external_id.slice(0, 8)}` : ''}`,
       last_outbound_at: e.created_at,
-      recent_messages: [],  // no PP messages for queue-pushed contacts unless we look them up
+      recent_messages: [],
     }))
     const pp = (matches || []).map(m => ({ _kind: 'pp', _key: `p:${m.pp_contact_uuid}`, ...m }))
     return [...q, ...pp].filter(x => !dismissed.has(x.pp_contact_uuid))
-  }, [matches, queueEntries, dismissed])
+  }, [mode, matches, queueEntries, dismissed, safeLeads])
+
+  // Mode change → reset selection & dismissed set
+  useEffect(() => {
+    setSelectedIdx(0)
+    setDismissed(new Set())
+  }, [mode])
 
   // Keep selectedIdx in bounds when visible list shrinks
   useEffect(() => {
@@ -202,13 +251,18 @@ export default function WarmBucket() {
   // focus view lead-context (state, income, DOB, etc.) if they were previously
   // imported. Falls back to warm-bucket-only display when nothing matches.
   const existingLead = useMemo(() => {
-    if (!current?.phone) return null
+    if (!current) return null
+    // Stage-mode entries ARE leads — resolve directly by id
+    if (current._kind === 'stage' && current.lead_id) {
+      return safeLeads.find(l => l.id === current.lead_id) || null
+    }
+    if (!current.phone) return null
     const digits = String(current.phone).replace(/\D/g, '')
     return safeLeads.find(l => {
       const lp = String(l.phone || '').replace(/\D/g, '')
       return lp && (lp === digits || lp.endsWith(digits.slice(-10)))
     }) || null
-  }, [current?.phone, safeLeads])
+  }, [current, safeLeads])
 
   // Save note (debounced-ish via blur + explicit save)
   const saveNote = useCallback(async (uuid) => {
@@ -241,10 +295,23 @@ export default function WarmBucket() {
   }
 
   const promote = async (stageId) => {
-    if (!current || !user?.id || typeof addLead !== 'function') return
+    if (!current || !user?.id) return
     setPromoting(current.pp_contact_uuid)
     setPickerOpen(false)
     try {
+      // Stage mode — this IS already a lead. Just change its stage.
+      if (current._kind === 'stage' && current.lead_id) {
+        if (typeof updateLeadStage === 'function') {
+          await updateLeadStage(current.lead_id, stageId)
+        }
+        dismiss(current)
+        const label = safeTags.find(t => t.id === stageId)?.label || stageId
+        setMsg({ type: 'success', text: `${fullName(current)} → ${label}`, leadId: current.lead_id })
+        setTimeout(() => setMsg(null), 6000)
+        return
+      }
+      // PR / queue mode — create a new lead in the CRM.
+      if (typeof addLead !== 'function') return
       const note = notes[current.pp_contact_uuid] || ''
       const messagesRecap = (current.recent_messages || []).map(m => {
         const dir = /out/.test(m.direction || '') && !/in/.test(m.direction || '') ? '→' : '←'
@@ -335,39 +402,76 @@ export default function WarmBucket() {
             <Thermometer size={18} className="text-white" />
           </div>
           <div className="min-w-0">
-            <h1 className="text-lg font-display font-bold text-white">Warm Bucket</h1>
+            <h1 className="text-lg font-display font-bold text-white">
+              {mode === 'pr' ? 'Warm Bucket' : 'Dialer'}
+            </h1>
             <p className="text-[11px] text-[#5A6A7A] mt-0.5 truncate">
               {visible.length > 0
                 ? `${selectedIdx + 1} of ${visible.length} · ↑↓ or j/k to move · c = call · x = dismiss`
-                : `All Positive-tagged contacts who haven't replied to your latest text`}
+                : (mode === 'pr'
+                    ? `All Positive-tagged contacts who haven't replied to your latest text`
+                    : `Dial through your ${safeTags.find(t => t.id === mode)?.label || mode} leads one at a time`)}
             </p>
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <label className="flex items-center gap-1.5 text-xs text-[#8899AA] px-2 py-1.5 rounded-lg border border-[#1A2130]">
-            <Clock size={12} />
-            <span>Last</span>
-            <input type="number" min="1" max="720" value={hours}
-              onChange={e => setHours(Math.max(1, Math.min(720, parseInt(e.target.value, 10) || 24)))}
-              className="w-14 bg-transparent border-b border-[#1A2130] text-center text-white focus:outline-none focus:border-[#00E5C340]" />
-            <span>hrs</span>
-          </label>
-          <div className="flex items-center gap-0.5">
-            {[6, 24, 72, 168].map(h => (
-              <button key={h} onClick={() => setHours(h)}
-                className={`px-2 py-1 rounded text-[10px] font-mono ${
-                  hours === h ? 'bg-[#1A2130] text-white' : 'text-[#5A6A7A] hover:text-white'
-                }`}>
-                {h < 24 ? `${h}h` : `${h/24}d`}
+          {mode === 'pr' && (
+            <>
+              <label className="flex items-center gap-1.5 text-xs text-[#8899AA] px-2 py-1.5 rounded-lg border border-[#1A2130]">
+                <Clock size={12} />
+                <span>Last</span>
+                <input type="number" min="1" max="720" value={hours}
+                  onChange={e => setHours(Math.max(1, Math.min(720, parseInt(e.target.value, 10) || 24)))}
+                  className="w-14 bg-transparent border-b border-[#1A2130] text-center text-white focus:outline-none focus:border-[#00E5C340]" />
+                <span>hrs</span>
+              </label>
+              <div className="flex items-center gap-0.5">
+                {[6, 24, 72, 168].map(h => (
+                  <button key={h} onClick={() => setHours(h)}
+                    className={`px-2 py-1 rounded text-[10px] font-mono ${
+                      hours === h ? 'bg-[#1A2130] text-white' : 'text-[#5A6A7A] hover:text-white'
+                    }`}>
+                    {h < 24 ? `${h}h` : `${h/24}d`}
+                  </button>
+                ))}
+              </div>
+              <button onClick={runScan} disabled={scanning}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold text-black transition-opacity hover:opacity-90 disabled:opacity-50"
+                style={{ background: 'linear-gradient(135deg, #F97316, #EF4444)' }}>
+                {scanning ? <><Loader size={13} className="animate-spin" /> Scanning…</> : <><Search size={13} /> Scan</>}
               </button>
-            ))}
-          </div>
-          <button onClick={runScan} disabled={scanning}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold text-black transition-opacity hover:opacity-90 disabled:opacity-50"
-            style={{ background: 'linear-gradient(135deg, #F97316, #EF4444)' }}>
-            {scanning ? <><Loader size={13} className="animate-spin" /> Scanning…</> : <><Search size={13} /> Scan</>}
-          </button>
+            </>
+          )}
         </div>
+      </div>
+
+      {/* Mode tabs — PRs (warm bucket PP scan) or any pipeline stage.
+          Lets Nic dial through Not Started / Interested / Apt / Ghosted etc.
+          with the same focused single-lead-at-a-time flow. */}
+      <div className="flex items-center gap-1 flex-wrap px-3 md:px-6 py-2 border-b border-[#1A2130] overflow-x-auto"
+        style={{ background: '#080B0F' }}>
+        <button onClick={() => setMode('pr')}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono uppercase tracking-wider whitespace-nowrap transition-colors ${
+            mode === 'pr' ? 'bg-[#F9731615] border border-[#F9731640] text-[#F97316]' : 'text-[#5A6A7A] hover:text-white border border-transparent'
+          }`}>
+          <Thermometer size={11} /> PRs
+        </button>
+        {safeTags.map(t => {
+          const count = safeLeads.filter(l => l.stage === t.id).length
+          const active = mode === t.id
+          return (
+            <button key={t.id} onClick={() => setMode(t.id)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono uppercase tracking-wider whitespace-nowrap transition-colors border ${
+                active ? '' : 'border-transparent hover:text-white'
+              }`}
+              style={active
+                ? { color: t.color, background: t.color + '15', borderColor: t.color + '40' }
+                : { color: '#5A6A7A' }}>
+              <div className="w-1.5 h-1.5 rounded-full" style={{ background: t.color }} />
+              {t.label} <span className="text-[10px] opacity-60">· {count}</span>
+            </button>
+          )
+        })}
       </div>
 
       {msg && (
@@ -574,8 +678,8 @@ export default function WarmBucket() {
                       className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-semibold text-black disabled:opacity-50"
                       style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
                       {promoting === current.pp_contact_uuid
-                        ? <><Loader size={13} className="animate-spin" /> Adding…</>
-                        : <>Promote to CRM <ChevronDown size={13} /></>}
+                        ? <><Loader size={13} className="animate-spin" /> Moving…</>
+                        : <>{current._kind === 'stage' ? 'Move stage' : 'Promote to CRM'} <ChevronDown size={13} /></>}
                     </button>
                     {pickerOpen && (
                       <StagePicker stages={safeTags} onPick={promote} onCancel={() => setPickerOpen(false)} anchor="left" />
