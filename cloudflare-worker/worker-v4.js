@@ -1712,9 +1712,9 @@ export default {
     // every release so a stale deploy is immediately visible.
     if (req.method === 'GET' && url.pathname === '/version') {
       return new Response(JSON.stringify({
-        version: 'v4.42',
-        parser: 'cron pass1 also backfills missing Auto-enrolled activity for awaiting leads',
-        deployed_check: 'if you see v4.42 here, the deploy succeeded',
+        version: 'v4.43',
+        parser: 'silent = time since our last text (not since their last reply)',
+        deployed_check: 'if you see v4.43 here, the deploy succeeded',
       }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
     }
     // Public API v1 — auth via X-API-Key. All routes under /api/v1/*.
@@ -1957,27 +1957,22 @@ export default {
             const newest = msgs[0]
             const newestTs = new Date(newest.sent_at || 0).getTime()
             if (!isFinite(newestTs) || newestTs === 0) { noteSkip('bad_ts'); return }
+            // Window filter — based on Nic's last outbound (which IS the
+            // newest message when rule 3 passes). "Silent about X hours" =
+            // time since Nic sent the last text with no reply. Matches what
+            // agents intuitively expect: window controls how long they're
+            // willing to reach back into their outbox.
+            if (newestTs < windowStart) {
+              noteSkip('out_of_window', { newest_at: newest.sent_at })
+              return
+            }
             const isOutbound = newest.direction === 'outbound'
             if (!isOutbound) { noteSkip('newest_not_out', { newest_dir: newest.direction }); return }
             // Rule 4 — require at least one inbound MESSAGE (with body) in
-            // the history. Nic's Positive tag isn't perfectly reliable — PP
-            // seems to auto-apply it in some cases. Actual inbound proves
-            // engagement.
-            const inboundWithBody = msgs
-              .filter(m => m.direction === 'inbound' && m.body && m.body.trim().length > 0 && m.sent_at)
-              .map(m => ({ ts: new Date(m.sent_at).getTime(), body: m.body }))
-              .filter(x => isFinite(x.ts))
-              .sort((a, b) => b.ts - a.ts)
-            if (!inboundWithBody.length) { noteSkip('no_inbound'); return }
-            // Quiet time — Nic's ask: measure silence from THEIR last reply,
-            // not from Nic's last outbound. Nic's follow-up drips shouldn't
-            // artificially reset the perceived quiet duration.
-            const lastInboundTs = inboundWithBody[0].ts
-            const quietDurationMs = now - lastInboundTs
-            if (quietDurationMs > wbHours * 60 * 60 * 1000) {
-              noteSkip('out_of_window', { last_inbound_at: new Date(lastInboundTs).toISOString() })
-              return
-            }
+            // the history. Positive tag alone isn't reliable — PP auto-tags.
+            // Actual inbound proves engagement.
+            const hasInbound = msgs.some(m => m.direction === 'inbound' && m.body && m.body.trim().length > 0)
+            if (!hasInbound) { noteSkip('no_inbound'); return }
             // Per-contact stats — surfaced on each match so we can verify the
             // worker's classification against what the UI displays. If a
             // match shows 0 inbound in the UI but this reports 1+, we know
@@ -2007,12 +2002,9 @@ export default {
               campaign: c.campaign,
               custom_fields: c.custom_fields,
               tags: c.tags,
-              // Nic's last outbound (kept for reference / drag interactions)
+              // Nic's last outbound — the moment the ball moved to their
+              // court. This is what "silent about X hours" measures.
               last_outbound_at: newest.sent_at,
-              // NEW: their last inbound = start of the quiet period. This is
-              // what the UI shows as "silent about X hours" — the actual
-              // time since the contact last spoke.
-              last_inbound_at: new Date(lastInboundTs).toISOString(),
               recent_messages: history,
               _msg_stats,
             })

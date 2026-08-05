@@ -559,12 +559,10 @@ export default function WarmBucket() {
             <div className="py-1">
               {visible.map((c, i) => {
                 const isSelected = i === selectedIdx
-                // "Quiet" duration measured from THEIR last inbound reply
-                // (not from Nic's last outbound). Falls back to last_outbound
-                // for queue-pushed entries that don't have a real message
-                // history.
-                const quietAnchor = c.last_inbound_at || c.last_outbound_at
-                const since = quietAnchor ? formatDistanceToNow(new Date(quietAnchor)) : ''
+                // "Silent" = time since Nic's last outbound went unanswered.
+                // Matches the intuitive meaning: ball is in their court, how
+                // long has it been sitting there.
+                const since = c.last_outbound_at ? formatDistanceToNow(new Date(c.last_outbound_at)) : ''
                 return (
                   <button key={c._key || c.pp_contact_uuid}
                     onClick={() => setSelectedIdx(i)}
@@ -644,9 +642,7 @@ export default function WarmBucket() {
                   </div>
                   <div className="flex flex-col items-end gap-2 flex-shrink-0">
                     <div className="text-xs text-[#F97316] font-mono">
-                      Quiet {current.last_inbound_at
-                        ? formatDistanceToNow(new Date(current.last_inbound_at))
-                        : (current.last_outbound_at ? formatDistanceToNow(new Date(current.last_outbound_at)) : '')}
+                      Silent {current.last_outbound_at ? formatDistanceToNow(new Date(current.last_outbound_at)) : ''}
                     </div>
                     {(localTime || tzLabel) && (
                       <div className="text-xs text-[#8899AA] font-mono inline-flex items-center gap-1">
