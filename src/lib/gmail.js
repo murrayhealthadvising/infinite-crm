@@ -322,6 +322,62 @@ export async function listGmailDrafts({ maxResults = 25 } = {}) {
 //               multipart/alternative with both representations so the
 //               recipient sees the rich HTML AND fallback clients see plain.
 //   fromName  — optional "Display Name <email>" or just a display name
+// Create a Gmail draft with the same content sendGmailMessage would send.
+// Used by the "Send via Streak" flow: agent picks this instead of Send, we
+// create a draft in their Gmail, then open Gmail to the draft. Agent clicks
+// Send inside Gmail → Streak (their CRM extension) intercepts and adds
+// its tracking pixels/open-detection, which the raw API send bypasses.
+//
+// Returns { ok, draftId, messageId, threadId } or { ok:false, error }.
+export async function createGmailDraft({ to, subject, body, html, fromName }) {
+  if (!to || !subject) return { ok: false, error: 'Recipient and subject are required.' }
+  if (!body && !html)  return { ok: false, error: 'Message body is empty.' }
+
+  let token = readToken()
+  if (!token) token = await silentRefresh()
+  if (!token && !isGmailConnected()) {
+    return { ok: false, error: 'Gmail not connected — connect in Settings first.' }
+  }
+  if (!token) {
+    return { ok: false, error: 'Token refresh failed — reconnect Gmail in Settings.' }
+  }
+
+  const raw = toBase64Url(rfc2822({ to, subject, body, html, fromName }))
+  const post = async (tok) => fetch(
+    'https://gmail.googleapis.com/gmail/v1/users/me/drafts',
+    {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${tok.access_token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: { raw } }),
+    }
+  )
+
+  try {
+    let res = await post(token)
+    if (res.status === 401) {
+      const fresh = await silentRefresh()
+      if (fresh) res = await post(fresh)
+      if (res.status === 401) {
+        clearGmailToken()
+        return { ok: false, error: 'Connection expired — reconnect Gmail in Settings.' }
+      }
+    }
+    if (!res.ok) {
+      const txt = await res.text().catch(() => '')
+      return { ok: false, error: `Gmail draft error (${res.status}): ${txt.slice(0, 160)}` }
+    }
+    const data = await res.json().catch(() => ({}))
+    return {
+      ok: true,
+      draftId: data.id || null,
+      messageId: data.message?.id || null,
+      threadId: data.message?.threadId || null,
+    }
+  } catch (e) {
+    return { ok: false, error: e?.message || 'Network error' }
+  }
+}
+
 export async function sendGmailMessage({ to, subject, body, html, fromName }) {
   if (!to || !subject) return { ok: false, error: 'Recipient and subject are required.' }
   if (!body && !html)  return { ok: false, error: 'Message body is empty.' }

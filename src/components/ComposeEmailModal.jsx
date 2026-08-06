@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { Mail, Send, X, Check, AlertCircle, Loader, FileText, RefreshCw } from 'lucide-react'
 import { useApp } from '../context/AppContext'
-import { isGmailConnected, sendGmailMessage, connectGmail, listGmailDrafts } from '../lib/gmail'
+import { isGmailConnected, sendGmailMessage, createGmailDraft, connectGmail, listGmailDrafts } from '../lib/gmail'
 
 // Quick compose modal — fires from the small email button on LeadDetail.
 // Sends through the Gmail API so the email lands in the agent's own Sent
@@ -357,6 +357,58 @@ export default function ComposeEmailModal({ leadId, to: initialTo, onClose, defa
     setSending(false)
   }
 
+  // Streak-compatible send flow. Streak's Gmail extension only tracks emails
+  // sent through the Gmail webapp — API sends bypass it entirely. Workaround:
+  // create a Gmail draft with the same content, then open Gmail to that draft.
+  // Nic clicks Send inside Gmail, Streak intercepts the send and injects its
+  // tracking pixel/read detection like any other Streak-sent email.
+  const [savingDraft, setSavingDraft] = useState(false)
+  const handleSendViaStreak = async () => {
+    if (!to || !subject || !body) {
+      setStatus({ type: 'err', text: 'Recipient, subject, and body are all required.' })
+      return
+    }
+    setSavingDraft(true); setStatus(null)
+    const fromName = user?.name
+      ? `${user.name} <${user.email}>`
+      : user?.email
+      ? `${user.email.split('@')[0]} <${user.email}>`
+      : undefined
+    let htmlToSend = previewHtml || undefined
+    let plainToSend = body
+    if (templateHtml && editableRef.current) {
+      htmlToSend = editableRef.current.innerHTML
+      const derivedPlain = editableRef.current.innerText || editableRef.current.textContent || ''
+      if (derivedPlain.trim()) plainToSend = derivedPlain
+    }
+    const res = await createGmailDraft({
+      to,
+      subject,
+      body: plainToSend,
+      html: htmlToSend,
+      fromName,
+    })
+    if (res.ok) {
+      // Auto-log a "drafted for Streak" activity so the Action Log reflects
+      // the intent even before the send actually happens in Gmail.
+      try {
+        if (leadId && typeof addActivity === 'function') {
+          await addActivity(leadId, 'email', `Drafted for Streak: ${subject}`)
+        }
+      } catch {}
+      // Open Gmail to the draft. Gmail's URL scheme for a specific draft is
+      // /mail/u/0/#drafts?compose={draftId} — Gmail auto-opens the composer.
+      const url = `https://mail.google.com/mail/u/0/#drafts?compose=${encodeURIComponent(res.draftId || '')}`
+      window.open(url, '_blank', 'noopener,noreferrer')
+      setStatus({ type: 'ok', text: '✓ Draft created. Sending in Gmail — click Send there and Streak will track it.' })
+      setTimeout(() => onClose(), 1800)
+    } else {
+      setStatus({ type: 'err', text: res.error || 'Draft creation failed.' })
+      if (/not connected|reconnect/i.test(res.error || '')) setConnected(false)
+    }
+    setSavingDraft(false)
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
@@ -510,15 +562,27 @@ export default function ComposeEmailModal({ leadId, to: initialTo, onClose, defa
             </div>
           )}
 
-          <div className="flex gap-2 pt-1">
-            <button onClick={handleSend} disabled={sending || !connected}
-              className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold text-white disabled:opacity-50"
-              style={{ background: 'linear-gradient(135deg, #3B82F6, #8B5CF6)' }}>
-              {sending ? <><Loader size={13} className="animate-spin" /> Sending…</> : <><Send size={13} /> Send</>}
-            </button>
-            <button onClick={onClose} disabled={sending}
-              className="px-4 py-2.5 rounded-lg text-sm bg-[#1A2130] text-[#8899AA] hover:text-white disabled:opacity-50">
-              Cancel
+          <div className="flex flex-col gap-2 pt-1">
+            <div className="flex gap-2">
+              <button onClick={handleSend} disabled={sending || savingDraft || !connected}
+                className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold text-white disabled:opacity-50"
+                style={{ background: 'linear-gradient(135deg, #3B82F6, #8B5CF6)' }}>
+                {sending ? <><Loader size={13} className="animate-spin" /> Sending…</> : <><Send size={13} /> Send now</>}
+              </button>
+              <button onClick={onClose} disabled={sending || savingDraft}
+                className="px-4 py-2.5 rounded-lg text-sm bg-[#1A2130] text-[#8899AA] hover:text-white disabled:opacity-50">
+                Cancel
+              </button>
+            </div>
+            {/* Streak-compatible send. Creates a Gmail draft, opens Gmail to
+                it — Nic clicks Send there and Streak captures the open
+                tracking that a raw API send would skip. */}
+            <button onClick={handleSendViaStreak} disabled={sending || savingDraft || !connected}
+              title="Creates a Gmail draft and opens it in Gmail so Streak can track the send"
+              className="flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-semibold text-white border border-[#F59E0B60] hover:bg-[#F59E0B10] disabled:opacity-50">
+              {savingDraft
+                ? <><Loader size={12} className="animate-spin" /> Creating draft…</>
+                : <>📈 Send via Streak (open in Gmail to track)</>}
             </button>
           </div>
         </div>
