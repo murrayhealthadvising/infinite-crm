@@ -871,11 +871,17 @@ const ACT_COLORS = { call: '#10B981', text: '#3B82F6', email: '#8B5CF6', note: '
 // Internally scrollable when entries overflow so the card height stays sane.
 function RecentActionsList({ entries }) {
   const list = Array.isArray(entries) ? entries : []
+  // Reserve a fixed 78px slot regardless of whether we have data — otherwise
+  // the card shifts vertically the moment recent activities finish loading.
   if (!list.length) {
-    return <p className="text-[10px] text-[#3A4A5A] italic">No actions yet</p>
+    return (
+      <div style={{ height: '78px' }} className="flex items-start">
+        <p className="text-[10px] text-[#3A4A5A] italic">No actions yet</p>
+      </div>
+    )
   }
   return (
-    <div className="space-y-1 overflow-y-auto pr-1" style={{ maxHeight: '78px' }}>
+    <div className="space-y-1 overflow-y-auto pr-1" style={{ height: '78px' }}>
       {list.map((e, i) => {
         const Icon = ACT_ICONS[e.type] || StickyNote
         const color = ACT_COLORS[e.type] || '#5A6A7A'
@@ -972,16 +978,19 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
           designed for desktop. Grid areas keep the visual weight consistent
           per breakpoint without hiding any data. */}
       <div className="grid gap-2 md:gap-3 px-3 md:px-4 pt-3 pb-2 items-start grid-cols-1 md:[grid-template-columns:28px_1.8fr_0.9fr_1.4fr_1fr_80px]">
-        <div className="pt-1" onClick={e => e.stopPropagation()}>
+        {/* Checkbox: hidden on mobile (bulk-select is a rare mobile action and
+            its full-width row wastes vertical space on iPhone). Still tappable
+            from the name area on desktop. */}
+        <div className="hidden md:block pt-1" onClick={e => e.stopPropagation()}>
           <button onClick={() => onSelect(lead.id)} className="text-[#3A4A5A] hover:text-white transition-colors">
             {selected ? <CheckSquare size={16} style={{ color: safeColor }} /> : <Square size={16} />}
           </button>
         </div>
 
-        <div>
+        <div className="min-w-0">
           {/* Name: clicking copies to clipboard (does NOT navigate or dial) */}
           <button onClick={copyName}
-            className="text-sm font-semibold text-left mb-1 inline-flex items-center gap-1.5"
+            className="text-sm font-semibold text-left mb-1 inline-flex items-center gap-1.5 max-w-full"
             style={{ color: 'white' }}
             onMouseEnter={e => e.currentTarget.style.color = safeColor}
             onMouseLeave={e => e.currentTarget.style.color = 'white'}
@@ -989,7 +998,7 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
             {fullName}
             {nameCopied
               ? <Check size={11} className="text-[#00E5C3] flex-shrink-0" />
-              : <Copy size={10} className="text-[#3A4A5A] flex-shrink-0 opacity-60" />}
+              : <Copy size={11} className="text-[#3A4A5A] flex-shrink-0 opacity-60" />}
           </button>
           <div className="flex items-center gap-1.5 mb-1">
             {/* Phone: clicking opens the lead detail (does NOT dial). Only the
@@ -1041,7 +1050,7 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
         <div className="flex flex-col gap-2 pt-0.5" onClick={e => e.stopPropagation()}>
           {lead.phone && (
             <a href={`tel:${lead.phone}`} onClick={(e) => { e.stopPropagation(); logDial() }}
-              className="flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-[8px] text-xs font-semibold text-black transition-opacity hover:opacity-80"
+              className="flex items-center justify-center gap-1.5 px-3 py-2.5 md:py-1.5 rounded-[8px] text-sm md:text-xs font-semibold text-black transition-opacity hover:opacity-80"
               style={{ background: `linear-gradient(135deg, ${safeColor}, ${safeColor}AA)` }}>
               <Phone size={12} /> Call
             </a>
