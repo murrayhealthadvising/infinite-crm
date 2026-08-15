@@ -1900,8 +1900,26 @@ export default function Settings() {
     if (newPassword.length < 6) { setPwMsg({ type: 'error', text: 'Password must be at least 6 characters.' }); return }
     setPwSaving(true); setPwMsg(null)
     const { error } = await supabase.auth.updateUser({ password: newPassword })
-    if (error) setPwMsg({ type: 'error', text: error.message })
-    else { setPwMsg({ type: 'success', text: 'Password updated! You can now log in with your new password.' }); setNewPassword(''); setConfirmPassword('') }
+    if (error) { setPwMsg({ type: 'error', text: error.message }); setPwSaving(false); return }
+    // Kick every OTHER session (phone, laptop, whatever else was signed in)
+    // so a stolen device with the old password can no longer stay in. We
+    // keep the current tab alive since the user just proved they know the
+    // new password — no need to force them to re-enter it right here.
+    let signedOutOthers = true
+    try {
+      const { error: soErr } = await supabase.auth.signOut({ scope: 'others' })
+      if (soErr) { signedOutOthers = false; console.warn('[Settings] signOut others failed', soErr) }
+    } catch (err) {
+      signedOutOthers = false
+      console.warn('[Settings] signOut others threw', err)
+    }
+    setPwMsg({
+      type: 'success',
+      text: signedOutOthers
+        ? 'Password updated. All other devices have been signed out.'
+        : 'Password updated. (Note: could not confirm sign-out of other devices — they may still be logged in until their token expires.)'
+    })
+    setNewPassword(''); setConfirmPassword('')
     setPwSaving(false)
   }
 
