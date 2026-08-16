@@ -1788,10 +1788,102 @@ export default {
     // every release so a stale deploy is immediately visible.
     if (req.method === 'GET' && url.pathname === '/version') {
       return new Response(JSON.stringify({
-        version: 'v4.45',
-        parser: 'multi-poll verify (15/45/90/180s) — PP-accepted-but-never-sent now flips to enroll_failed with clear reason',
-        deployed_check: 'if you see v4.45 here, the deploy succeeded',
+        version: 'v4.46',
+        parser: 'adds GET /pp-diagnose — step-by-step trace of what PP returns on enroll',
+        deployed_check: 'if you see v4.46 here, the deploy succeeded',
       }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
+    }
+
+    // Diagnostic endpoint — trace the entire PitchPrfct enroll path and return
+    // the raw HTTP status + body PP sent back at each step. Use when enrolls
+    // silently fail: hit this endpoint with any lead_id + workflow_id and see
+    // exactly which call PP is rejecting or acknowledging-but-ignoring.
+    //   GET /pp-diagnose?agent_id=UUID&lead_id=UUID&workflow_id=WFID
+    if (req.method === 'GET' && url.pathname === '/pp-diagnose') {
+      const dAgent = url.searchParams.get('agent_id')
+      const dLead = url.searchParams.get('lead_id')
+      const dWf = url.searchParams.get('workflow_id') || ''
+      const trace = { agent_id: dAgent, lead_id: dLead, workflow_id: dWf, steps: [] }
+      const step = (name, data) => { trace.steps.push({ name, ...data }); return data }
+      if (!dAgent || !dLead) {
+        return new Response(JSON.stringify({ error: 'missing agent_id or lead_id', trace }), {
+          status: 400, headers: { 'content-type': 'application/json', ...CORS },
+        })
+      }
+      // 1. API key present?
+      const dKey = await getAgentApiKey(env, dAgent)
+      step('api_key', { present: !!dKey, key_head: dKey ? String(dKey).slice(0, 6) + '…' : null })
+      if (!dKey) return new Response(JSON.stringify(trace), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
+      // 2. Ping /workflows to prove the key works at all
+      try {
+        const wr = await fetch(`${PITCHPRFCT_API}/workflows?take=50`, { headers: { 'x-api-key': dKey } })
+        const wt = (await wr.text()).slice(0, 600)
+        step('list_workflows', { status: wr.status, ok: wr.ok, body_preview: wt })
+      } catch (e) { step('list_workflows', { error: String(e) }) }
+      // 3. Lead lookup
+      const dLeadRow = await getLeadById(env, dLead)
+      step('lead_lookup', { found: !!dLeadRow, phone: dLeadRow?.phone || null })
+      if (!dLeadRow) return new Response(JSON.stringify(trace), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
+      const dPhone = coercePhoneE164(dLeadRow.phone)
+      step('phone_norm', { raw: dLeadRow.phone, e164: dPhone })
+      if (!dPhone) return new Response(JSON.stringify(trace), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
+      // 4. Contact create/find with RAW response captured
+      let dContactUuid = null
+      try {
+        const cr = await fetch(`${PITCHPRFCT_API}/contacts`, {
+          method: 'POST',
+          headers: { 'x-api-key': dKey, 'content-type': 'application/json' },
+          body: JSON.stringify({
+            phoneNumber: dPhone,
+            firstName: dLeadRow.first_name || undefined,
+            lastName: dLeadRow.last_name || undefined,
+            email: dLeadRow.email || undefined,
+            tags: ['Infinite CRM'],
+          }),
+        })
+        const ct = await cr.text()
+        dContactUuid = extractContactUuid(ct)
+        step('contact_create', { status: cr.status, ok: cr.ok, contact_uuid: dContactUuid, body_preview: ct.slice(0, 500) })
+        if (!dContactUuid && cr.status === 409) {
+          // Already exists — look it up
+          const fu = await findContactByPhone(dKey, dPhone)
+          dContactUuid = fu
+          step('contact_findByPhone', { found_uuid: fu })
+        }
+      } catch (e) { step('contact_create', { error: String(e) }) }
+      if (!dContactUuid) return new Response(JSON.stringify(trace), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
+      // 5. Enroll — capture the raw PP response
+      if (dWf) {
+        try {
+          const er = await fetch(`${PITCHPRFCT_API}/workflows/${encodeURIComponent(dWf)}/enroll`, {
+            method: 'POST',
+            headers: { 'x-api-key': dKey, 'content-type': 'application/json' },
+            body: JSON.stringify({ contactUuid: dContactUuid }),
+          })
+          const et = await er.text()
+          step('workflow_enroll', { status: er.status, ok: er.ok, body_preview: et.slice(0, 500) })
+        } catch (e) { step('workflow_enroll', { error: String(e) }) }
+        // 6. Fetch this contact's current subscriptions/workflows if PP exposes it
+        const subUrls = [
+          `${PITCHPRFCT_API}/contacts/${encodeURIComponent(dContactUuid)}/workflows`,
+          `${PITCHPRFCT_API}/contacts/${encodeURIComponent(dContactUuid)}/subscriptions`,
+          `${PITCHPRFCT_API}/contacts/${encodeURIComponent(dContactUuid)}`,
+        ]
+        for (const u of subUrls) {
+          try {
+            const sr = await fetch(u, { headers: { 'x-api-key': dKey } })
+            step('contact_state', { url: u.split('/api/v1')[1], status: sr.status, body_preview: (await sr.text()).slice(0, 400) })
+          } catch (e) { step('contact_state', { url: u, error: String(e) }) }
+        }
+      }
+      // 7. Recent messages for this contact
+      try {
+        const msgs = await fetchPPMessages(dKey, dContactUuid, 5)
+        step('recent_messages', { count: msgs.length, sample: msgs.slice(0, 3) })
+      } catch (e) { step('recent_messages', { error: String(e) }) }
+      return new Response(JSON.stringify(trace, null, 2), {
+        status: 200, headers: { 'content-type': 'application/json', ...CORS },
+      })
     }
     // Public API v1 — auth via X-API-Key. All routes under /api/v1/*.
     if (url.pathname.startsWith('/api/v1')) {
