@@ -1402,28 +1402,48 @@ async function patchLeadPPStatus(env, leadId, status, checkedAt) {
   } catch (e) { console.error('[pp] patchLeadPPStatus threw', String(e)) }
 }
 
-// Verify + log — background task fired after a successful enroll. Waits 15
-// seconds for PP to send the first workflow message, then confirms via the
-// messages endpoint. Only logs the "Enrolled in workflow" activity if a real
-// outbound message was actually sent in that window. Prevents misleading
-// success entries when PP accepts the enroll but never actually texts.
+// Verify + log — background task fired after a successful enroll. PP returns
+// 200 on /enroll even when the workflow silently rejects (paused, contact
+// opted out, contact was already in the workflow, missing required merge
+// fields). So "PP said OK" is not enough — we watch the messages endpoint
+// for a REAL outbound and only then write the "Auto-enrolled" activity row.
+//
+// Multi-poll: 15s → 45s → 90s → 180s. First fresh outbound wins and we log
+// success. If ALL polls come back empty, we assume PP accepted-but-ignored
+// and flip the lead to enroll_failed with a clear reason so the agent
+// isn't left thinking "awaiting reply" when nothing was ever sent.
 async function verifyAndLogEnroll(env, userId, leadId, apiKey, contactUuid, workflowName) {
+  const enrolledAt = Date.now()
+  const POLL_DELAYS_MS = [15000, 30000, 45000, 90000]  // cumulative 3min
+  const isFresh = (m) => {
+    if (m.direction !== 'outbound') return false
+    if (!m.sent_at) return false
+    const t = new Date(m.sent_at).getTime()
+    return isFinite(t) && t >= enrolledAt - 5000  // 5s slack for clock skew
+  }
   try {
-    await new Promise(res => setTimeout(res, 15000))
-    const messages = await fetchPPMessages(apiKey, contactUuid, 10)
-    const cutoff = Date.now() - 90 * 1000  // messages in the last 90 sec
-    const hasFreshOutbound = messages.some(m => {
-      if (m.direction !== 'outbound') return false
-      if (!m.sent_at) return false
-      const t = new Date(m.sent_at).getTime()
-      return isFinite(t) && t >= cutoff
-    })
-    if (hasFreshOutbound) {
-      await logEnrollActivity(env, userId, leadId, workflowName || '(unnamed)')
-      console.log('[pp] verified — logged enroll for lead', leadId)
-    } else {
-      console.warn('[pp] enroll acknowledged but no outbound message within 15s for lead', leadId, '— skipping log')
+    for (let i = 0; i < POLL_DELAYS_MS.length; i++) {
+      await new Promise(res => setTimeout(res, POLL_DELAYS_MS[i]))
+      let messages = []
+      try { messages = await fetchPPMessages(apiKey, contactUuid, 10) }
+      catch (e) { console.warn('[pp] verify poll', i + 1, 'fetch threw', String(e)); continue }
+      if (messages.some(isFresh)) {
+        await logEnrollActivity(env, userId, leadId, workflowName || '(unnamed)')
+        console.log('[pp] verified — logged enroll for lead', leadId, 'after poll', i + 1)
+        return
+      }
+      console.log('[pp] verify poll', i + 1, 'of', POLL_DELAYS_MS.length,
+                  '— no fresh outbound yet for lead', leadId)
     }
+    // Ran out of polls with no outbound. PP accepted the enroll but never
+    // sent a text — surface this so the agent knows to check PP for the
+    // reason (workflow paused? contact opted out? already enrolled?).
+    console.warn('[pp] enroll acknowledged but PP never sent an outbound within 3min for lead', leadId)
+    await logEnrollFailure(
+      env, userId, leadId,
+      `PitchPrfct accepted the enroll into "${workflowName || 'workflow'}" but never sent a text within 3 min. ` +
+      `Check PP for: workflow paused/inactive, contact opted-out, contact already enrolled, or missing merge fields.`
+    )
   } catch (e) { console.error('[pp] verifyAndLogEnroll threw', String(e)) }
 }
 
@@ -1768,9 +1788,9 @@ export default {
     // every release so a stale deploy is immediately visible.
     if (req.method === 'GET' && url.pathname === '/version') {
       return new Response(JSON.stringify({
-        version: 'v4.44',
-        parser: 'enroll failures now log an activity + set pp_response_status=enroll_failed',
-        deployed_check: 'if you see v4.44 here, the deploy succeeded',
+        version: 'v4.45',
+        parser: 'multi-poll verify (15/45/90/180s) — PP-accepted-but-never-sent now flips to enroll_failed with clear reason',
+        deployed_check: 'if you see v4.45 here, the deploy succeeded',
       }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
     }
     // Public API v1 — auth via X-API-Key. All routes under /api/v1/*.
