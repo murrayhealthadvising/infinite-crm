@@ -904,7 +904,8 @@ function RecentActionsList({ entries }) {
 
 // Small pill showing PitchPrfct response status. Renders nothing for leads
 // that were never PP-enrolled (status is null / 'unknown'). Green "Responded"
-// if the lead has replied; amber "Awaiting" if enrolled but silent so far.
+// if the lead has replied; amber "Awaiting" if enrolled but silent so far;
+// red "Enroll failed" when the worker gave up (bad key, no workflow, PP 4xx).
 function PPResponsePill({ status }) {
   if (!status || status === 'unknown') return null
   if (status === 'responded') {
@@ -922,6 +923,15 @@ function PPResponsePill({ status }) {
         style={{ background: '#8899AA15', color: '#8899AA', border: '1px solid #8899AA40' }}
         title="Enrolled in PitchPrfct workflow, no reply yet">
         · No reply
+      </span>
+    )
+  }
+  if (status === 'enroll_failed') {
+    return (
+      <span className="inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded"
+        style={{ background: '#EF444415', color: '#EF4444', border: '1px solid #EF444440' }}
+        title="PitchPrfct auto-enroll failed for this lead — check the Recent Actions log for the reason (missing API key, paused workflow, bad phone, etc.)">
+        ⚠ Enroll failed
       </span>
     )
   }

@@ -979,6 +979,39 @@ async function logEnrollActivity(env, userId, leadId, workflowName) {
   } catch (e) { console.error('[pp] logEnrollActivity threw', String(e)) }
 }
 
+// Log a FAILED auto-enroll so the agent knows why the lead is silent (no PP
+// text will ever go out for this lead). Writes an activity row visible in
+// Recent Actions AND flips pp_response_status to 'enroll_failed' so the lead
+// card shows a red pill. Reason is a short human-readable string like
+// 'no PitchPrfct API key' or 'workflow paused'.
+async function logEnrollFailure(env, userId, leadId, reason) {
+  if (!leadId) { console.warn('[pp] logEnrollFailure skipped — no leadId', reason); return }
+  try {
+    const row = {
+      lead_id: leadId,
+      user_id: userId,
+      type: 'note',
+      note: `PitchPrfct auto-enroll FAILED: ${reason || 'unknown reason'}`,
+      created_at: new Date().toISOString(),
+    }
+    const r = await fetch(`${env.SUPABASE_URL}/rest/v1/activities`, {
+      method: 'POST',
+      headers: {
+        apikey: env.SUPABASE_SERVICE_KEY,
+        authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}`,
+        'content-type': 'application/json',
+        prefer: 'return=minimal',
+      },
+      body: JSON.stringify([row]),
+    })
+    if (!r.ok) console.error('[pp] logEnrollFailure activity POST failed', r.status, (await r.text()).slice(0, 200))
+  } catch (e) { console.error('[pp] logEnrollFailure threw', String(e)) }
+  // Flip status so the card pill turns red. Best-effort — if this errors we
+  // still want the activity row above to have landed.
+  try { await patchLeadPPStatus(env, leadId, 'enroll_failed', new Date().toISOString()) }
+  catch (e) { console.error('[pp] logEnrollFailure status flip threw', String(e)) }
+}
+
 // ─── PitchPrfct workflow enrollment (per-agent) ────────────────────────────
 // The moment a brand-new lead is inserted, push it into PitchPrfct as a contact
 // and enroll that contact in a workflow — PitchPrfct then runs whatever the
@@ -1403,19 +1436,37 @@ async function enrollLeadInPitch(env, userId, lead, ctx) {
   const tag = lead.id ? `lead=${lead.id}` : 'lead=?'
   const normPhone = coercePhoneE164(lead.phone)
   if (!normPhone) {
-    console.log('[pp]', tag, 'no usable phone — skipping', { raw: lead.phone }); return false
+    console.log('[pp]', tag, 'no usable phone — skipping', { raw: lead.phone })
+    await logEnrollFailure(env, userId, lead.id, `no usable phone (raw=${lead.phone || 'null'})`)
+    return false
   }
   lead = { ...lead, phone: normPhone }
   const apiKey = await getAgentApiKey(env, userId)
-  if (!apiKey) { console.log('[pp]', tag, 'agent has no PitchPrfct API key — skipping'); return false }
+  if (!apiKey) {
+    console.log('[pp]', tag, 'agent has no PitchPrfct API key — skipping')
+    await logEnrollFailure(env, userId, lead.id, 'agent has no PitchPrfct API key set in Settings')
+    return false
+  }
   const rules = await getProfileRules(env, userId)
   const hasRules = rules && (rules.defaultWorkflowId || (Array.isArray(rules.rules) && rules.rules.length))
-  if (!hasRules) { console.log('[pp]', tag, 'no workflow rules for this agent — skipping'); return false }
+  if (!hasRules) {
+    console.log('[pp]', tag, 'no workflow rules for this agent — skipping')
+    await logEnrollFailure(env, userId, lead.id, 'no PitchPrfct workflow rules configured for this agent')
+    return false
+  }
   const pick = pickWorkflowId(rules, lead)
-  if (!pick) { console.log('[pp]', tag, 'no workflow matched and no default set — skipping'); return false }
+  if (!pick) {
+    console.log('[pp]', tag, 'no workflow matched and no default set — skipping')
+    await logEnrollFailure(env, userId, lead.id, 'no workflow rule matched this lead and no default set')
+    return false
+  }
   console.log('[pp]', tag, pick.why, '→ workflow', pick.id, pick.name || '')
   const contactUuid = await createOrFindContact(apiKey, lead)
-  if (!contactUuid) { console.error('[pp]', tag, 'no contact UUID — cannot enroll'); return false }
+  if (!contactUuid) {
+    console.error('[pp]', tag, 'no contact UUID — cannot enroll')
+    await logEnrollFailure(env, userId, lead.id, 'PitchPrfct contact create/lookup failed (bad phone or PP API error)')
+    return false
+  }
   const ok = await enrollInWorkflow(apiKey, pick.id, contactUuid)
   if (ok && lead.id) {
     // Immediately mark as awaiting a reply so the card shows the tag.
@@ -1425,6 +1476,11 @@ async function enrollLeadInPitch(env, userId, lead, ctx) {
     const task = verifyAndLogEnroll(env, userId, lead.id, apiKey, contactUuid, pick.name || pick.id)
     if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(task)
     else await task
+  } else if (!ok) {
+    // enrollInWorkflow already retried 3× — this is a real failure. Surface
+    // to the agent so they know THIS lead won't get a PP text (workflow may
+    // be paused, PP contact rejected the enroll, etc.).
+    await logEnrollFailure(env, userId, lead.id, `PitchPrfct rejected enroll into workflow "${pick.name || pick.id}" after 3 tries (workflow paused? contact blocked?)`)
   }
   return ok
 }
@@ -1712,9 +1768,9 @@ export default {
     // every release so a stale deploy is immediately visible.
     if (req.method === 'GET' && url.pathname === '/version') {
       return new Response(JSON.stringify({
-        version: 'v4.43',
-        parser: 'silent = time since our last text (not since their last reply)',
-        deployed_check: 'if you see v4.43 here, the deploy succeeded',
+        version: 'v4.44',
+        parser: 'enroll failures now log an activity + set pp_response_status=enroll_failed',
+        deployed_check: 'if you see v4.44 here, the deploy succeeded',
       }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
     }
     // Public API v1 — auth via X-API-Key. All routes under /api/v1/*.
