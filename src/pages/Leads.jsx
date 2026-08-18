@@ -987,11 +987,15 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
           readable at 390px. At md+ (768px) it becomes the 6-column layout
           designed for desktop. Grid areas keep the visual weight consistent
           per breakpoint without hiding any data. */}
-      <div className="grid gap-2 md:gap-3 px-3 md:px-4 pt-3 pb-2 items-start grid-cols-1 md:[grid-template-columns:28px_1.8fr_0.9fr_1.4fr_1fr_80px]">
+      {/* Grid: single column below lg (was md — 768px squeezed the 6-col
+          layout so tight that col 3's Call button overflowed onto the name).
+          At lg (1024px+) we go 6-col, and each column gets a minmax floor
+          so nothing shrinks below its content. */}
+      <div className="grid gap-2 lg:gap-3 px-3 lg:px-4 pt-3 pb-2 items-start grid-cols-1 lg:[grid-template-columns:28px_minmax(200px,1.8fr)_minmax(90px,0.9fr)_minmax(140px,1.4fr)_minmax(110px,1fr)_80px]">
         {/* Checkbox: hidden on mobile (bulk-select is a rare mobile action and
             its full-width row wastes vertical space on iPhone). Still tappable
             from the name area on desktop. */}
-        <div className="hidden md:block pt-1" onClick={e => e.stopPropagation()}>
+        <div className="hidden lg:block pt-1" onClick={e => e.stopPropagation()}>
           <button onClick={() => onSelect(lead.id)} className="text-[#3A4A5A] hover:text-white transition-colors">
             {selected ? <CheckSquare size={16} style={{ color: safeColor }} /> : <Square size={16} />}
           </button>
@@ -1015,7 +1019,7 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
                 Call button dials. The little Copy icon copies the number. */}
             {lead.phone && (
               <button onClick={(e) => { e.stopPropagation(); onNavigate(lead.id) }}
-                className="text-sm font-mono hover:underline"
+                className="text-sm font-mono hover:underline whitespace-nowrap"
                 style={{ color: safeColor }}
                 title="Click to open this lead">
                 {displayPhone(lead.phone)}
@@ -1060,7 +1064,7 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
         <div className="flex flex-col gap-2 pt-0.5" onClick={e => e.stopPropagation()}>
           {lead.phone && (
             <a href={`tel:${lead.phone}`} onClick={(e) => { e.stopPropagation(); logDial() }}
-              className="flex items-center justify-center gap-1.5 px-3 py-2.5 md:py-1.5 rounded-[8px] text-sm md:text-xs font-semibold text-black transition-opacity hover:opacity-80"
+              className="flex items-center justify-center gap-1.5 px-3 py-2.5 lg:py-1.5 rounded-[8px] text-sm lg:text-xs font-semibold text-black transition-opacity hover:opacity-80 whitespace-nowrap"
               style={{ background: `linear-gradient(135deg, ${safeColor}, ${safeColor}AA)` }}>
               <Phone size={12} /> Call
             </a>
