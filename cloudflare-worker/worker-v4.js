@@ -1441,8 +1441,7 @@ async function verifyAndLogEnroll(env, userId, leadId, apiKey, contactUuid, work
     console.warn('[pp] enroll acknowledged but PP never sent an outbound within 3min for lead', leadId)
     await logEnrollFailure(
       env, userId, leadId,
-      `PitchPrfct accepted the enroll into "${workflowName || 'workflow'}" but never sent a text within 3 min. ` +
-      `Check PP for: workflow paused/inactive, contact opted-out, contact already enrolled, or missing merge fields.`
+      `PP accepted "${workflowName || 'workflow'}" but sent no text in 3min (paused/opt-out/dupe?)`
     )
   } catch (e) { console.error('[pp] verifyAndLogEnroll threw', String(e)) }
 }
@@ -1457,34 +1456,34 @@ async function enrollLeadInPitch(env, userId, lead, ctx) {
   const normPhone = coercePhoneE164(lead.phone)
   if (!normPhone) {
     console.log('[pp]', tag, 'no usable phone — skipping', { raw: lead.phone })
-    await logEnrollFailure(env, userId, lead.id, `no usable phone (raw=${lead.phone || 'null'})`)
+    await logEnrollFailure(env, userId, lead.id, 'PP enroll skipped — bad phone number')
     return false
   }
   lead = { ...lead, phone: normPhone }
   const apiKey = await getAgentApiKey(env, userId)
   if (!apiKey) {
     console.log('[pp]', tag, 'agent has no PitchPrfct API key — skipping')
-    await logEnrollFailure(env, userId, lead.id, 'agent has no PitchPrfct API key set in Settings')
+    await logEnrollFailure(env, userId, lead.id, 'PP enroll skipped — no API key in Settings')
     return false
   }
   const rules = await getProfileRules(env, userId)
   const hasRules = rules && (rules.defaultWorkflowId || (Array.isArray(rules.rules) && rules.rules.length))
   if (!hasRules) {
     console.log('[pp]', tag, 'no workflow rules for this agent — skipping')
-    await logEnrollFailure(env, userId, lead.id, 'no PitchPrfct workflow rules configured for this agent')
+    await logEnrollFailure(env, userId, lead.id, 'PP enroll skipped — no workflow rules set')
     return false
   }
   const pick = pickWorkflowId(rules, lead)
   if (!pick) {
     console.log('[pp]', tag, 'no workflow matched and no default set — skipping')
-    await logEnrollFailure(env, userId, lead.id, 'no workflow rule matched this lead and no default set')
+    await logEnrollFailure(env, userId, lead.id, 'PP enroll skipped — no matching workflow rule')
     return false
   }
   console.log('[pp]', tag, pick.why, '→ workflow', pick.id, pick.name || '')
   const contactUuid = await createOrFindContact(apiKey, lead)
   if (!contactUuid) {
     console.error('[pp]', tag, 'no contact UUID — cannot enroll')
-    await logEnrollFailure(env, userId, lead.id, 'PitchPrfct contact create/lookup failed (bad phone or PP API error)')
+    await logEnrollFailure(env, userId, lead.id, 'PP enroll failed — contact create/lookup rejected')
     return false
   }
   const ok = await enrollInWorkflow(apiKey, pick.id, contactUuid)
@@ -1498,9 +1497,8 @@ async function enrollLeadInPitch(env, userId, lead, ctx) {
     else await task
   } else if (!ok) {
     // enrollInWorkflow already retried 3× — this is a real failure. Surface
-    // to the agent so they know THIS lead won't get a PP text (workflow may
-    // be paused, PP contact rejected the enroll, etc.).
-    await logEnrollFailure(env, userId, lead.id, `PitchPrfct rejected enroll into workflow "${pick.name || pick.id}" after 3 tries (workflow paused? contact blocked?)`)
+    // to the agent so they know THIS lead won't get a PP text.
+    await logEnrollFailure(env, userId, lead.id, `PP enroll rejected — "${pick.name || pick.id}" (paused? blocked?)`)
   }
   return ok
 }
@@ -1788,9 +1786,9 @@ export default {
     // every release so a stale deploy is immediately visible.
     if (req.method === 'GET' && url.pathname === '/version') {
       return new Response(JSON.stringify({
-        version: 'v4.46',
-        parser: 'adds GET /pp-diagnose — step-by-step trace of what PP returns on enroll',
-        deployed_check: 'if you see v4.46 here, the deploy succeeded',
+        version: 'v4.47',
+        parser: 'shorter enroll-failure notes so they fit lead card without blowing out the grid',
+        deployed_check: 'if you see v4.47 here, the deploy succeeded',
       }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
     }
 

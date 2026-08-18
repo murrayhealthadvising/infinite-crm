@@ -881,17 +881,17 @@ function RecentActionsList({ entries }) {
     )
   }
   return (
-    <div className="space-y-1 overflow-y-auto pr-1" style={{ height: '78px' }}>
+    <div className="space-y-1 overflow-y-auto overflow-x-hidden pr-1" style={{ height: '78px', maxWidth: '100%' }}>
       {list.map((e, i) => {
         const Icon = ACT_ICONS[e.type] || StickyNote
         const color = ACT_COLORS[e.type] || '#5A6A7A'
         let ago = ''
         try { ago = formatDistanceToNow(new Date(e.created_at), { addSuffix: true }) } catch {}
         return (
-          <div key={e.id || i} className="flex items-start gap-1.5"
+          <div key={e.id || i} className="flex items-start gap-1.5 min-w-0 w-full"
             title={`${e.type} · ${e.note || ''} · ${ago}`}>
             <Icon size={9} style={{ color }} className="flex-shrink-0 mt-0.5" />
-            <div className="min-w-0 flex-1">
+            <div className="min-w-0 flex-1 overflow-hidden">
               <p className="text-[10px] text-[#8899AA] truncate leading-tight">{e.note || `(${e.type})`}</p>
               <p className="text-[9px] text-[#3A4A5A] font-mono leading-tight">{ago}</p>
             </div>
