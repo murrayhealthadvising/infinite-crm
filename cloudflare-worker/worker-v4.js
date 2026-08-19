@@ -1786,10 +1786,55 @@ export default {
     // every release so a stale deploy is immediately visible.
     if (req.method === 'GET' && url.pathname === '/version') {
       return new Response(JSON.stringify({
-        version: 'v4.48',
-        parser: 'email routing: dynamic Supabase profile fallback when AGENT_ROUTING has no entry',
-        deployed_check: 'if you see v4.48 here, the deploy succeeded',
+        version: 'v4.49',
+        parser: 'adds POST /replay-email — re-inject a lead from Cloudflare Log raw dump under any user_id',
+        deployed_check: 'if you see v4.49 here, the deploy succeeded',
       }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
+    }
+
+    // Replay endpoint — for recovery when a lead arrived at the worker but got
+    // dropped (routing gap, missing profile, etc.) and only the raw email
+    // survives in Cloudflare Workers Logs. Paste the raw MIME body (or just
+    // the parsed text) as `raw` and specify the target agent to receive it.
+    //   POST /replay-email  { agent_id: UUID, raw: "<raw email text>" }
+    if (req.method === 'POST' && url.pathname === '/replay-email') {
+      let rpl = {}
+      try { rpl = await req.json() } catch {
+        return new Response(JSON.stringify({ error: 'bad json' }), {
+          status: 400, headers: { 'content-type': 'application/json', ...CORS },
+        })
+      }
+      if (!rpl.agent_id || !rpl.raw) {
+        return new Response(JSON.stringify({ error: 'missing agent_id or raw' }), {
+          status: 400, headers: { 'content-type': 'application/json', ...CORS },
+        })
+      }
+      // Cloudflare logs escape newlines as \\n and CRs as \\r inside quoted
+      // strings — un-escape them before parsing so extractBody's regex works.
+      const rawText = String(rpl.raw).replace(/\\r/g, '\r').replace(/\\n/g, '\n')
+      const body = extractBody(rawText)
+      const lead = parseLead(body)
+      lead.user_id = rpl.agent_id
+      lead.agent_id = rpl.agent_id
+      lead.source = 'USHA Marketplace (replayed via /replay-email)'
+      lead.stage = DEFAULT_STAGE
+      lead.created_at = new Date().toISOString()
+      lead.last_activity = lead.created_at
+      const result = await insertLead(env, lead)
+      if (result.ok) {
+        const insertedId = parseFirstId(result.body)
+        return new Response(JSON.stringify({ ok: true, lead_id: insertedId, parsed: lead }), {
+          status: 200, headers: { 'content-type': 'application/json', ...CORS },
+        })
+      }
+      if (isDuplicate(result) && lead.phone) {
+        return new Response(JSON.stringify({ ok: true, note: 'duplicate — already in CRM', phone: lead.phone }), {
+          status: 200, headers: { 'content-type': 'application/json', ...CORS },
+        })
+      }
+      return new Response(JSON.stringify({ ok: false, status: result.status, body_preview: result.body.slice(0, 500), parsed: lead }), {
+        status: 502, headers: { 'content-type': 'application/json', ...CORS },
+      })
     }
 
     // Diagnostic endpoint — trace the entire PitchPrfct enroll path and return
@@ -2447,7 +2492,7 @@ export default {
       }
       if (!userId) {
         console.error('[email] no AGENT_ROUTING entry AND no profile first_name match for', recipient,
-          '— add to Cloudflare Email Routing accepted addresses AND make sure a profile exists with matching first_name.')
+          '— dropping. Fix by ensuring a profile exists with first_name matching the alias local-part.')
         return
       }
       // Verbose diagnostic logging — every step of the parse is traced. With
@@ -2461,7 +2506,7 @@ export default {
       lead.agent_id = userId
       // Tag the source so we can tell worker-imported leads apart from
       // manual-paste imports. v4.14 stamps a build id so we can verify deploys.
-      lead.source = 'USHA Marketplace (worker v4.23)'
+      lead.source = 'USHA Marketplace (worker v4.49)'
       lead.stage = DEFAULT_STAGE
       lead.created_at = new Date().toISOString()
       lead.last_activity = lead.created_at
