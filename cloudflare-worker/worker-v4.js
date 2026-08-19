@@ -25,6 +25,7 @@ const AGENT_ROUTING = {
   'doug-leads@infinite-crm.net':     'e396e3fa-16d7-4948-bb19-23ba73cc82c4',
   'felipe-leads@infinite-crm.net':   'd93a21e9-340b-4023-b758-ff3d9d6644a3',
   'skyler-leads@infinite-crm.net':   '341af7c4-fc71-435f-9458-2be692323ad9',
+  'cole-leads@infinite-crm.net':     'f013eaab-572a-4ef5-b73c-ba5eb7f76be7',
 }
 
 const DEFAULT_STAGE = 'not-started'
@@ -1786,9 +1787,9 @@ export default {
     // every release so a stale deploy is immediately visible.
     if (req.method === 'GET' && url.pathname === '/version') {
       return new Response(JSON.stringify({
-        version: 'v4.49',
-        parser: 'adds POST /replay-email — re-inject a lead from Cloudflare Log raw dump under any user_id',
-        deployed_check: 'if you see v4.49 here, the deploy succeeded',
+        version: 'v4.50',
+        parser: 'cole-leads@ hardcoded in AGENT_ROUTING → f013eaab; replay endpoint live',
+        deployed_check: 'if you see v4.50 here, the deploy succeeded',
       }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
     }
 
