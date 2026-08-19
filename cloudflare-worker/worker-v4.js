@@ -1463,15 +1463,20 @@ async function enrollLeadInPitch(env, userId, lead, ctx) {
   lead = { ...lead, phone: normPhone }
   const apiKey = await getAgentApiKey(env, userId)
   if (!apiKey) {
-    console.log('[pp]', tag, 'agent has no PitchPrfct API key — skipping')
-    await logEnrollFailure(env, userId, lead.id, 'PP enroll skipped — no API key in Settings')
+    // Agent hasn't set up PitchPrfct at all → skip SILENTLY. Don't spam their
+    // activity log with a red failure pill for every lead just because they
+    // don't use PP. Once they add an API key we'll start reporting real
+    // failures again.
+    console.log('[pp]', tag, 'agent has no PitchPrfct API key — silent skip')
     return false
   }
   const rules = await getProfileRules(env, userId)
   const hasRules = rules && (rules.defaultWorkflowId || (Array.isArray(rules.rules) && rules.rules.length))
   if (!hasRules) {
-    console.log('[pp]', tag, 'no workflow rules for this agent — skipping')
-    await logEnrollFailure(env, userId, lead.id, 'PP enroll skipped — no workflow rules set')
+    // Same rationale — if they set up an API key but no rules yet, they're
+    // still configuring. Don't spam the log until they've actually finished
+    // setup (key + at least one rule or default workflow).
+    console.log('[pp]', tag, 'no workflow rules for this agent — silent skip')
     return false
   }
   const pick = pickWorkflowId(rules, lead)
@@ -1787,9 +1792,9 @@ export default {
     // every release so a stale deploy is immediately visible.
     if (req.method === 'GET' && url.pathname === '/version') {
       return new Response(JSON.stringify({
-        version: 'v4.50',
-        parser: 'cole-leads@ hardcoded in AGENT_ROUTING → f013eaab; replay endpoint live',
-        deployed_check: 'if you see v4.50 here, the deploy succeeded',
+        version: 'v4.51',
+        parser: 'zero-touch onboarding — email routing now queries profiles.email_routing_local live (no code change per agent); PP silent-skip when unconfigured',
+        deployed_check: 'if you see v4.51 here, the deploy succeeded',
       }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
     }
 
@@ -2455,45 +2460,45 @@ export default {
           slice.replace(/\r/g, '\\r').replace(/\n/g, '\\n'))
       }
       const body = extractBody(raw)
-      let userId = AGENT_ROUTING[recipient]
-      if (!userId) {
-        // Fallback: derive the local-part (e.g. "cole" from "cole-leads@…")
-        // and look up a profile whose first_name matches. Lets newly-added
-        // runners receive leads without needing a code change/redeploy.
-        const local = String(recipient || '').split('@')[0].toLowerCase()
-        const namePart = local.replace(/-?leads?$/i, '').replace(/[^a-z0-9]/g, '')
-        if (namePart) {
-          try {
-            const purl = `${env.SUPABASE_URL}/rest/v1/profiles?select=user_id,first_name,full_name,email&limit=200`
-            const pr = await fetch(purl, {
-              headers: {
-                apikey: env.SUPABASE_SERVICE_KEY,
-                authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}`,
-              },
-            })
-            if (pr.ok) {
-              const rows = await pr.json()
-              const norm = (s) => String(s || '').toLowerCase().trim().split(/\s+/)[0].replace(/[^a-z0-9]/g, '')
-              const hit = rows.find(p =>
-                norm(p.first_name) === namePart ||
-                norm(p.full_name) === namePart ||
-                norm((p.email || '').split('@')[0]) === namePart
-              )
-              if (hit) {
-                userId = hit.user_id
-                console.log('[email] dynamic route match', { recipient, matched: hit.first_name || hit.full_name || hit.email, user_id: userId })
-              }
-            } else {
-              console.error('[email] profile lookup failed', pr.status, (await pr.text()).slice(0, 200))
+      // ── Routing lookup: primary source is profiles.email_routing_local
+      //    (populated automatically at signup by a DB trigger). Falls back
+      //    to the legacy hardcoded AGENT_ROUTING map so existing agents
+      //    keep working with zero data migration. Onboarding a new agent
+      //    now requires NO code change: sign up + admin approve = live.
+      const local = String(recipient || '').split('@')[0].toLowerCase()
+      const namePart = local.replace(/-?leads?$/i, '').replace(/[^a-z0-9]/g, '')
+      let userId = null
+      if (namePart) {
+        try {
+          const purl = `${env.SUPABASE_URL}/rest/v1/profiles?select=user_id,email_routing_local,first_name&email_routing_local=eq.${encodeURIComponent(namePart)}&limit=1`
+          const pr = await fetch(purl, {
+            headers: {
+              apikey: env.SUPABASE_SERVICE_KEY,
+              authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}`,
+            },
+          })
+          if (pr.ok) {
+            const rows = await pr.json()
+            if (rows && rows[0] && rows[0].user_id) {
+              userId = rows[0].user_id
+              console.log('[email] routing lookup match', {
+                recipient, local: namePart, matched_first_name: rows[0].first_name, user_id: userId,
+              })
             }
-          } catch (e) {
-            console.error('[email] dynamic route lookup threw', String(e))
+          } else {
+            console.error('[email] profile routing lookup failed', pr.status, (await pr.text()).slice(0, 200))
           }
+        } catch (e) {
+          console.error('[email] profile routing lookup threw', String(e))
         }
       }
+      // Legacy fallback for the hardcoded map (in case an existing agent's
+      // profile doesn't have email_routing_local set for some reason)
+      if (!userId) userId = AGENT_ROUTING[recipient]
       if (!userId) {
-        console.error('[email] no AGENT_ROUTING entry AND no profile first_name match for', recipient,
-          '— dropping. Fix by ensuring a profile exists with first_name matching the alias local-part.')
+        console.error('[email] no profile with email_routing_local=', namePart,
+          ' AND no legacy AGENT_ROUTING entry for', recipient,
+          '— dropping. Fix in Admin panel by setting the routing alias for that agent.')
         return
       }
       // Verbose diagnostic logging — every step of the parse is traced. With

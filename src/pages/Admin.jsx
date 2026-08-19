@@ -141,21 +141,31 @@ export default function Admin() {
     const local = deriveLocal(firstNameDraft)
     if (!local) return
     const leadEmail = `${local}-leads@infinite-crm.net`
-    const { error } = await supabase.from('profiles').update({ lead_email: leadEmail }).eq('user_id', agent.user_id)
+    // Write BOTH: `lead_email` is the human-readable display, `email_routing_local`
+    // is what the worker actually queries when routing incoming emails. Setting
+    // both keeps the display and the routing in lockstep.
+    const { error } = await supabase.from('profiles')
+      .update({ lead_email: leadEmail, email_routing_local: local })
+      .eq('user_id', agent.user_id)
     if (error) {
       setMsg({ type: 'error', text: `Failed: ${error.message}` })
     } else {
-      setMsg({ type: 'success', text: `Set ${agent.full_name || agent.email} → ${leadEmail}. Now add the Cloudflare route + worker entry.` })
+      setMsg({
+        type: 'success',
+        text: `Set ${agent.full_name || agent.email} → ${leadEmail}. Live immediately (no code change needed).`,
+      })
       loadAgents()
     }
     setEditingAgentId(null)
     setFirstNameDraft('')
-    setTimeout(() => setMsg(null), 8000)
+    setTimeout(() => setMsg(null), 6000)
   }
 
   const clearLeadEmail = async (agent) => {
     if (!confirm(`Remove forwarding address for ${agent.full_name || agent.email}?`)) return
-    await supabase.from('profiles').update({ lead_email: null }).eq('user_id', agent.user_id)
+    await supabase.from('profiles')
+      .update({ lead_email: null, email_routing_local: null })
+      .eq('user_id', agent.user_id)
     loadAgents()
   }
 
@@ -378,33 +388,15 @@ export default function Admin() {
                     </div>
                   )}
 
-                  {/* After-save snippet: Cloudflare instructions + worker line */}
+                  {/* Onboarding is now zero-touch: the worker queries
+                      profiles.email_routing_local live for every inbound email,
+                      so setting the address here makes it work IMMEDIATELY —
+                      no Cloudflare route to add (catch-all handles it) and no
+                      code change to redeploy. Just copy the address to USHA. */}
                   {agent.lead_email && (
-                    <details className="mt-2 ml-13 pl-13" style={{ paddingLeft: '52px' }}>
-                      <summary className="text-[10px] text-[#3A4A5A] cursor-pointer hover:text-[#5A6A7A] uppercase tracking-wider font-mono">
-                        Show wiring steps
-                      </summary>
-                      <div className="mt-2 space-y-2 text-xs">
-                        <div className="rounded-lg border border-[#1A2130] p-3" style={{ background: '#080B0F' }}>
-                          <p className="text-[10px] font-mono uppercase tracking-wider text-[#5A6A7A] mb-1">1. Cloudflare route</p>
-                          <p className="text-[11px] text-[#8899AA]">
-                            Email → Email Routing → Routing rules → <strong>Create address</strong>:<br />
-                            Custom address: <code className="text-[#00E5C3]">{agent.lead_email.split('@')[0]}</code><br />
-                            Action: Send to Worker → <code className="text-[#00E5C3]">infinite-crm-webhook</code>
-                          </p>
-                        </div>
-                        <div className="rounded-lg border border-[#1A2130] p-3" style={{ background: '#080B0F' }}>
-                          <p className="text-[10px] font-mono uppercase tracking-wider text-[#5A6A7A] mb-1">2. Worker AGENT_ROUTING entry</p>
-                          <code className="text-[10px] text-[#8899AA] font-mono block whitespace-pre overflow-x-auto">{`'${agent.lead_email}':${' '.repeat(Math.max(1, 36 - agent.lead_email.length))}'${agent.user_id}',`}</code>
-                          <button onClick={() => copy(`  '${agent.lead_email}': '${agent.user_id}',`, agent.id + '-line')}
-                            className="mt-1 text-[10px] text-[#00E5C3] hover:underline inline-flex items-center gap-1">
-                            {copyHit === agent.id + '-line' ? <Check size={9} /> : <Copy size={9} />}
-                            {copyHit === agent.id + '-line' ? 'Copied' : 'Copy line'}
-                          </button>
-                          <p className="text-[10px] text-[#5A6A7A] mt-1">Paste into <code>cloudflare-worker/worker-v4.js</code> AGENT_ROUTING, then redeploy with <code>npx wrangler deploy</code>.</p>
-                        </div>
-                      </div>
-                    </details>
+                    <p className="mt-1 text-[10px] text-[#10B981]" style={{ paddingLeft: '52px' }}>
+                      ✓ Live — paste <code className="text-[#00E5C3]">{agent.lead_email}</code> into USHA Marketplace. No code change needed.
+                    </p>
                   )}
                 </div>
               )
