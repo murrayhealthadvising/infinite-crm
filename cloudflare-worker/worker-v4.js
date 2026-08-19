@@ -1786,9 +1786,9 @@ export default {
     // every release so a stale deploy is immediately visible.
     if (req.method === 'GET' && url.pathname === '/version') {
       return new Response(JSON.stringify({
-        version: 'v4.47',
-        parser: 'shorter enroll-failure notes so they fit lead card without blowing out the grid',
-        deployed_check: 'if you see v4.47 here, the deploy succeeded',
+        version: 'v4.48',
+        parser: 'email routing: dynamic Supabase profile fallback when AGENT_ROUTING has no entry',
+        deployed_check: 'if you see v4.48 here, the deploy succeeded',
       }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
     }
 
@@ -2409,9 +2409,45 @@ export default {
           slice.replace(/\r/g, '\\r').replace(/\n/g, '\\n'))
       }
       const body = extractBody(raw)
-      const userId = AGENT_ROUTING[recipient]
+      let userId = AGENT_ROUTING[recipient]
       if (!userId) {
-        console.error('[email] no AGENT_ROUTING entry for', recipient)
+        // Fallback: derive the local-part (e.g. "cole" from "cole-leads@…")
+        // and look up a profile whose first_name matches. Lets newly-added
+        // runners receive leads without needing a code change/redeploy.
+        const local = String(recipient || '').split('@')[0].toLowerCase()
+        const namePart = local.replace(/-?leads?$/i, '').replace(/[^a-z0-9]/g, '')
+        if (namePart) {
+          try {
+            const purl = `${env.SUPABASE_URL}/rest/v1/profiles?select=user_id,first_name,full_name,email&limit=200`
+            const pr = await fetch(purl, {
+              headers: {
+                apikey: env.SUPABASE_SERVICE_KEY,
+                authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}`,
+              },
+            })
+            if (pr.ok) {
+              const rows = await pr.json()
+              const norm = (s) => String(s || '').toLowerCase().trim().split(/\s+/)[0].replace(/[^a-z0-9]/g, '')
+              const hit = rows.find(p =>
+                norm(p.first_name) === namePart ||
+                norm(p.full_name) === namePart ||
+                norm((p.email || '').split('@')[0]) === namePart
+              )
+              if (hit) {
+                userId = hit.user_id
+                console.log('[email] dynamic route match', { recipient, matched: hit.first_name || hit.full_name || hit.email, user_id: userId })
+              }
+            } else {
+              console.error('[email] profile lookup failed', pr.status, (await pr.text()).slice(0, 200))
+            }
+          } catch (e) {
+            console.error('[email] dynamic route lookup threw', String(e))
+          }
+        }
+      }
+      if (!userId) {
+        console.error('[email] no AGENT_ROUTING entry AND no profile first_name match for', recipient,
+          '— add to Cloudflare Email Routing accepted addresses AND make sure a profile exists with matching first_name.')
         return
       }
       // Verbose diagnostic logging — every step of the parse is traced. With
