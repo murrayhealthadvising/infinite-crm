@@ -1792,9 +1792,9 @@ export default {
     // every release so a stale deploy is immediately visible.
     if (req.method === 'GET' && url.pathname === '/version') {
       return new Response(JSON.stringify({
-        version: 'v4.51',
-        parser: 'zero-touch onboarding — email routing now queries profiles.email_routing_local live (no code change per agent); PP silent-skip when unconfigured',
-        deployed_check: 'if you see v4.51 here, the deploy succeeded',
+        version: 'v4.52',
+        parser: 'zero-touch onboarding — email routing queries profiles.email_routing_local live; PP silent-skip when unconfigured',
+        deployed_check: 'if you see v4.52 here, the deploy succeeded',
       }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
     }
 
@@ -2470,7 +2470,7 @@ export default {
       let userId = null
       if (namePart) {
         try {
-          const purl = `${env.SUPABASE_URL}/rest/v1/profiles?select=user_id,email_routing_local,first_name&email_routing_local=eq.${encodeURIComponent(namePart)}&limit=1`
+          const purl = `${env.SUPABASE_URL}/rest/v1/profiles?select=user_id,email_routing_local,full_name&email_routing_local=eq.${encodeURIComponent(namePart)}&limit=1`
           const pr = await fetch(purl, {
             headers: {
               apikey: env.SUPABASE_SERVICE_KEY,
@@ -2482,7 +2482,7 @@ export default {
             if (rows && rows[0] && rows[0].user_id) {
               userId = rows[0].user_id
               console.log('[email] routing lookup match', {
-                recipient, local: namePart, matched_first_name: rows[0].first_name, user_id: userId,
+                recipient, local: namePart, matched_full_name: rows[0].full_name, user_id: userId,
               })
             }
           } else {
