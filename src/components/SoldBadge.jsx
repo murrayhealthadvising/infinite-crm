@@ -1,4 +1,5 @@
-import { Award, DollarSign, Calendar } from 'lucide-react'
+import { Award, DollarSign, Calendar, Pencil } from 'lucide-react'
+import { useApp } from '../context/AppContext'
 
 // Parse a YYYY-MM-DD (or ISO datetime) string as a LOCAL date and return a
 // MM/DD/YYYY / MM/DD label — never let the browser interpret bare YYYY-MM-DD
@@ -25,6 +26,7 @@ function fmtEffective(raw, { yearAlways = false, includeYear = true } = {}) {
 //   compact — for inline card placement (Pipeline / Leads cards). One line.
 //   detail  — for LeadDetail's hero placement. Larger, two lines.
 export default function SoldBadge({ lead, size = 'compact' }) {
+  const { setPendingSoldLeadId } = useApp()
   if (!lead || lead.stage !== 'sold') return null
   const plan = (lead.plan_choice || '').trim()
   const premium = Number(lead.premium) || 0
@@ -34,9 +36,22 @@ export default function SoldBadge({ lead, size = 'compact' }) {
 
   const moneyLabel = premium ? `$${premium.toLocaleString()}/mo` : null
 
+  // Clicking the badge (anywhere in it) re-opens the SoldDetailsModal for
+  // this lead so agents can fix typos in premium/plan/effective-date after
+  // the initial save. stopPropagation prevents the click from also opening
+  // the lead card / navigating to detail. Re-saving replaces the auto
+  // retention/birthday reminders (same logic as first save).
+  const openEditor = (e) => {
+    if (e && typeof e.stopPropagation === 'function') e.stopPropagation()
+    if (typeof setPendingSoldLeadId === 'function') setPendingSoldLeadId(lead.id)
+  }
+  const editTitle = 'Click to edit sold details (plan / premium / effective date)'
+
   if (size === 'detail') {
     return (
-      <div className="p-4 rounded-xl border border-[#00E5C340] flex items-start gap-3"
+      <button type="button" onClick={openEditor}
+        title={editTitle}
+        className="w-full p-4 rounded-xl border border-[#00E5C340] flex items-start gap-3 text-left hover:border-[#00E5C380] hover:brightness-110 transition-all group"
         style={{ background: 'linear-gradient(135deg, #00E5C310, #3B82F608)' }}>
         <div className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0"
           style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
@@ -55,18 +70,20 @@ export default function SoldBadge({ lead, size = 'compact' }) {
                 <Calendar size={10} /> Eff {effLabelDetail}
               </span>
             )}
+            <Pencil size={10} className="text-[#5A6A7A] group-hover:text-[#00E5C3] transition-colors ml-auto" />
           </div>
           {plan && <p className="text-sm text-[#C0D0E0] whitespace-pre-wrap leading-snug">{plan}</p>}
         </div>
-      </div>
+      </button>
     )
   }
 
   // compact — single-row, big enough to spot on a busy card
   return (
-    <div className="flex items-center gap-1.5 px-2 py-1 rounded-md border mb-2 flex-wrap"
-      style={{ background: '#00E5C310', borderColor: '#00E5C340' }}
-      title={[plan, effLabelDetail ? `Effective ${effLabelDetail}` : null].filter(Boolean).join(' · ') || undefined}>
+    <button type="button" onClick={openEditor}
+      title={editTitle}
+      className="w-full flex items-center gap-1.5 px-2 py-1 rounded-md border mb-2 flex-wrap text-left hover:brightness-125 hover:border-[#00E5C380] transition-all group"
+      style={{ background: '#00E5C310', borderColor: '#00E5C340' }}>
       <Award size={11} className="text-[#00E5C3] flex-shrink-0" />
       {moneyLabel && (
         <span className="text-xs font-bold text-[#00E5C3] tabular-nums flex-shrink-0">{moneyLabel}</span>
@@ -81,6 +98,7 @@ export default function SoldBadge({ lead, size = 'compact' }) {
       {plan && (
         <span className="text-xs text-[#C0D0E0] truncate flex-1 min-w-0">{plan}</span>
       )}
-    </div>
+      <Pencil size={9} className="text-[#3A4A5A] group-hover:text-[#00E5C3] transition-colors flex-shrink-0 ml-auto" />
+    </button>
   )
 }
