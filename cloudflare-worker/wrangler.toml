@@ -13,3 +13,13 @@ compatibility_date = "2024-11-01"
 # */1 * * * * schedule so a wrangler deploy preserves it.
 [triggers]
 crons = ["*/1 * * * *"]
+
+# Observability — persist Workers Logs so we can tail incoming emails,
+# cron runs, and PP enroll errors in the Cloudflare dashboard. Without
+# this, every ship.sh deploy would wipe out the dashboard toggle.
+[observability]
+enabled = true
+
+[observability.logs]
+enabled = true
+invocation_logs = true
