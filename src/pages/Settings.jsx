@@ -6,7 +6,7 @@ import {
   Key, CheckCircle, XCircle, Eye, EyeOff, Copy,
   Plus, Trash2, Check, X, GripVertical, AlertTriangle, Tags as TagsIcon,
   UserPlus, Users as UsersIcon, RefreshCw, Calendar as CalendarIcon,
-  Link as LinkIcon, Unlink, Zap, Mail,
+  Link as LinkIcon, Unlink, Zap, Mail, Inbox,
 } from 'lucide-react'
 import { format } from 'date-fns'
 import { connectGoogleCalendar, clearGcalToken, isGcalConnected, getGoogleClientId, createCalendarEvent } from '../lib/gcal'
@@ -743,6 +743,93 @@ const WORKER_URL = (import.meta.env.VITE_CRM_WORKER_URL
 // agent drags a snippet to their bookmarks bar; clicking it on a PitchPerfect
 // contact page scrapes the visible details and POSTs into their CRM.
 // ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Import USHA email panel — when a USHA Marketplace lead doesn't come through
+// via Cloudflare email routing (their send is bouncing, the address is stale
+// on their side, or anything else), the agent can paste the raw email body
+// from their Gmail inbox here and this hits the worker's /replay-email
+// endpoint to insert the lead manually. Works for USHA, ACN, or any email
+// format the worker parses — identical path to a real inbound email.
+// ─────────────────────────────────────────────────────────────────────────────
+function ImportUshaEmailPanel() {
+  const { user } = useApp()
+  const [raw, setRaw] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState(null)
+
+  const submit = async () => {
+    if (!raw.trim()) { setMsg({ type: 'error', text: 'Paste the email body first.' }); return }
+    if (!user?.id) { setMsg({ type: 'error', text: 'Not signed in?' }); return }
+    setBusy(true); setMsg(null)
+    try {
+      const r = await fetch(`${WORKER_URL}/replay-email`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ agent_id: user.id, raw }),
+      })
+      const j = await r.json().catch(() => ({}))
+      if (r.ok && j.ok) {
+        if (j.note) {
+          setMsg({ type: 'info', text: j.note })
+        } else {
+          setMsg({ type: 'success', text: `Lead imported — ${j.parsed?.first_name || ''} ${j.parsed?.last_name || ''} ${j.parsed?.phone ? `· ${j.parsed.phone}` : ''}`.trim() })
+        }
+        setRaw('')
+      } else {
+        setMsg({ type: 'error', text: j.error || `Worker returned ${r.status}: ${j.body_preview || 'unknown error'}` })
+      }
+    } catch (e) {
+      setMsg({ type: 'error', text: `Request failed: ${String(e)}` })
+    } finally {
+      setBusy(false)
+      setTimeout(() => setMsg(null), 10000)
+    }
+  }
+
+  return (
+    <div className="rounded-xl border border-[#1A2130] p-5" style={{ background: '#0D1117' }}>
+      <div className="mb-3">
+        <h2 className="text-xs font-mono uppercase tracking-wider text-[#5A6A7A] flex items-center gap-2">
+          <Inbox size={12} /> Import Lead Email
+        </h2>
+        <p className="text-xs text-[#3A4A5A] mt-1 leading-relaxed">
+          If a USHA Marketplace lead didn't come through automatically, open the email in Gmail, click the three-dot menu → <strong>Show original</strong> (or just copy the whole body), paste the entire text below, and hit Import. The parser runs identically to a real inbound email — same fields, same PP enroll, same activity log.
+        </p>
+      </div>
+      <textarea value={raw}
+        onChange={e => setRaw(e.target.value)}
+        placeholder="Paste the entire USHA lead email body here (From, headers, body — everything is fine, parser skips what it doesn't need)…"
+        className="w-full px-3 py-2.5 rounded-lg text-xs text-white border border-[#1A2130] bg-[#080B0F] outline-none focus:border-[#00E5C3] font-mono resize-y"
+        style={{ minHeight: '160px' }} />
+      {msg && (
+        <div className={`mt-3 px-3 py-2 rounded-lg flex items-start gap-2 text-xs ${
+          msg.type === 'error' ? 'bg-[#EF444415] text-[#EF4444] border border-[#EF444440]' :
+          msg.type === 'success' ? 'bg-[#10B98115] text-[#10B981] border border-[#10B98140]' :
+          'bg-[#3B82F615] text-[#3B82F6] border border-[#3B82F640]'
+        }`}>
+          {msg.type === 'error' ? <AlertTriangle size={12} className="mt-0.5 flex-shrink-0" /> :
+           msg.type === 'success' ? <CheckCircle size={12} className="mt-0.5 flex-shrink-0" /> :
+           <Mail size={12} className="mt-0.5 flex-shrink-0" />}
+          <span className="flex-1">{msg.text}</span>
+        </div>
+      )}
+      <div className="mt-3 flex items-center gap-2">
+        <button onClick={submit} disabled={busy || !raw.trim()}
+          className="px-4 py-2 rounded-lg text-xs font-semibold text-black disabled:opacity-40"
+          style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
+          {busy ? 'Importing…' : 'Import Lead'}
+        </button>
+        {raw && (
+          <button onClick={() => { setRaw(''); setMsg(null) }}
+            className="px-3 py-2 rounded-lg text-xs text-[#8899AA] hover:text-white">
+            Clear
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Campaigns panel — manage the saved campaign list (drag-reorder + delete +
 // inline add). The campaign pill dropdown on lead cards reads from here.
@@ -2097,6 +2184,9 @@ export default function Settings() {
 
       {/* Side Tags — chip tags on lead cards, central rename/delete editor */}
       <SideTagsPanel />
+
+      {/* Import lead email — paste raw USHA/ACN body when auto-delivery fails */}
+      <ImportUshaEmailPanel />
 
       {/* Campaigns — pick-list for the campaign pill */}
       <CampaignsPanel />
