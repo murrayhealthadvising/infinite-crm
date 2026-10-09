@@ -1837,9 +1837,9 @@ export default {
     // every release so a stale deploy is immediately visible.
     if (req.method === 'GET' && url.pathname === '/version') {
       return new Response(JSON.stringify({
-        version: 'v4.53',
-        parser: 'enrollInWorkflow checks triggerType — refuses manual-trigger workflows with clear "change to API/automatic in PP" error (fixes silent accept-but-no-send bug)',
-        deployed_check: 'if you see v4.53 here, the deploy succeeded',
+        version: 'v4.54',
+        parser: 'Gmail forwarding verifications now land in CRM as a clickable row (code + approve-link) so agents can activate forwarding without Cloudflare access',
+        deployed_check: 'if you see v4.54 here, the deploy succeeded',
       }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
     }
 
@@ -2555,6 +2555,45 @@ export default {
           '— dropping. Fix in Admin panel by setting the routing alias for that agent.')
         return
       }
+      // ── Gmail forwarding verification handler. When an agent sets up
+      //    "forward from Gmail to <their>-leads@infinite-crm.net", Gmail
+      //    sends a verification email to that address with a 9-digit code
+      //    AND a confirmation URL that has to be clicked. If we just
+      //    parsed it as a lead, the agent would never see the code and the
+      //    forward would never activate. Instead, we insert a VERY visible
+      //    stub row in that agent's leads with the code + link in notes so
+      //    they can approve the forward right from the CRM.
+      const senderLine = raw.match(/^From:[^\n]*/im)?.[0] || ''
+      const subjLine   = raw.match(/^Subject:[^\n]*/im)?.[0] || ''
+      const isGmailVerify =
+        /forwarding-noreply@google\.com/i.test(senderLine) ||
+        /Gmail Forwarding Confirmation/i.test(subjLine) ||
+        /mail-settings\.google\.com\/mail\/vf-/i.test(raw)
+      if (isGmailVerify) {
+        const code = (body.match(/\b(\d{9})\b/) || raw.match(/\b(\d{9})\b/) || [])[1] || '(code not found)'
+        const link = (raw.match(/https?:\/\/mail-settings\.google\.com\/mail\/vf-[^\s<"']+/i) || [])[0] || '(link not found)'
+        console.log('[email] GMAIL VERIFICATION detected', { recipient, code, link })
+        const stub = {
+          user_id: userId,
+          agent_id: userId,
+          source: 'Gmail Forwarding Verification',
+          stage: DEFAULT_STAGE,
+          first_name: '📧 Gmail Forwarding',
+          last_name: 'Verification — Click Here',
+          campaign: `code ${code}`,
+          notes: `GMAIL FORWARDING VERIFICATION\n\n` +
+                 `Someone (probably you) asked Gmail to forward mail to ${recipient}.\n` +
+                 `Approve by clicking the link below — then this row can be deleted.\n\n` +
+                 `Verification code: ${code}\n\n` +
+                 `Click to approve: ${link}\n\n` +
+                 `If you didn't request this, delete this row and nothing happens.`,
+          created_at: new Date().toISOString(),
+          last_activity: new Date().toISOString(),
+        }
+        await insertLead(env, stub)
+        return  // don't try to parse this as a USHA lead
+      }
+
       // Verbose diagnostic logging — every step of the parse is traced. With
       // these in Cloudflare Logs we can pinpoint exactly where a misparse goes
       // wrong (body content, regex result, sanitization, insert).
