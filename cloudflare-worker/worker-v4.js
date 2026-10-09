@@ -1169,22 +1169,6 @@ async function createOrFindContact(apiKey, lead) {
 // text". 3 attempts with 800ms + 1600ms backoff catches ~all eventual-
 // consistency and one-off network errors. Only 400 (workflow paused / bad
 // request) is treated as terminal since retry won't help.
-// Fetch a workflow's metadata so we can check triggerType before enrolling.
-// Returns null on any error — caller treats null as "unknown, proceed anyway"
-// so a transient PP outage doesn't block enrolls.
-async function fetchWorkflowMeta(apiKey, workflowId) {
-  try {
-    const r = await fetch(`${PITCHPRFCT_API}/workflows?take=100`, {
-      headers: { 'x-api-key': apiKey },
-    })
-    if (!r.ok) return null
-    const raw = await r.json().catch(() => null)
-    const rows = raw?.data?.rows || []
-    const hit = rows.find(w => String(w.id) === String(workflowId))
-    return hit || null
-  } catch { return null }
-}
-
 // Enroll a contact into a workflow. Retries on transient failures — the most
 // common bug was "contact was just created, PP hasn't finished indexing it,
 // enroll returns 404 or 500, we give up, lead gets a contact but never a
@@ -1192,24 +1176,11 @@ async function fetchWorkflowMeta(apiKey, workflowId) {
 // consistency and one-off network errors. Only 400 (workflow paused / bad
 // request) is treated as terminal since retry won't help.
 //
-// Returns:
-//   true          — enroll succeeded, PP will send messages
-//   false         — enroll failed (retry exhausted / 400)
-//   'manual'      — workflow is configured for manual trigger in PP, so the
-//                   API enroll puts them in the workflow but PP will NEVER
-//                   send without a human clicking Start in the PP UI. We
-//                   refuse to pretend this succeeded.
+// NB: PP's "Manual" triggerType in the workflow editor does NOT block API
+// enrolls from sending — manual-triggered workflows send fine when enrolled
+// via the API. The real cause of "enroll accepted but no text" was running
+// out of PP SMS credits. We don't block any triggerType anymore.
 async function enrollInWorkflow(apiKey, workflowId, contactUuid) {
-  // Guard against manual-trigger workflows BEFORE calling enroll. PP's API
-  // happily returns 200 on these but nothing ever sends — this was the
-  // mystery "enroll accepted but no text" bug.
-  const meta = await fetchWorkflowMeta(apiKey, workflowId)
-  if (meta && meta.triggerType && String(meta.triggerType).toLowerCase() === 'manual') {
-    console.error('[pp] REFUSING enroll — workflow', workflowId,
-      `"${meta.name || ''}" is triggerType=manual. API enroll would succeed but no text would send until a human clicks Start in PP. Change the workflow trigger to API/automatic in PitchPrfct.`)
-    return 'manual'
-  }
-
   const MAX_ATTEMPTS = 3
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
@@ -1533,7 +1504,7 @@ async function enrollLeadInPitch(env, userId, lead, ctx) {
     return false
   }
   const ok = await enrollInWorkflow(apiKey, pick.id, contactUuid)
-  if (ok === true && lead.id) {
+  if (ok && lead.id) {
     // Immediately mark as awaiting a reply so the card shows the tag.
     await patchLeadPPStatus(env, lead.id, 'awaiting', new Date().toISOString())
     // Verify a real outbound message actually went out before writing the
@@ -1541,17 +1512,13 @@ async function enrollLeadInPitch(env, userId, lead, ctx) {
     const task = verifyAndLogEnroll(env, userId, lead.id, apiKey, contactUuid, pick.name || pick.id)
     if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(task)
     else await task
-  } else if (ok === 'manual') {
-    // Workflow is set to manual trigger — PP will never send automatically.
-    // Call this out specifically so Nic knows the FIX is in PP, not here.
-    await logEnrollFailure(env, userId, lead.id,
-      `PP workflow "${pick.name || pick.id}" is set to MANUAL trigger — won't auto-send. Change trigger to API/automatic in PitchPrfct.`)
-  } else {
+  } else if (!ok) {
     // enrollInWorkflow already retried 3× — this is a real failure. Surface
-    // to the agent so they know THIS lead won't get a PP text.
-    await logEnrollFailure(env, userId, lead.id, `PP enroll rejected — "${pick.name || pick.id}" (paused? blocked?)`)
+    // to the agent so they know THIS lead won't get a PP text (often means
+    // out of PP SMS credits, workflow paused, or contact blocked).
+    await logEnrollFailure(env, userId, lead.id, `PP enroll rejected — "${pick.name || pick.id}" (out of credits? paused? blocked?)`)
   }
-  return ok === true
+  return ok
 }
 
 // Cron scan runs every minute and does TWO passes:
@@ -1837,9 +1804,9 @@ export default {
     // every release so a stale deploy is immediately visible.
     if (req.method === 'GET' && url.pathname === '/version') {
       return new Response(JSON.stringify({
-        version: 'v4.54',
-        parser: 'Gmail forwarding verifications now land in CRM as a clickable row (code + approve-link) so agents can activate forwarding without Cloudflare access',
-        deployed_check: 'if you see v4.54 here, the deploy succeeded',
+        version: 'v4.55',
+        parser: 'reverted manual-trigger block — manual-triggered PP workflows do fire from API enrolls fine, real cause of silent accept was running out of SMS credits',
+        deployed_check: 'if you see v4.55 here, the deploy succeeded',
       }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
     }
 
@@ -2421,15 +2388,6 @@ export default {
         })
       }
       const ok = await enrollInWorkflow(apiKey, workflowId, contactUuid)
-      if (ok === 'manual') {
-        return new Response(JSON.stringify({
-          error: 'Workflow is set to MANUAL trigger in PitchPrfct — API enrolls will not send any text. Change the workflow trigger to API/automatic in PP settings.',
-          contact_uuid: contactUuid,
-          cause: 'manual_trigger_workflow',
-        }), {
-          status: 400, headers: { 'content-type': 'application/json', ...CORS },
-        })
-      }
       if (!ok) {
         return new Response(JSON.stringify({ error: 'workflow enroll failed (workflow paused or not found?)', contact_uuid: contactUuid }), {
           status: 502, headers: { 'content-type': 'application/json', ...CORS },
