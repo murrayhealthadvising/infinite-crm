@@ -6,6 +6,7 @@ import { useApp } from '../context/AppContext'
 import PitchCountdown from '../components/PitchCountdown'
 import EmailButton from '../components/EmailButton'
 import SoldBadge from '../components/SoldBadge'
+import BulkEnrollButton from '../components/BulkEnrollButton'
 import { normalizePhone, displayPhone, copyPhoneValue } from '../lib/phone'
 import { localTimeFor, localHourFor, timezoneFor } from '../lib/timezone'
 
@@ -2116,6 +2117,14 @@ export default function Leads() {
               )}
             </div>
           )}
+          {/* Bulk-enroll selected leads into a PitchPrfct workflow. Replaces
+              the inline manual-enroll per card for anything > 1 lead. */}
+          {selected.size > 0 && (
+            <BulkEnrollButton
+              leads={filtered.filter(l => selected.has(l.id)).map(l => ({ id: l.id, user_id: l.user_id || user?.id }))}
+              agentId={user?.id}
+              onDone={() => { if (typeof refreshLeads === 'function') refreshLeads() }} />
+          )}
           {selected.size > 0 && can?.deleteLeads && (
             <button onClick={handleBulkDelete}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border border-[#EF444440] text-[#EF4444] hover:bg-[#EF444415] transition-colors">
@@ -2133,13 +2142,8 @@ export default function Leads() {
             </button>
           )}
           <input ref={fileRef} type="file" accept=".csv,.tsv,.txt" onChange={handleFileSelect} className="hidden" />
-          {safeLeads.length > 0 && can?.deleteLeads && (
-            <button onClick={() => setShowDeleteAll(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border border-[#EF444440] text-[#EF4444] hover:bg-[#EF444415] transition-colors"
-              title="Wipe all leads (for fresh re-import)">
-              <Trash2 size={13} /> Delete All
-            </button>
-          )}
+          {/* "Delete all" removed — too easy to nuke the whole book by accident.
+              Bulk-delete via Select + Delete N remains for intentional cleanup. */}
 
           {/* Refresh — pulls latest leads without reloading the page */}
           <RefreshButton />
