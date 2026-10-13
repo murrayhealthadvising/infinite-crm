@@ -26,6 +26,10 @@ export function AppProvider({ children }) {
   const [activities, setActivities] = useState({})
   const [tags, setTags] = useState(DEFAULT_TAGS)
   const [loading, setLoading] = useState(true)
+  // When a refresh errors (Supabase throttle, network blip, RLS error) we
+  // store the message here so the UI can show a banner + Retry rather than
+  // just silently rendering an empty leads list.
+  const [loadError, setLoadError] = useState(null)
   const [authLoading, setAuthLoading] = useState(true)
   const [session, setSession] = useState(null)
   const [profile, setProfile] = useState(null)
@@ -122,6 +126,7 @@ export function AppProvider({ children }) {
       ? profile.lead_agent_id
       : session.user.id
     setLoading(true)
+    setLoadError(null)
     try {
       // Fire the leads query AND the two sidecar fetches (pitch queue, recent
       // activities) IN PARALLEL. Previously these ran sequentially after the
@@ -139,12 +144,20 @@ export function AppProvider({ children }) {
       ])
       if (leadsRes.status === 'fulfilled') {
         const { data, error } = leadsRes.value || {}
-        if (error) console.error('refreshLeads error:', error)
-        if (Array.isArray(data)) setLeads(data)
+        if (error) {
+          console.error('refreshLeads error:', error)
+          setLoadError(error.message || String(error))
+        } else if (Array.isArray(data)) {
+          setLeads(data)
+        }
       } else {
         console.error('refreshLeads leads promise rejected:', leadsRes.reason)
+        setLoadError(String(leadsRes.reason?.message || leadsRes.reason))
       }
-    } catch (e) { console.error('refreshLeads exception:', e) }
+    } catch (e) {
+      console.error('refreshLeads exception:', e)
+      setLoadError(String(e?.message || e))
+    }
     setLoading(false)
   }
 
@@ -976,7 +989,7 @@ export function AppProvider({ children }) {
   return (
     <AppContext.Provider value={{
       leads, setLeads, activities, setActivities, tags, setTags,
-      loading, setLoading, authLoading, session, user, profile, stats,
+      loading, setLoading, loadError, setLoadError, authLoading, session, user, profile, stats,
       sidebarOpen, setSidebarOpen,
       // helpers
       getTag, signOut, refreshLeads,

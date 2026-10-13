@@ -92,7 +92,7 @@ function TopProgressBar({ active }) {
 }
 
 function AuthGate() {
-  const { session, authLoading, profile, loading, leads } = useApp()
+  const { session, authLoading, profile, loading, leads, loadError, refreshLeads } = useApp()
 
   if (authLoading) {
     return <LoadingSplash label="Signing you in…" />
@@ -113,6 +113,29 @@ function AuthGate() {
   const firstLoad = loading && (!Array.isArray(leads) || leads.length === 0)
   if (firstLoad) {
     return <LoadingSplash label="Loading your leads…" sub="This can take up to a minute on first load if you have a lot of leads. Grab a coffee." />
+  }
+
+  // Load error on an EMPTY cache — don't drop the user into a blank CRM
+  // without telling them. Show a clear error + Retry so they know this
+  // wasn't just "I have no leads yet". Supabase throttling, RLS misconfig,
+  // and network blips all land here.
+  if (loadError && (!Array.isArray(leads) || leads.length === 0)) {
+    return (
+      <div style={{ background: '#080B0F', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+        <div style={{ maxWidth: 480, textAlign: 'center' }}>
+          <div style={{ width: 40, height: 40, borderRadius: 4, background: 'linear-gradient(135deg, #EF4444, #F59E0B)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px', fontSize: 20 }}>⚠</div>
+          <h2 style={{ color: 'white', fontSize: 18, marginBottom: 8 }}>Couldn't load your leads</h2>
+          <p style={{ color: '#8899AA', fontSize: 13, marginBottom: 4 }}>{loadError}</p>
+          <p style={{ color: '#5A6A7A', fontSize: 11, marginBottom: 20 }}>
+            Usually this is a brief Supabase hiccup. Try again in a few seconds, or sign out + back in if it persists.
+          </p>
+          <button onClick={() => refreshLeads()}
+            style={{ padding: '10px 20px', borderRadius: 8, background: 'linear-gradient(135deg, #00E5C3, #3B82F6)', color: 'black', border: 'none', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+            Retry
+          </button>
+        </div>
+      </div>
+    )
   }
 
   return (
