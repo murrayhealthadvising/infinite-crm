@@ -123,19 +123,28 @@ export function AppProvider({ children }) {
       : session.user.id
     setLoading(true)
     try {
-      const { data, error } = await supabase
+      // Fire the leads query AND the two sidecar fetches (pitch queue, recent
+      // activities) IN PARALLEL. Previously these ran sequentially after the
+      // leads query, which added 1-2s per step to the initial-load wait on
+      // slow connections. Promise.allSettled so one bad fetch doesn't block
+      // the others.
+      const leadsPromise = supabase
         .from('leads').select('*')
         .eq('user_id', targetId)
         .order('created_at', { ascending: false })
-      if (error) console.error('refreshLeads error:', error)
-      if (Array.isArray(data)) setLeads(data)
+      const [leadsRes] = await Promise.allSettled([
+        leadsPromise,
+        (async () => { try { await refreshPitchQueue() } catch (e) { console.error('refreshLeads → pitchQueue exception:', e) } })(),
+        (async () => { try { await refreshLastActivities() } catch (e) { console.error('refreshLeads → lastActivities exception:', e) } })(),
+      ])
+      if (leadsRes.status === 'fulfilled') {
+        const { data, error } = leadsRes.value || {}
+        if (error) console.error('refreshLeads error:', error)
+        if (Array.isArray(data)) setLeads(data)
+      } else {
+        console.error('refreshLeads leads promise rejected:', leadsRes.reason)
+      }
     } catch (e) { console.error('refreshLeads exception:', e) }
-    // Also refresh the pitch queue so countdown badges appear on freshly-
-    // arrived leads without requiring a full page reload. Realtime SHOULD
-    // catch these automatically, but the manual refresh is the user's "make
-    // sure everything's current" button — so it should be comprehensive.
-    try { await refreshPitchQueue() } catch (e) { console.error('refreshLeads → pitchQueue exception:', e) }
-    try { await refreshLastActivities() } catch (e) { console.error('refreshLeads → lastActivities exception:', e) }
     setLoading(false)
   }
 
