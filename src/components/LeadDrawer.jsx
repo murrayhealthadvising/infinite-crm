@@ -15,6 +15,7 @@ import { localTimeFor, localHourFor, tzLabelFor } from '../lib/timezone'
 import EmailButton from './EmailButton'
 import CalendlyButton from './CalendlyButton'
 import ManualEnrollButton from './ManualEnrollButton'
+import ConversationPanel from './ConversationPanel'
 import { googleCalendarUrl, createCalendarEvent, isGcalConnected } from '../lib/gcal'
 
 // Slim notes editor — auto-grows to content within [6 lines, 15 lines], grows
@@ -326,6 +327,13 @@ export default function LeadDrawer({ leadId, onClose, bucket = [], onNavigate })
               setActivities(prev => prev.filter(a => a.id !== aid))
               try { await deleteActivity(aid, leadId) } catch {}
             }} />
+
+          {/* PitchPrfct conversation preview — same component used on
+              LeadDetail. Click Scan to pull the last 5 messages between this
+              lead and the agent's PP number so you can tell at a glance "did
+              they reply, did they opt out, where are we at" without leaving
+              the Pipeline. */}
+          <ConversationPanel lead={lead} />
 
           {/* ALL info — every standard field + custom_fields, inline editable */}
           <AllInfoPanel lead={lead} leadId={leadId} updateLead={updateLead}
