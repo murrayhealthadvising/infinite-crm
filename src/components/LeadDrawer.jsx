@@ -216,7 +216,9 @@ export default function LeadDrawer({ leadId, onClose, bucket = [], onNavigate })
                   title="Previous lead in bucket (↑)">
                   <ChevronUp size={14} />
                 </button>
-                <span className="text-[10px] font-mono text-[#5A6A7A] select-none px-1" title="Position in this bucket">
+                <span className="text-[10px] font-mono text-[#5A6A7A] select-none px-1 tabular-nums text-center inline-block"
+                  style={{ minWidth: '44px' }}
+                  title="Position in this bucket">
                   {bucketIdx + 1}/{bucket.length}
                 </span>
                 <button onClick={goNext} disabled={bucketIdx < 0 || bucketIdx >= bucket.length - 1}
@@ -407,41 +409,128 @@ function ActionLog({ activities, actionText, setActionText, actionKind, setActio
           <p className="text-xs text-[#3A4A5A] text-center py-6 px-4">
             Every call you make is auto-logged here with the exact time of day, so you can see when they don't pick up.
           </p>
-        ) : list.map((a, i) => {
-          const Icon = DRAWER_ACT_ICONS[a.type] || StickyNote
-          const color = DRAWER_ACT_COLORS[a.type] || '#5A6A7A'
-          const when = (() => { try { return new Date(a.created_at) } catch { return new Date() } })()
-          const valid = isFinite(when.getTime())
-          const dayLabel = !valid ? '' : isToday(when) ? 'Today' : isYesterday(when) ? 'Yesterday' : format(when, 'EEE MMM d')
-          const timeLabel = !valid ? '' : format(when, 'h:mm a')
-          const isTmp = a.id && String(a.id).startsWith('tmp-')
-          return (
-            <div key={a.id || i} className="flex items-start gap-2.5 group">
-              <div className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5"
+        ) : (
+          <ActionLogStacked list={list} onDelete={onDelete} />
+        )}
+      </div>
+    </div>
+  )
+}
+
+// Group CONSECUTIVE entries of the same type (back-to-back calls, say) into
+// one collapsed row with a count badge + the latest timestamp. Click to
+// expand the stack and see every underlying entry. This way nine calls in
+// a row don't bury the email you sent before them — the email still shows
+// at the bottom one row down from "Called 9×".
+function ActionLogStacked({ list, onDelete }) {
+  const [expanded, setExpanded] = useState({})  // key = group index
+  const groups = []
+  for (const a of list) {
+    const last = groups[groups.length - 1]
+    if (last && last.type === a.type) last.items.push(a)
+    else groups.push({ type: a.type, items: [a] })
+  }
+  const toggle = (idx) => setExpanded(e => ({ ...e, [idx]: !e[idx] }))
+
+  const renderRow = (a, keyBase) => {
+    const Icon = DRAWER_ACT_ICONS[a.type] || StickyNote
+    const color = DRAWER_ACT_COLORS[a.type] || '#5A6A7A'
+    const when = (() => { try { return new Date(a.created_at) } catch { return new Date() } })()
+    const valid = isFinite(when.getTime())
+    const dayLabel = !valid ? '' : isToday(when) ? 'Today' : isYesterday(when) ? 'Yesterday' : format(when, 'EEE MMM d')
+    const timeLabel = !valid ? '' : format(when, 'h:mm a')
+    const isTmp = a.id && String(a.id).startsWith('tmp-')
+    return (
+      <div key={keyBase} className="flex items-start gap-2.5 group">
+        <div className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5"
+          style={{ background: color + '20' }}>
+          <Icon size={11} style={{ color }} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-xs text-[#C0D0E0] leading-snug">{a.note || `(${a.type})`}</p>
+          <p className="text-[10px] text-[#3A4A5A] font-mono mt-0.5">
+            {dayLabel}{dayLabel && timeLabel ? ' · ' : ''}{timeLabel}
+          </p>
+        </div>
+        {onDelete && !isTmp && (
+          <button
+            onClick={() => {
+              if (!confirm('Delete this action log entry?')) return
+              onDelete(a.id)
+            }}
+            className="opacity-0 group-hover:opacity-100 p-1 rounded text-[#3A4A5A] hover:text-[#EF4444] hover:bg-[#EF444415] transition-opacity flex-shrink-0"
+            title="Delete this entry">
+            <X size={11} />
+          </button>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-2.5">
+      {groups.map((g, gi) => {
+        // Single-item groups render inline — no collapse UI needed
+        if (g.items.length === 1) return renderRow(g.items[0], `g${gi}-single`)
+
+        // Stacked group — latest entry stands in as the summary. Click to
+        // reveal the full list of entries in this run.
+        const isOpen = !!expanded[gi]
+        const latest = g.items[0]  // list is newest-first
+        const oldest = g.items[g.items.length - 1]
+        const Icon = DRAWER_ACT_ICONS[g.type] || StickyNote
+        const color = DRAWER_ACT_COLORS[g.type] || '#5A6A7A'
+        const whenLatest = (() => { try { return new Date(latest.created_at) } catch { return new Date() } })()
+        const whenOldest = (() => { try { return new Date(oldest.created_at) } catch { return new Date() } })()
+        const dayLatest = isFinite(whenLatest.getTime())
+          ? (isToday(whenLatest) ? 'Today' : isYesterday(whenLatest) ? 'Yesterday' : format(whenLatest, 'EEE MMM d'))
+          : ''
+        const timeLatest = isFinite(whenLatest.getTime()) ? format(whenLatest, 'h:mm a') : ''
+        const dayOldest = isFinite(whenOldest.getTime())
+          ? (isToday(whenOldest) ? 'Today' : isYesterday(whenOldest) ? 'Yesterday' : format(whenOldest, 'EEE MMM d'))
+          : ''
+        const label = (g.type === 'call'  ? 'Called'
+                    :  g.type === 'text'  ? 'Texted'
+                    :  g.type === 'email' ? 'Emailed'
+                    :  g.type === 'note'  ? 'Noted'
+                    :  g.type)
+        return (
+          <div key={`g${gi}-stack`}>
+            <button type="button" onClick={() => toggle(gi)}
+              className="w-full flex items-start gap-2.5 text-left rounded-md hover:bg-[#1A2130]/50 transition-colors p-1 -m-1"
+              title={isOpen ? 'Collapse' : `Show all ${g.items.length} entries`}>
+              <div className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5 relative"
                 style={{ background: color + '20' }}>
                 <Icon size={11} style={{ color }} />
+                {/* Count badge on the icon so the "9×" is unmissable */}
+                <span className="absolute -top-1 -right-1.5 px-1 min-w-[14px] h-[14px] rounded-full text-[8px] font-bold flex items-center justify-center text-black"
+                  style={{ background: color }}>
+                  {g.items.length}
+                </span>
               </div>
               <div className="flex-1 min-w-0">
-                <p className="text-xs text-[#C0D0E0] leading-snug">{a.note || `(${a.type})`}</p>
+                <p className="text-xs text-[#C0D0E0] leading-snug">
+                  {label} {g.items.length}×
+                  <span className="text-[#5A6A7A] font-normal ml-1">
+                    — latest {latest.note || `(${g.type})`}
+                  </span>
+                </p>
                 <p className="text-[10px] text-[#3A4A5A] font-mono mt-0.5">
-                  {dayLabel}{dayLabel && timeLabel ? ' · ' : ''}{timeLabel}
+                  {dayLatest}{dayLatest && timeLatest ? ' · ' : ''}{timeLatest}
+                  {dayOldest && dayOldest !== dayLatest ? ` · first ${dayOldest}` : ''}
                 </p>
               </div>
-              {onDelete && !isTmp && (
-                <button
-                  onClick={() => {
-                    if (!confirm('Delete this action log entry?')) return
-                    onDelete(a.id)
-                  }}
-                  className="opacity-0 group-hover:opacity-100 p-1 rounded text-[#3A4A5A] hover:text-[#EF4444] hover:bg-[#EF444415] transition-opacity flex-shrink-0"
-                  title="Delete this entry">
-                  <X size={11} />
-                </button>
-              )}
-            </div>
-          )
-        })}
-      </div>
+              {isOpen ? <ChevronUp size={11} className="text-[#5A6A7A] mt-1 flex-shrink-0" />
+                      : <ChevronDown size={11} className="text-[#5A6A7A] mt-1 flex-shrink-0" />}
+            </button>
+            {isOpen && (
+              <div className="mt-2 ml-4 pl-3 border-l border-[#1A2130] space-y-2.5">
+                {g.items.map((a, ii) => renderRow(a, `g${gi}-i${ii}`))}
+              </div>
+            )}
+          </div>
+        )
+      })}
     </div>
   )
 }
