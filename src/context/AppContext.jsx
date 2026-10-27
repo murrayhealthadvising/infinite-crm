@@ -91,32 +91,59 @@ export function AppProvider({ children }) {
 
   // Load leads + realtime subscription so worker-inserted leads appear live.
   // Re-run when profile changes too, since runners filter by their lead_agent_id.
+  //
+  // Chrome throttles tabs that use >~1% CPU in the background. The realtime
+  // channel + its heartbeat keeps a websocket warm and processes incoming
+  // UPDATE payloads continuously, which was tripping that threshold on
+  // Nic's MacBook. Solution: tear the channel DOWN when the tab goes
+  // hidden and set it back up on visibilitychange → visible. The initial
+  // refreshLeads() on re-focus catches up on anything we missed while hidden.
   useEffect(() => {
     if (!session?.user) { setLeads([]); setLoading(false); return }
     refreshLeads()
     const targetId = (profile?.role === 'runner' && profile?.lead_agent_id)
       ? profile.lead_agent_id
       : session.user.id
-    let channel
-    try {
-      channel = supabase
-        .channel('leads-changes-' + targetId)
-        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'leads' }, (payload) => {
-          const row = payload.new; if (!row) return
-          if (row.user_id && row.user_id !== targetId) return
-          setLeads(prev => prev.find(l => l.id === row.id) ? prev : [row, ...prev])
-        })
-        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'leads' }, (payload) => {
-          const row = payload.new; if (!row) return
-          setLeads(prev => prev.map(l => l.id === row.id ? { ...l, ...row } : l))
-        })
-        .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'leads' }, (payload) => {
-          const oldRow = payload.old; if (!oldRow) return
-          setLeads(prev => prev.filter(l => l.id !== oldRow.id))
-        })
-        .subscribe()
-    } catch (e) { console.error('realtime subscribe failed:', e) }
-    return () => { try { if (channel) supabase.removeChannel(channel) } catch {} }
+    let channel = null
+    const subscribe = () => {
+      if (channel) return
+      try {
+        channel = supabase
+          .channel('leads-changes-' + targetId)
+          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'leads' }, (payload) => {
+            const row = payload.new; if (!row) return
+            if (row.user_id && row.user_id !== targetId) return
+            setLeads(prev => prev.find(l => l.id === row.id) ? prev : [row, ...prev])
+          })
+          .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'leads' }, (payload) => {
+            const row = payload.new; if (!row) return
+            setLeads(prev => prev.map(l => l.id === row.id ? { ...l, ...row } : l))
+          })
+          .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'leads' }, (payload) => {
+            const oldRow = payload.old; if (!oldRow) return
+            setLeads(prev => prev.filter(l => l.id !== oldRow.id))
+          })
+          .subscribe()
+      } catch (e) { console.error('realtime subscribe failed:', e) }
+    }
+    const unsubscribe = () => {
+      try { if (channel) supabase.removeChannel(channel) } catch {}
+      channel = null
+    }
+    subscribe()
+    const onVisibility = () => {
+      if (document.hidden) {
+        unsubscribe()
+      } else {
+        subscribe()
+        refreshLeads()  // catch up on anything that landed while hidden
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility)
+      unsubscribe()
+    }
   }, [session?.user?.id, profile?.role, profile?.lead_agent_id])
 
   const refreshLeads = async () => {
@@ -128,28 +155,36 @@ export function AppProvider({ children }) {
     setLoading(true)
     setLoadError(null)
     try {
-      // Fire the leads query AND the two sidecar fetches (pitch queue, recent
-      // activities) IN PARALLEL. Previously these ran sequentially after the
-      // leads query, which added 1-2s per step to the initial-load wait on
-      // slow connections. Promise.allSettled so one bad fetch doesn't block
-      // the others.
-      const leadsPromise = supabase
-        .from('leads').select('*')
-        .eq('user_id', targetId)
-        .order('created_at', { ascending: false })
+      // Paginated leads fetch — Supabase REST hard-caps a single query at
+      // 1000 rows (that's why Nic's count was stuck at 1000). Loop with
+      // .range() in 1000-row pages until we've pulled everything. Also runs
+      // in parallel with the pitch queue + recent activities fetches so the
+      // initial-load wait isn't the sum of all three.
+      const PAGE_SIZE = 1000
+      const fetchAllLeads = async () => {
+        const all = []
+        for (let page = 0; page < 50; page++) {
+          const from = page * PAGE_SIZE
+          const to = from + PAGE_SIZE - 1
+          const { data, error } = await supabase
+            .from('leads').select('*')
+            .eq('user_id', targetId)
+            .order('created_at', { ascending: false })
+            .range(from, to)
+          if (error) throw error
+          if (!Array.isArray(data) || data.length === 0) break
+          all.push(...data)
+          if (data.length < PAGE_SIZE) break  // last page
+        }
+        return all
+      }
       const [leadsRes] = await Promise.allSettled([
-        leadsPromise,
+        fetchAllLeads(),
         (async () => { try { await refreshPitchQueue() } catch (e) { console.error('refreshLeads → pitchQueue exception:', e) } })(),
         (async () => { try { await refreshLastActivities() } catch (e) { console.error('refreshLeads → lastActivities exception:', e) } })(),
       ])
       if (leadsRes.status === 'fulfilled') {
-        const { data, error } = leadsRes.value || {}
-        if (error) {
-          console.error('refreshLeads error:', error)
-          setLoadError(error.message || String(error))
-        } else if (Array.isArray(data)) {
-          setLeads(data)
-        }
+        if (Array.isArray(leadsRes.value)) setLeads(leadsRes.value)
       } else {
         console.error('refreshLeads leads promise rejected:', leadsRes.reason)
         setLoadError(String(leadsRes.reason?.message || leadsRes.reason))

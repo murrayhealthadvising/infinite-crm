@@ -33,7 +33,21 @@ function localDateKey(d = new Date()) {
 export default function ActionsCounter() {
   const { user } = useApp()
   const uid = user?.id || 'anon'
-  const today = localDateKey()
+  // `today` was captured ONCE at mount, so agents who leave the tab open
+  // past midnight kept writing to yesterday's localStorage bucket and
+  // yesterday's counts stayed on screen. Keep it in state and roll it
+  // over at local midnight via a self-rescheduling timer.
+  const [today, setToday] = useState(() => localDateKey())
+  useEffect(() => {
+    const now = new Date()
+    const midnight = new Date(now)
+    midnight.setHours(24, 0, 0, 0)
+    const msUntilMidnight = midnight.getTime() - now.getTime() + 1000
+    const timer = setTimeout(() => {
+      setToday(localDateKey())  // triggers re-key to a fresh counts bucket
+    }, msUntilMidnight)
+    return () => clearTimeout(timer)
+  }, [today])
   const countsKey = `actions-counter:counts:${uid}:${today}`
   const openKey = `actions-counter:open:${uid}`
 
@@ -51,6 +65,14 @@ export default function ActionsCounter() {
     } catch {}
     return { ...ZERO }
   })
+  // Reload counts whenever the date key rolls over (midnight) so the new
+  // day's bucket shows zeroes and we're not editing yesterday's values.
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(countsKey)
+      setCounts(raw ? { ...ZERO, ...JSON.parse(raw) } : { ...ZERO })
+    } catch { setCounts({ ...ZERO }) }
+  }, [countsKey])
   useEffect(() => { try { localStorage.setItem(countsKey, JSON.stringify(counts)) } catch {} }, [counts, countsKey])
 
   // Auto-bump Dials whenever a call activity is logged through addActivity
