@@ -240,18 +240,20 @@ export default function LeadDrawer({ leadId, onClose, bucket = [], onNavigate })
           </div>
         </div>
 
-        {/* Action bar — Call + Move stage */}
-        <div className="px-4 py-3 border-b border-[#1A2130] flex items-center gap-2 flex-shrink-0">
+        {/* Action bar — Call + Move stage. flex-shrink-0 + whitespace-nowrap
+            on the Move/Remind buttons prevents the "buttons getting squeezed
+            off the right edge" glitch when the drawer renders mid-animation. */}
+        <div className="px-4 py-3 border-b border-[#1A2130] flex items-center gap-2 flex-shrink-0 min-w-0">
           {lead.phone && (
             <a href={`tel:${lead.phone}`} onClick={logCall}
-              className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-[8px] text-sm font-semibold text-black"
+              className="flex-1 min-w-0 flex items-center justify-center gap-2 px-3 py-2 rounded-[8px] text-sm font-semibold text-black whitespace-nowrap overflow-hidden"
               style={{ background: 'linear-gradient(135deg, #00E5C3, #3B82F6)' }}>
-              <PhoneCall size={14} /> Call {displayPhone(lead.phone)}
+              <PhoneCall size={14} className="flex-shrink-0" /> <span className="truncate">Call {displayPhone(lead.phone)}</span>
             </a>
           )}
-          <div className="relative">
+          <div className="relative flex-shrink-0">
             <button onClick={() => setStageOpen(v => !v)}
-              className="flex items-center gap-1 px-3 py-2 rounded-lg border border-[#1A2130] text-sm text-[#8899AA] hover:text-white hover:border-[#2A3547]">
+              className="flex items-center gap-1 px-3 py-2 rounded-lg border border-[#1A2130] text-sm text-[#8899AA] hover:text-white hover:border-[#2A3547] whitespace-nowrap">
               Move <ChevronDown size={12} className={clsx('transition-transform', stageOpen && 'rotate-180')} />
             </button>
             {stageOpen && (
@@ -269,7 +271,7 @@ export default function LeadDrawer({ leadId, onClose, bucket = [], onNavigate })
             )}
           </div>
           <button onClick={() => setReminderOpen(v => !v)}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-[#1A2130] text-sm text-[#8899AA] hover:text-white hover:border-[#2A3547]"
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-[#1A2130] text-sm text-[#8899AA] hover:text-white hover:border-[#2A3547] whitespace-nowrap flex-shrink-0"
             title="Schedule a reminder">
             <Calendar size={13} /> Remind
           </button>
@@ -283,8 +285,10 @@ export default function LeadDrawer({ leadId, onClose, bucket = [], onNavigate })
             onClose={() => setReminderOpen(false)} />
         )}
 
-        {/* Body */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {/* Body — overflow-x-hidden kills the horizontal scrollbar that was
+            flickering in and out as content loaded (which was causing the
+            whole drawer to jitter). */}
+        <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-4 min-w-0">
 
           {/* Notes (top — main surface for working a lead). Stacked vertically
               when splitNotes is enabled so the drawer stays readable at
@@ -508,14 +512,14 @@ function ActionLogStacked({ list, onDelete }) {
                   {g.items.length}
                 </span>
               </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-xs text-[#C0D0E0] leading-snug">
+              <div className="flex-1 min-w-0 overflow-hidden">
+                <p className="text-xs text-[#C0D0E0] leading-snug truncate">
                   {label} {g.items.length}×
                   <span className="text-[#5A6A7A] font-normal ml-1">
                     — latest {latest.note || `(${g.type})`}
                   </span>
                 </p>
-                <p className="text-[10px] text-[#3A4A5A] font-mono mt-0.5">
+                <p className="text-[10px] text-[#3A4A5A] font-mono mt-0.5 truncate">
                   {dayLatest}{dayLatest && timeLatest ? ' · ' : ''}{timeLatest}
                   {dayOldest && dayOldest !== dayLatest ? ` · first ${dayOldest}` : ''}
                 </p>
