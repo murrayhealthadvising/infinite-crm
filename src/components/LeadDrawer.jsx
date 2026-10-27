@@ -180,12 +180,24 @@ export default function LeadDrawer({ leadId, onClose, bucket = [], onNavigate })
 
   return (
     <>
-      {/* Backdrop — clicking dims and closes; keeps the pipeline visible behind */}
-      <div className="fixed inset-0 z-40 bg-black/40 backdrop-blur-[2px] animate-fade-in" onClick={onClose} />
+      {/* Backdrop — clicking dims and closes; keeps the pipeline visible behind.
+          backdrop-blur was removed — the live filter was being re-composited
+          with the drawer on every state change, causing a hazy shimmer when
+          data refreshed (ActionLog loading, Supabase realtime, etc). Pure
+          opacity dim is just as readable and costs nothing to render. */}
+      <div className="fixed inset-0 z-40 bg-black/50 animate-fade-in" onClick={onClose} />
 
-      {/* Right-side drawer */}
+      {/* Right-side drawer. isolation+transform force this into its own
+          GPU compositing layer so sibling repaints (backdrop, pipeline
+          behind it) can't bleed through as flicker. */}
       <aside className="fixed right-0 top-0 bottom-0 z-50 w-full sm:w-[460px] flex flex-col shadow-2xl"
-        style={{ background: '#0E1318', borderLeft: '1px solid #1A2130' }}>
+        style={{
+          background: '#0E1318',
+          borderLeft: '1px solid #1A2130',
+          isolation: 'isolate',
+          transform: 'translateZ(0)',
+          willChange: 'transform',
+        }}>
 
         {/* Header */}
         <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-[#1A2130] flex-shrink-0">
