@@ -1728,11 +1728,34 @@ export default function Leads() {
   // and restore once the leads have rendered on mount.
   const listScrollRef = useRef(null)
   const SCROLL_KEY = 'leads:list:scrollTop'
+
+  // Windowed rendering — don't dump every LeadCard into the DOM at once.
+  // With 2000+ leads the synchronous render locked the main thread for 10s+
+  // and triggered Chrome's "page unresponsive" dialog. Instead we render in
+  // chunks of CHUNK and bump the ceiling whenever the user scrolls within
+  // one chunk-height of the bottom. Fully invisible to the agent — feels
+  // like infinite scroll, costs almost nothing to maintain.
+  const CHUNK = 120
+  const [visibleCount, setVisibleCount] = useState(CHUNK)
+  // Reset the windowed render ceiling when the agent changes filters, so
+  // a new search starts from the top of the new result set instead of
+  // leaving them visually stuck past the end.
+  useEffect(() => { setVisibleCount(CHUNK) }, [search, stageFilter])
+
   const handleListScroll = () => {
     const el = listScrollRef.current
     if (!el) return
     try { sessionStorage.setItem(SCROLL_KEY, String(el.scrollTop)) } catch {}
+    // When within ~800px of the bottom and there are still more rows to show,
+    // bump the ceiling. rAF so the scroll handler stays snappy.
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 800
+    if (nearBottom) {
+      requestAnimationFrame(() => {
+        setVisibleCount(c => Math.min(c + CHUNK, 999999))
+      })
+    }
   }
+
   useEffect(() => {
     if (view !== 'list') return
     let raw = 0
@@ -2282,7 +2305,7 @@ export default function Leads() {
       {view === 'list' ? (
         <div ref={listScrollRef} onScroll={handleListScroll}
           className="flex-1 overflow-y-auto p-3 md:p-5 space-y-3">
-          {filtered.map(lead => (
+          {filtered.slice(0, visibleCount).map(lead => (
             <LeadCard key={lead.id} lead={lead}
               selected={selected.has(lead.id)}
               onSelect={toggleSelect}
@@ -2299,6 +2322,21 @@ export default function Leads() {
               onDelete={handleDeleteOne}
               canDelete={can?.deleteLeads !== false && !isRunner} />
           ))}
+          {/* Load-more sentinel — if there are rows past the visible window
+              (user hasn't scrolled far enough yet, or auto-expand hasn't
+              caught up), show a button so they can jump the whole set in.
+              Keeps the main thread free during the initial render. */}
+          {filtered.length > visibleCount && (
+            <div className="flex flex-col items-center justify-center py-6 gap-2">
+              <p className="text-[11px] text-[#5A6A7A] font-mono">
+                Showing {visibleCount} of {filtered.length} · scroll to load more
+              </p>
+              <button onClick={() => setVisibleCount(filtered.length)}
+                className="text-[11px] text-[#00E5C3] hover:underline">
+                Load all {filtered.length}
+              </button>
+            </div>
+          )}
           {filtered.length === 0 && (
             <div className="flex flex-col items-center justify-center py-20 text-[#3A4A5A]">
               <Users size={32} className="mb-3 opacity-30" />

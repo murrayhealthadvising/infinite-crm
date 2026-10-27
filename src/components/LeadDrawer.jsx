@@ -85,12 +85,18 @@ export default function LeadDrawer({ leadId, onClose, bucket = [], onNavigate })
 
   // Activity history. Two-step load to keep the UI smooth:
   //   1) IMMEDIATE seed from recentActivitiesByLead (already in memory from
-  //      the Leads list mount). No empty-flash, no fetch wait. If empty, we
-  //      still show empty state but at least it's accurate.
-  //   2) Background fetch via getLeadActivities to top-up with the FULL history
-  //      and pick up anything teammates have logged since last refresh. Only
-  //      replaces the seed if the fresh fetch returns MORE entries — never
-  //      downgrades the visible count.
+  //      the Leads list mount). No empty-flash, no fetch wait.
+  //   2) Background fetch via getLeadActivities to top-up with the FULL history.
+  //      Only replaces the seed if the fresh fetch returns MORE entries —
+  //      never downgrades the visible count.
+  //
+  // Deps intentionally EXCLUDE recentActivitiesByLead. That map gets a new
+  // object reference whenever AppContext refreshes (realtime, cron,
+  // visibility change), which was re-triggering this effect, re-seeding
+  // from the possibly-shorter in-memory map, and causing the ActionLog
+  // count to flicker 7 → 5 → 7 (visible as entries appearing and
+  // disappearing mid-call). Seed once per lead; the Step-2 fetch handles
+  // staleness.
   useEffect(() => {
     if (!leadId) return
     // Step 1 — instant seed from the in-memory recent-activity map
@@ -113,7 +119,8 @@ export default function LeadDrawer({ leadId, onClose, bucket = [], onNavigate })
       }
     } catch {}
     return () => { cancelled = true }
-  }, [leadId, recentActivitiesByLead, getLeadActivities])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leadId])
 
   const logAction = async (kind, text) => {
     if (!text || !text.trim()) return
