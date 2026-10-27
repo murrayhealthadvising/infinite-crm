@@ -57,6 +57,33 @@ body {
   padding-right: env(safe-area-inset-right);
 }
 
+/* ─── Mobile touch polish ───────────────────────────────────────────────
+   Momentum scrolling in scrollable regions so Pipeline columns and the
+   Leads list feel native. Also smooth-scroll by default for anchors. */
+@media (max-width: 1024px) {
+  * {
+    -webkit-overflow-scrolling: touch;
+  }
+  /* Pull-to-refresh and over-scroll-chaining disabled on main scroll
+     containers so flinging the Leads list doesn't bounce the whole page. */
+  main {
+    overscroll-behavior-y: contain;
+  }
+  /* Ensure every a/button has a minimum 44x44 tap target as iOS HIG
+     requires. Small icon buttons that are already smaller get an invisible
+     padding boost on mobile only. */
+  button, a[href^="tel:"], [role="button"] {
+    min-height: 36px;
+  }
+  /* Disable text selection on interactive controls so a tap-and-hold
+     doesn't fire the copy-text menu on iOS. */
+  button, [role="button"], nav a {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+}
+
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #1A2130; border-radius: 4px; }

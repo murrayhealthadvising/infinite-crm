@@ -187,13 +187,22 @@ export default function LeadDrawer({ leadId, onClose, bucket = [], onNavigate })
           opacity dim is just as readable and costs nothing to render. */}
       <div className="fixed inset-0 z-40 bg-black/50 animate-fade-in" onClick={onClose} />
 
-      {/* Right-side drawer. isolation+transform force this into its own
-          GPU compositing layer so sibling repaints (backdrop, pipeline
+      {/* Drawer. On desktop (lg+): right-side 460px panel. On mobile:
+          full-width sheet that fills the viewport minus a short top gap so
+          the backdrop is tappable to close. Rounded top corners on mobile
+          read as "this is a sheet you can swipe/tap-to-close" instead of a
+          desktop sidebar. iOS safe-area padding so content clears the
+          notch + home indicator. isolation+transform force this into its
+          own GPU compositing layer so sibling repaints (backdrop, pipeline
           behind it) can't bleed through as flicker. */}
-      <aside className="fixed right-0 top-0 bottom-0 z-50 w-full sm:w-[460px] flex flex-col shadow-2xl"
+      <aside className="fixed z-50 flex flex-col shadow-2xl
+        inset-x-0 bottom-0 top-10 rounded-t-2xl
+        lg:inset-auto lg:right-0 lg:top-0 lg:bottom-0 lg:w-[460px] lg:rounded-none"
         style={{
           background: '#0E1318',
           borderLeft: '1px solid #1A2130',
+          borderTop: '1px solid #1A2130',
+          paddingTop: 'env(safe-area-inset-top, 0px)',
           isolation: 'isolate',
           transform: 'translateZ(0)',
           willChange: 'transform',
