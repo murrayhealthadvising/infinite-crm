@@ -1802,7 +1802,14 @@ export default function Leads() {
     // Search across name, phone, email, location AND side tags + comments
     const tagsStr = Array.isArray(l.tags) ? l.tags.join(' ') : ''
     const haystack = `${leadName(l)} ${l.phone || ''} ${l.email || ''} ${l.state || ''} ${l.zip || ''} ${l.city || ''} ${l.comments || ''} ${tagsStr}`.toLowerCase()
-    const matchSearch = !q || haystack.includes(q)
+    // Phone-aware match: if the query contains digits, also compare on
+    // digits-only on both sides so "+1 404-444-0999" / "(404) 444-0999" /
+    // "4044440999" all match a stored "+14044440999". Falls back to raw
+    // substring match for non-phone queries (names, cities, etc.).
+    const qDigits = q.replace(/\D/g, '')
+    const matchSearch = !q
+      || haystack.includes(q)
+      || (qDigits.length >= 3 && String(l.phone || '').replace(/\D/g, '').includes(qDigits))
     const matchStage = !stageFilter || leadStageId(l, safeTags) === stageFilter
     // Side-tag filter: lead must have EVERY selected tag (AND match)
     const matchTags = tagFilters.size === 0 ||
