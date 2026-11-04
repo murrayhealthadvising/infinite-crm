@@ -1111,8 +1111,38 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
 
         <div className="space-y-1">
           <p className="text-[10px] text-[#3A4A5A] font-mono uppercase tracking-wider">Received</p>
-          <p className="text-xs text-[#8899AA]">{safeFormat(lead.created_at, 'MM-dd-yyyy')}</p>
-          <p className="text-[10px] text-[#5A6A7A] font-mono">{safeFormat(lead.created_at, 'h:mm a')}</p>
+          {/* Date more prominent — bumped weight + color so it reads at a
+              glance scanning down a column of cards. Relative-time pill on
+              the right is the quick "how fresh" answer, exact timestamp
+              below is the precise one. Tooltip gives the full ISO time. */}
+          <div className="flex items-center gap-1.5 flex-wrap"
+            title={safeFormat(lead.created_at, 'EEEE, MMM d, yyyy · h:mm a')}>
+            <p className="text-sm text-white font-semibold tabular-nums">
+              {safeFormat(lead.created_at, 'MM-dd-yyyy')}
+            </p>
+            {lead.created_at && (() => {
+              try {
+                const ago = formatDistanceToNow(new Date(lead.created_at), { addSuffix: false })
+                // Short pill like "3d" / "2w" / "1mo" so the card stays compact
+                const short = ago
+                  .replace(/about /, '')
+                  .replace(/less than a minute/, '<1m')
+                  .replace(/ minutes?/, 'm')
+                  .replace(/ hours?/, 'h')
+                  .replace(/ days?/, 'd')
+                  .replace(/ weeks?/, 'w')
+                  .replace(/ months?/, 'mo')
+                  .replace(/ years?/, 'y')
+                return (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded font-mono tabular-nums"
+                    style={{ background: '#1A2130', color: '#8899AA', border: '1px solid #2A3547' }}>
+                    {short} ago
+                  </span>
+                )
+              } catch { return null }
+            })()}
+          </div>
+          <p className="text-[11px] text-[#8899AA] font-mono tabular-nums">{safeFormat(lead.created_at, 'h:mm a')}</p>
           <div className="pt-1.5 mt-1.5 border-t border-[#1A2130]">
             <p className="text-[10px] text-[#3A4A5A] font-mono uppercase tracking-wider mb-1">Recent</p>
             <RecentActionsList entries={recentActivitiesByLead?.[lead.id]} />

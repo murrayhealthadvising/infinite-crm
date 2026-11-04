@@ -638,6 +638,36 @@ export default function LeadDetail() {
       {/* Body — pitch-first layout: all info visible, no accordion */}
       <div className="flex-1 overflow-y-auto p-3 md:p-6 space-y-4 max-w-6xl mx-auto w-full">
 
+        {/* Received — big, visible as soon as you open the lead so you can
+            tell at a glance how old / fresh this lead is without scrolling
+            down to Logistics. Date + exact time + relative pill. */}
+        {lead.created_at && (() => {
+          let when, ago, exact
+          try {
+            when = new Date(lead.created_at)
+            ago = formatDistanceToNow(when, { addSuffix: true })
+            exact = format(when, 'EEE MMM d, yyyy · h:mm a')
+          } catch { return null }
+          return (
+            <div className="flex items-center gap-3 flex-wrap px-4 py-3 rounded-xl border border-[#1A2130]"
+              style={{ background: '#0E1318' }}>
+              <div className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0"
+                style={{ background: '#1A2130' }}>
+                <Calendar size={16} className="text-[#8899AA]" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-[10px] font-mono uppercase tracking-wider text-[#5A6A7A]">Received</p>
+                <p className="text-base font-semibold text-white tabular-nums leading-tight">{exact}</p>
+              </div>
+              <span className="text-xs font-mono px-2 py-1 rounded"
+                style={{ background: '#1A2130', color: '#00E5C3', border: '1px solid #00E5C340' }}
+                title={exact}>
+                {ago}
+              </span>
+            </div>
+          )
+        })()}
+
         {/* Sold — prominent badge with plan + monthly premium */}
         <SoldBadge lead={lead} size="detail" />
 
