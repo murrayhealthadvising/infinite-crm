@@ -8,7 +8,7 @@ import EmailButton from '../components/EmailButton'
 import CalendlyButton from '../components/CalendlyButton'
 import SoldBadge from '../components/SoldBadge'
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
-import { formatDistanceToNow, formatDistanceToNowStrict } from 'date-fns'
+import { format, formatDistanceToNow, formatDistanceToNowStrict } from 'date-fns'
 import { GripHorizontal, Phone, Search, X, RefreshCw, Copy, Check } from 'lucide-react'
 import clsx from 'clsx'
 import { displayPhone, copyPhoneValue } from '../lib/phone'
@@ -177,11 +177,34 @@ function PipelineCard({ lead, onDragStart, onDragEnd, onClick }) {
         )}
         {fields.state !== false && lead.state && <span className="text-[10px] text-[#5A6A7A] font-mono">{lead.state}</span>}
         {fields.zip !== false && lead.zip && <span className="text-[10px] text-[#5A6A7A] font-mono">{lead.zip}</span>}
-        {fields.received_date && lead.created_at && (
-          <span className="text-[10px] text-[#5A6A7A] font-mono" title="Received date">
-            {(() => { try { return formatDistanceToNowStrict(new Date(lead.created_at), { addSuffix: false }) + ' ago' } catch { return '' } })()}
-          </span>
-        )}
+        {/* Received date — on by default now (field pref can still hide it).
+            Shows MM/DD + a compact age chip ("3d", "2w") for quick scanning
+            down a Pipeline column. Hovering gives the full timestamp. */}
+        {fields.received_date !== false && lead.created_at && (() => {
+          let dateStr = '', agoShort = '', fullLabel = ''
+          try {
+            const d = new Date(lead.created_at)
+            dateStr = format(d, 'MM/dd')
+            fullLabel = format(d, 'EEE MMM d, yyyy · h:mm a')
+            agoShort = formatDistanceToNowStrict(d, { addSuffix: false })
+              .replace(/less than a minute/, '<1m')
+              .replace(/ minutes?/, 'm')
+              .replace(/ hours?/, 'h')
+              .replace(/ days?/, 'd')
+              .replace(/ weeks?/, 'w')
+              .replace(/ months?/, 'mo')
+              .replace(/ years?/, 'y')
+          } catch {}
+          return (
+            <span className="inline-flex items-center gap-1 text-[10px] font-mono tabular-nums"
+              title={`Received ${fullLabel}`}>
+              <span className="text-[#8899AA]">{dateStr}</span>
+              <span className="px-1 py-0.5 rounded text-[#8899AA]" style={{ background: '#1A2130' }}>
+                {agoShort} ago
+              </span>
+            </span>
+          )
+        })()}
         {fields.local_time !== false && time && (
           <span className="text-[10px] font-mono ml-auto"
             style={{ color: offHours ? '#F59E0B' : '#3A4A5A' }}

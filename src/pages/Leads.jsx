@@ -1117,7 +1117,7 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
               below is the precise one. Tooltip gives the full ISO time. */}
           <div className="flex items-center gap-1.5 flex-wrap"
             title={safeFormat(lead.created_at, 'EEEE, MMM d, yyyy · h:mm a')}>
-            <p className="text-sm text-white font-semibold tabular-nums">
+            <p className="text-xs text-[#C0D0E0] tabular-nums">
               {safeFormat(lead.created_at, 'MM-dd-yyyy')}
             </p>
             {lead.created_at && (() => {
