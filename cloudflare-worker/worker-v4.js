@@ -1466,16 +1466,11 @@ async function verifyAndLogEnroll(env, userId, leadId, apiKey, contactUuid, work
 async function enrollLeadInPitch(env, userId, lead, ctx) {
   const tag = lead.id ? `lead=${lead.id}` : 'lead=?'
 
-  // ── Kill-switches (new in v4.56). Both default to TRUE in the DB so
+  // ── Global kill-switch (new in v4.56). Defaults to TRUE in the DB so
   //    behavior for existing agents is unchanged; only when an agent
-  //    explicitly turns off auto-text (globally in Settings, or per-lead
-  //    on the lead itself) do we skip. Manual enroll via the Enroll
-  //    button and the /pp-conversation viewer BYPASS this check — they're
-  //    explicit agent actions, not automatic.
-  if (lead && lead.auto_enroll === false) {
-    console.log('[pp]', tag, 'lead.auto_enroll=false — skipping (manual enroll still available)')
-    return false
-  }
+  //    turns off auto-text in Settings do we skip. Manual enroll via the
+  //    Enroll button and the /pp-conversation viewer BYPASS this check —
+  //    they're explicit agent actions, not automatic.
   try {
     const purl = `${env.SUPABASE_URL}/rest/v1/profiles?select=pp_auto_enroll_enabled&user_id=eq.${encodeURIComponent(userId)}&limit=1`
     const pr = await fetch(purl, {
@@ -1834,7 +1829,7 @@ export default {
     if (req.method === 'GET' && url.pathname === '/version') {
       return new Response(JSON.stringify({
         version: 'v4.56',
-        parser: 'auto-text kill-switches: profiles.pp_auto_enroll_enabled (global) + leads.auto_enroll (per-lead). Manual enroll + conversation view bypass both.',
+        parser: 'global auto-text kill-switch: profiles.pp_auto_enroll_enabled. Manual enroll + conversation view bypass it.',
         deployed_check: 'if you see v4.56 here, the deploy succeeded',
       }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
     }
