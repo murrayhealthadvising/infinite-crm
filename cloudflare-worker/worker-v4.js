@@ -1465,6 +1465,35 @@ async function verifyAndLogEnroll(env, userId, leadId, apiKey, contactUuid, work
 // the response.
 async function enrollLeadInPitch(env, userId, lead, ctx) {
   const tag = lead.id ? `lead=${lead.id}` : 'lead=?'
+
+  // ── Kill-switches (new in v4.56). Both default to TRUE in the DB so
+  //    behavior for existing agents is unchanged; only when an agent
+  //    explicitly turns off auto-text (globally in Settings, or per-lead
+  //    on the lead itself) do we skip. Manual enroll via the Enroll
+  //    button and the /pp-conversation viewer BYPASS this check — they're
+  //    explicit agent actions, not automatic.
+  if (lead && lead.auto_enroll === false) {
+    console.log('[pp]', tag, 'lead.auto_enroll=false — skipping (manual enroll still available)')
+    return false
+  }
+  try {
+    const purl = `${env.SUPABASE_URL}/rest/v1/profiles?select=pp_auto_enroll_enabled&user_id=eq.${encodeURIComponent(userId)}&limit=1`
+    const pr = await fetch(purl, {
+      headers: {
+        apikey: env.SUPABASE_SERVICE_KEY,
+        authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}`,
+      },
+    })
+    if (pr.ok) {
+      const rows = await pr.json()
+      // Treat missing or null as enabled (back-compat before migration runs).
+      if (rows?.[0]?.pp_auto_enroll_enabled === false) {
+        console.log('[pp]', tag, 'profile.pp_auto_enroll_enabled=false — agent turned off auto-text')
+        return false
+      }
+    }
+  } catch (e) { console.warn('[pp] profile auto-enroll flag lookup threw', String(e)) }
+
   const normPhone = coercePhoneE164(lead.phone)
   if (!normPhone) {
     console.log('[pp]', tag, 'no usable phone — skipping', { raw: lead.phone })
@@ -1804,9 +1833,9 @@ export default {
     // every release so a stale deploy is immediately visible.
     if (req.method === 'GET' && url.pathname === '/version') {
       return new Response(JSON.stringify({
-        version: 'v4.55',
-        parser: 'reverted manual-trigger block — manual-triggered PP workflows do fire from API enrolls fine, real cause of silent accept was running out of SMS credits',
-        deployed_check: 'if you see v4.55 here, the deploy succeeded',
+        version: 'v4.56',
+        parser: 'auto-text kill-switches: profiles.pp_auto_enroll_enabled (global) + leads.auto_enroll (per-lead). Manual enroll + conversation view bypass both.',
+        deployed_check: 'if you see v4.56 here, the deploy succeeded',
       }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
     }
 

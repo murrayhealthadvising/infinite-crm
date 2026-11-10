@@ -1675,6 +1675,39 @@ function PitchPerfectPanel() {
   const [keySaving, setKeySaving] = useState(false)
   const [keyMsg, setKeyMsg] = useState(null)
 
+  // Global auto-text kill-switch. TRUE = new leads auto-enroll on arrival.
+  // FALSE = agent uses manual enroll button per-lead instead. Manual + view
+  // messages always work regardless. Lives on profiles.pp_auto_enroll_enabled.
+  const [autoEnroll, setAutoEnroll] = useState(true)
+  const [autoEnrollSaving, setAutoEnrollSaving] = useState(false)
+  useEffect(() => {
+    if (!uid) return
+    let cancelled = false
+    supabase.from('profiles').select('pp_auto_enroll_enabled').eq('user_id', uid).maybeSingle()
+      .then(({ data }) => {
+        if (cancelled) return
+        // Missing column (migration not run yet) returns undefined — treat as ON.
+        setAutoEnroll(data?.pp_auto_enroll_enabled !== false)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [uid])
+  const toggleAutoEnroll = async () => {
+    if (!uid || autoEnrollSaving) return
+    const next = !autoEnroll
+    setAutoEnroll(next); setAutoEnrollSaving(true)
+    const { error } = await supabase.from('profiles')
+      .update({ pp_auto_enroll_enabled: next })
+      .eq('user_id', uid)
+    setAutoEnrollSaving(false)
+    if (error) {
+      // Revert on failure so the UI stays honest
+      setAutoEnroll(!next)
+      setMsg({ type: 'error', text: 'Could not save auto-text toggle: ' + error.message })
+      setTimeout(() => setMsg(null), 5000)
+    }
+  }
+
   // Seed the editor from the saved rules. Keyed on a stable JSON string so it
   // re-seeds when the saved data actually changes (incl. profile load) but NOT
   // on every render — otherwise in-progress edits would get wiped.
@@ -1844,6 +1877,32 @@ function PitchPerfectPanel() {
         {keyMsg && (
           <p className={`text-xs mt-2 ${keyMsg.type === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>{keyMsg.text}</p>
         )}
+      </div>
+
+      {/* Global auto-text kill-switch. Independent of API key — leaving the
+          key connected while turning this OFF lets agents still use the
+          per-lead Enroll button and view the PP conversation. */}
+      <div className="rounded-lg border border-[#1A2130] p-3 mb-3 flex items-center gap-3" style={{ background: '#080B0F' }}>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm text-white mb-0.5 flex items-center gap-2">
+            Auto-text new leads
+            <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${autoEnroll ? 'text-emerald-400 bg-emerald-500/10 border border-emerald-500/30' : 'text-[#8899AA] bg-[#1A2130] border border-[#2A3547]'}`}>
+              {autoEnroll ? 'ON' : 'OFF'}
+            </span>
+          </p>
+          <p className="text-xs text-[#5A6A7A]">
+            {autoEnroll
+              ? 'Every new lead auto-enrolls in a PitchPrfct workflow based on your rules below.'
+              : 'Auto-enroll disabled — new leads land cold. You can still click Enroll on a lead to drop them into a workflow manually, and PitchPrfct conversation view still works.'}
+          </p>
+        </div>
+        <button onClick={toggleAutoEnroll} disabled={autoEnrollSaving}
+          aria-pressed={autoEnroll}
+          className="flex-shrink-0 relative inline-flex items-center h-6 w-11 rounded-full transition-colors disabled:opacity-50"
+          style={{ background: autoEnroll ? '#10B981' : '#2A3547' }}>
+          <span className="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform"
+            style={{ transform: autoEnroll ? 'translateX(20px)' : 'translateX(0)' }} />
+        </button>
       </div>
 
       {keyState !== 'set' && keyState !== 'loading' && (

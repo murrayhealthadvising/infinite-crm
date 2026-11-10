@@ -362,6 +362,32 @@ export default function LeadDrawer({ leadId, onClose, bucket = [], onNavigate })
               try { await deleteActivity(aid, leadId) } catch {}
             }} />
 
+          {/* Per-lead auto-text toggle. Default ON (lead.auto_enroll !== false).
+              Flip OFF to stop this specific lead from firing a PP workflow on
+              arrival — useful when you want to work the lead manually first.
+              Manual Enroll + conversation scan always still work. */}
+          <div className="rounded-xl border border-[#1A2130] p-3 flex items-center gap-3"
+            style={{ background: '#0E1318' }}>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-mono uppercase tracking-wider text-[#5A6A7A] mb-0.5">
+                Auto-text this lead
+              </p>
+              <p className="text-[11px] text-[#3A4A5A] leading-snug">
+                {lead.auto_enroll !== false
+                  ? 'New-lead PitchPrfct enrollment is ON for this lead.'
+                  : 'Auto-enroll OFF. Manual Enroll + conversation scan still work.'}
+              </p>
+            </div>
+            <button
+              onClick={() => updateLead(leadId, { auto_enroll: !(lead.auto_enroll !== false) })}
+              aria-pressed={lead.auto_enroll !== false}
+              className="flex-shrink-0 relative inline-flex items-center h-6 w-11 rounded-full transition-colors"
+              style={{ background: lead.auto_enroll !== false ? '#10B981' : '#2A3547' }}>
+              <span className="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform"
+                style={{ transform: lead.auto_enroll !== false ? 'translateX(20px)' : 'translateX(0)' }} />
+            </button>
+          </div>
+
           {/* PitchPrfct conversation preview — same component used on
               LeadDetail. Click Scan to pull the last 5 messages between this
               lead and the agent's PP number so you can tell at a glance "did
