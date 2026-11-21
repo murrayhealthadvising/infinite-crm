@@ -1466,6 +1466,16 @@ async function verifyAndLogEnroll(env, userId, leadId, apiKey, contactUuid, work
 async function enrollLeadInPitch(env, userId, lead, ctx) {
   const tag = lead.id ? `lead=${lead.id}` : 'lead=?'
 
+  // ── Per-lead opt-out (v4.57). Highest-priority block — this is the agent
+  //    saying "do not contact this person." Applies to automatic AND manual
+  //    enroll (checked again in /pp-enroll-manual). If the flag was just
+  //    flipped on, the UI also calls unenrollAllPPWorkflows to stop any
+  //    in-flight workflow from sending more texts; nothing to do here.
+  if (lead && lead.opted_out === true) {
+    console.log('[pp]', tag, 'lead.opted_out=true — refusing enroll')
+    return false
+  }
+
   // ── Global kill-switch (new in v4.56). Defaults to TRUE in the DB so
   //    behavior for existing agents is unchanged; only when an agent
   //    turns off auto-text in Settings do we skip. Manual enroll via the
@@ -1828,9 +1838,9 @@ export default {
     // every release so a stale deploy is immediately visible.
     if (req.method === 'GET' && url.pathname === '/version') {
       return new Response(JSON.stringify({
-        version: 'v4.56',
-        parser: 'global auto-text kill-switch: profiles.pp_auto_enroll_enabled. Manual enroll + conversation view bypass it.',
-        deployed_check: 'if you see v4.56 here, the deploy succeeded',
+        version: 'v4.57',
+        parser: 'per-lead opt-out flag (leads.opted_out) blocks auto + manual enroll; UI also calls /pp-unenroll on flip',
+        deployed_check: 'if you see v4.57 here, the deploy succeeded',
       }), { status: 200, headers: { 'content-type': 'application/json', ...CORS } })
     }
 
@@ -2397,6 +2407,17 @@ export default {
       if (!lead) {
         return new Response(JSON.stringify({ error: 'lead not found' }), {
           status: 404, headers: { 'content-type': 'application/json', ...CORS },
+        })
+      }
+      // Opt-out guard — if the agent marked this lead "do not contact,"
+      // refuse even a manual enroll. The whole point of the flag is that
+      // nothing can text them, by any path, without un-ticking it first.
+      if (lead.opted_out === true) {
+        return new Response(JSON.stringify({
+          error: 'Lead is opted out. Un-tick the Opt Out button on the lead card first if you really want to enroll them.',
+          cause: 'opted_out',
+        }), {
+          status: 400, headers: { 'content-type': 'application/json', ...CORS },
         })
       }
       const normPhone = coercePhoneE164(lead.phone)

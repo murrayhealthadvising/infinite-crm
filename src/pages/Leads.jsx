@@ -34,7 +34,7 @@ import {
   Search, Plus, LayoutList, Columns, Phone, Copy, Home, DollarSign, Calendar,
   ExternalLink, ChevronDown, ChevronUp, X, Users, Check, Download, Upload,
   Square, CheckSquare, AlertCircle, CheckCircle, Trash2, AlertTriangle, RefreshCw,
-  MessageSquare, StickyNote, AtSign, Zap, Tag as TagIcon,
+  MessageSquare, StickyNote, AtSign, Zap, Tag as TagIcon, Ban, ShieldOff,
 } from 'lucide-react'
 import { format, formatDistanceToNow, differenceInYears, parseISO } from 'date-fns'
 import clsx from 'clsx'
@@ -940,7 +940,10 @@ function PPResponsePill({ status }) {
 }
 
 function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNoteBChange, onNavigate, onDelete, onPriceChange, onCampaignChange, onRunnerChange, onTagsChange, runnerSuggestions, tagSuggestions, canDelete = true }) {
-  const { tags, getTag, splitNotes, pipelineCardFields, recentActivitiesByLead, addActivity } = useApp()
+  const { tags, getTag, splitNotes, pipelineCardFields, recentActivitiesByLead, addActivity, updateLead } = useApp()
+  // Worker URL for /pp-unenroll — same pattern used in Settings/ManualEnrollButton.
+  const WORKER_URL = (import.meta.env.VITE_CRM_WORKER_URL
+    || 'https://infinite-crm-webhook.murrayhealthadvising.workers.dev').replace(/\/+$/, '')
   // Log a dial when the agent presses Call. Same 2-min per-card coalesce as
   // Pipeline / LeadDetail so a quick double-tap doesn't inflate the counter.
   const lastCallRef = useRef(0)
@@ -979,6 +982,38 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
     e.stopPropagation()
     if (lead.email) navigator.clipboard.writeText(lead.email)
     setEmailCopied(true); setTimeout(() => setEmailCopied(false), 1500)
+  }
+
+  // Opt-out toggle. Flips leads.opted_out. When turning ON, also fires
+  // /pp-unenroll on the worker so any in-flight PP workflow stops sending
+  // texts. Confirm dialog on BOTH directions so a fat-finger on a card
+  // doesn't accidentally resume auto-texts for someone we opted out.
+  const toggleOptOut = async (e) => {
+    e.stopPropagation()
+    const nowOptedOut = lead.opted_out === true
+    const msg = nowOptedOut
+      ? `Resume contact for ${fullName}? This will NOT re-enroll them automatically — you'd still need to click Enroll if you want PP to text them again.`
+      : `Mark ${fullName} as "Opt Out"?\n\nThey won't receive any auto-texts going forward, and any in-flight PitchPrfct workflow will be stopped immediately. Manual Enroll will also refuse until you un-tick this.`
+    if (!confirm(msg)) return
+    const next = !nowOptedOut
+    if (typeof updateLead === 'function') {
+      try { await updateLead(lead.id, { opted_out: next }) } catch (err) { console.error('[opt-out] save failed', err); return }
+    }
+    // If switching ON, call the worker to unenroll from PP right now
+    if (next) {
+      try {
+        await fetch(`${WORKER_URL}/pp-unenroll`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ agent_id: lead.user_id || lead.agent_id, lead_id: lead.id, phone: lead.phone }),
+        })
+      } catch (err) { console.warn('[opt-out] /pp-unenroll call failed (soft-fail)', err) }
+      if (typeof addActivity === 'function') {
+        try { await addActivity(lead.id, 'note', 'Opted out — do not contact. Auto-texts disabled, PP workflow unenrolled.') } catch {}
+      }
+    } else if (typeof addActivity === 'function') {
+      try { await addActivity(lead.id, 'note', 'Opt-out removed — contact can resume (not auto-re-enrolled).') } catch {}
+    }
   }
 
   return (
@@ -1153,11 +1188,33 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
           {/* Response status lives on the right rail so it doesn't crowd the
               state/zip/campaign line under the name. */}
           <PPResponsePill status={lead.pp_response_status} />
+          {/* Opted-out pill — only shown when the flag is on. Red so it's
+              obvious when scanning a column of cards that this lead is
+              off-limits for texting. */}
+          {lead.opted_out === true && (
+            <span className="inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded"
+              style={{ background: '#EF444415', color: '#EF4444', border: '1px solid #EF444440' }}
+              title="This lead is opted out. Auto-text and manual enroll are disabled.">
+              <ShieldOff size={9} /> Opted Out
+            </span>
+          )}
           {/* Quick-email button — small, top-right, opens the compose modal
               without leaving the Leads list. */}
           {lead.email && (
             <EmailButton lead={lead} variant="compact" />
           )}
+          {/* Opt-out toggle. Grey when off, red when on. Confirms both ways. */}
+          <button onClick={toggleOptOut}
+            className="p-1.5 rounded-lg transition-colors"
+            title={lead.opted_out === true
+              ? 'Opted out — click to resume contact'
+              : 'Opt this lead out (no more auto-texts, unenroll from PP)'}
+            style={{
+              color: lead.opted_out === true ? '#EF4444' : '#3A4A5A',
+              background: lead.opted_out === true ? '#EF444410' : 'transparent',
+            }}>
+            <Ban size={14} />
+          </button>
           <button onClick={() => onNavigate(lead.id)}
             className="p-1.5 rounded-lg text-[#3A4A5A] hover:text-white transition-colors" title="Open detail">
             <ExternalLink size={14} />
