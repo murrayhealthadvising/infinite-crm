@@ -15,7 +15,8 @@
     "@supabase/supabase-js": "^2.43.4",
     "lucide-react": "^0.383.0",
     "date-fns": "^3.6.0",
-    "clsx": "^2.1.1"
+    "clsx": "^2.1.1",
+    "jspdf": "^2.5.1"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.1",

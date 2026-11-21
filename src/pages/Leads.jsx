@@ -7,6 +7,7 @@ import PitchCountdown from '../components/PitchCountdown'
 import EmailButton from '../components/EmailButton'
 import SoldBadge from '../components/SoldBadge'
 import BulkEnrollButton from '../components/BulkEnrollButton'
+import ApplicationSheet from '../components/ApplicationSheet'
 import { normalizePhone, displayPhone, copyPhoneValue } from '../lib/phone'
 import { localTimeFor, localHourFor, timezoneFor } from '../lib/timezone'
 
@@ -34,7 +35,7 @@ import {
   Search, Plus, LayoutList, Columns, Phone, Copy, Home, DollarSign, Calendar,
   ExternalLink, ChevronDown, ChevronUp, X, Users, Check, Download, Upload,
   Square, CheckSquare, AlertCircle, CheckCircle, Trash2, AlertTriangle, RefreshCw,
-  MessageSquare, StickyNote, AtSign, Zap, Tag as TagIcon, Ban, ShieldOff,
+  MessageSquare, StickyNote, AtSign, Zap, Tag as TagIcon, Ban, ShieldOff, FileText,
 } from 'lucide-react'
 import { format, formatDistanceToNow, differenceInYears, parseISO } from 'date-fns'
 import clsx from 'clsx'
@@ -961,6 +962,9 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
   const [nameCopied, setNameCopied] = useState(false)
   const [emailCopied, setEmailCopied] = useState(false)
   const [expanded, setExpanded] = useState(false)
+  // Paper-application sheet open state. Scoped per-card so opening on one
+  // doesn't open on another. The sheet itself handles save/PDF/attach.
+  const [appOpen, setAppOpen] = useState(false)
   const safeTags = Array.isArray(tags) && tags.length > 0 ? tags : [{ id: 'not-started', label: 'Not Started', color: '#8899AA', bg: '#1A2130' }]
   const stageId = leadStageId(lead, safeTags)
   const tag = (typeof getTag === 'function' ? getTag(stageId) : null) || safeTags.find(t => t.id === stageId) || safeTags[0]
@@ -1203,6 +1207,17 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
           {lead.email && (
             <EmailButton lead={lead} variant="compact" />
           )}
+          {/* Start Application — opens the ApplicationSheet pre-filled from
+              this lead. Cyan to pop, since starting an app is a conversion moment. */}
+          <button onClick={(e) => { e.stopPropagation(); setAppOpen(true) }}
+            title={lead.application_pdf_path ? 'App finalized — click to resume or re-finalize' : lead.application ? 'App in progress — click to resume' : 'Start paper application for this lead'}
+            className="p-1.5 rounded-lg transition-colors"
+            style={{
+              color: lead.application_pdf_path ? '#00E5C3' : lead.application ? '#8AB4F8' : '#5A6A7A',
+              background: lead.application ? '#00E5C310' : 'transparent',
+            }}>
+            <FileText size={14} />
+          </button>
           {/* Opt-out toggle. Grey when off, red when on. Confirms both ways. */}
           <button onClick={toggleOptOut}
             className="p-1.5 rounded-lg transition-colors"
@@ -1286,6 +1301,10 @@ function LeadCard({ lead, selected, onSelect, onStageChange, onNoteChange, onNot
           </div>
         </div>
       )}
+      {/* Application sheet — mounted here so it overlays the whole viewport
+          when the agent hits the Start App button in this card's right rail.
+          Lazy: only rendered when appOpen is true to keep the Leads list fast. */}
+      {appOpen && <ApplicationSheet lead={lead} open={appOpen} onClose={() => setAppOpen(false)} />}
     </div>
   )
 }
