@@ -8,7 +8,8 @@ import SoldBadge from '../components/SoldBadge'
 import CalendlyButton from '../components/CalendlyButton'
 import ComposeEmailModal from '../components/ComposeEmailModal'
 import ConversationPanel from '../components/ConversationPanel'
-import { Phone, Mail, MapPin, Calendar, ArrowLeft, MessageSquare, PhoneCall, AtSign, StickyNote, ChevronDown, ChevronLeft as ChevronLeftIcon, ChevronRight as ChevronRightIcon, Zap, Send, User, Users, Home, DollarSign, Heart, Pencil, Check, X, Clock } from 'lucide-react'
+import ApplicationSheet from '../components/ApplicationSheet'
+import { Phone, Mail, MapPin, Calendar, ArrowLeft, MessageSquare, PhoneCall, AtSign, StickyNote, ChevronDown, ChevronLeft as ChevronLeftIcon, ChevronRight as ChevronRightIcon, Zap, Send, User, Users, Home, DollarSign, Heart, Pencil, Check, X, Clock, FileText } from 'lucide-react'
 import { normalizePhone, displayPhone } from '../lib/phone'
 import { localTimeFor, localHourFor } from '../lib/timezone'
 import { format, formatDistanceToNow, isToday, isYesterday } from 'date-fns'
@@ -379,6 +380,8 @@ export default function LeadDetail() {
   const { leads, tags, updateLead, updateLeadStage, addActivity, getLeadActivities, deleteActivity, splitNotes, addReminder } = useApp()
   const [showRemindMe, setShowRemindMe] = useState(false)
   const [showCompose, setShowCompose] = useState(false)
+  // Paper application sheet open state. Button in the header toolbar.
+  const [showApp, setShowApp] = useState(false)
   const safeLeads = Array.isArray(leads) ? leads : []
   const lead = safeLeads.find(l => l.id === id)
   const [editStage, setEditStage] = useState(false)
@@ -607,6 +610,21 @@ export default function LeadDetail() {
             </button>
           )}
           <ManualEnrollButton lead={lead} />
+          {/* Start Application — pre-filled from this lead + notes, finalizes
+              as a secure private PDF attached back to the lead. */}
+          <button onClick={() => setShowApp(true)}
+            title={lead.application_pdf_path ? 'App saved — click to resume or re-finalize' : lead.application ? 'App in progress — click to resume' : 'Start paper application'}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-[8px] text-sm font-semibold text-black transition-opacity hover:opacity-90"
+            style={{
+              background: lead.application_pdf_path
+                ? 'linear-gradient(135deg, #10B981, #00E5C3)'
+                : 'linear-gradient(135deg, #00E5C3, #8AB4F8)',
+            }}>
+            <FileText size={13} />
+            <span className="hidden md:inline">
+              {lead.application_pdf_path ? 'App saved' : lead.application ? 'Resume app' : 'Start app'}
+            </span>
+          </button>
           <CalendlyButton lead={lead} />
           <button onClick={() => setShowRemindMe(true)}
             className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-[#1A2130] text-sm text-[#8899AA] hover:text-white hover:border-[#2A3547]"
@@ -803,6 +821,12 @@ export default function LeadDetail() {
       {showCompose && (
         <ComposeEmailModal leadId={id} to={lead.email}
           onClose={() => setShowCompose(false)} />
+      )}
+
+      {/* Paper application sheet. Mounted lazily so LeadDetail stays fast
+          when the agent isn't actively running an app. */}
+      {showApp && (
+        <ApplicationSheet lead={lead} open={showApp} onClose={() => setShowApp(false)} />
       )}
     </div>
   )
