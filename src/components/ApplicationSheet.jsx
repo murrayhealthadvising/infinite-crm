@@ -7,19 +7,45 @@ import { generateApplicationPdf, MEDICAL_QUESTIONS } from '../lib/applicationPdf
 // Paper-application-in-the-CRM. Opens as a right-side sheet on desktop,
 // bottom sheet on mobile. Pre-fills from the lead row, saves as the agent
 // types to leads.application (jsonb), and on Finalize generates a PDF via
-// jsPDF, uploads it to Supabase Storage, and saves the public URL on the
-// lead so there's a "View PDF" link forever after.
+// jsPDF, uploads it to private Supabase Storage, and saves the file path
+// on the lead so there's a secure-signed-URL "View PDF" button later.
 //
-// Collapsible sections so the sheet isn't a wall of inputs:
-//   1. Quote        — premium, carrier, effective date
-//   2. Primary      — pre-filled from lead; agent confirms + fills gaps
-//   3. Spouse       — toggle "Married?" to show
-//   4. Dependents   — + Add dependent, up to 6
-//   5. Payment      — bank (default) or card
-//   6. Medications  — add rows for any Rx the lead is on
-//   7. Medical      — all 34 Y/N questions (compliance), default No
+// Section order (reordered 2026-11-23 per Nic): Quote → Primary → Spouse →
+// Dependents → Medications → Medical → Payment → Verification. Payment at
+// the end so the agent reads medical disclosures BEFORE asking for bank info.
 //
-// Reads/writes happen through `updateLead` so realtime stays consistent.
+// ── CRITICAL: Section, Field, and inputCls are declared at MODULE level,
+//    not inside the component. Defining them inside caused React to see
+//    "new" component identities on every parent render, which unmounted
+//    and remounted every input on every keystroke — making the agent lose
+//    focus after every single character. Keep them out here.
+
+const inputCls = 'w-full px-2 py-1.5 rounded-md text-sm text-white bg-[#080B0F] border border-[#1A2130] focus:outline-none focus:border-[#00E5C340]'
+
+function Section({ id, title, icon: Icon, badge, openState, setOpenState, children }) {
+  const isOpen = !!openState[id]
+  return (
+    <div className="rounded-xl border border-[#1A2130] overflow-hidden" style={{ background: '#0D1117' }}>
+      <button type="button" onClick={() => setOpenState(s => ({ ...s, [id]: !isOpen }))}
+        className="w-full flex items-center gap-2 px-3 py-2.5 hover:bg-[#1A2130] transition-colors">
+        <Icon size={13} className="text-[#00E5C3]" />
+        <span className="text-xs font-mono uppercase tracking-wider text-white flex-1 text-left">{title}</span>
+        {badge && <span className="text-[10px] text-[#8899AA] font-mono">{badge}</span>}
+        <span className="text-[#5A6A7A] text-xs">{isOpen ? '−' : '+'}</span>
+      </button>
+      {isOpen && <div className="p-3 border-t border-[#1A2130] space-y-2">{children}</div>}
+    </div>
+  )
+}
+
+function Field({ label, children, half }) {
+  return (
+    <label className={`block ${half ? 'inline-block w-1/2 pr-1' : ''}`}>
+      <span className="text-[10px] font-mono uppercase tracking-wider text-[#5A6A7A]">{label}</span>
+      <div className="mt-0.5">{children}</div>
+    </label>
+  )
+}
 
 const DEFAULT_APP = {
   quote:   { monthlyPremium: '', carrier: '', effectiveDate: '' },
@@ -29,12 +55,10 @@ const DEFAULT_APP = {
   dependents: [],
   payment: { method: 'bank', bankName: '', routing: '', account: '', firstWithdrawal: '', nameOnCard: '', cardNumber: '', expiration: '', cvv: '', billingAddress: '' },
   medications: [],
-  medical: {}, // {0: true/false, 1: ..., keyed by question index; default (missing) = No
+  medical: {}, // {0: true/false, ...}  default (missing) = No
   verificationPreference: '',
 }
 
-// Deep-merge saved state onto defaults so new fields added later don't
-// crash older applications.
 function hydrate(saved, lead) {
   const base = JSON.parse(JSON.stringify(DEFAULT_APP))
   const merged = {
@@ -48,7 +72,6 @@ function hydrate(saved, lead) {
     dependents:  Array.isArray(saved?.dependents)  ? saved.dependents  : [],
     medications: Array.isArray(saved?.medications) ? saved.medications : [],
   }
-  // First-time prefill from the lead row. Only fill blanks — never overwrite.
   if (!merged.primary.fullName) merged.primary.fullName = `${lead.first_name || ''} ${lead.last_name || ''}`.trim()
   if (!merged.primary.email)    merged.primary.email    = lead.email  || ''
   if (!merged.primary.phone)    merged.primary.phone    = lead.phone  || ''
@@ -69,12 +92,10 @@ export default function ApplicationSheet({ lead, open, onClose }) {
   const [savedAt, setSavedAt] = useState(null)
   const [savingPdf, setSavingPdf] = useState(false)
   const [pdfError, setPdfError] = useState(null)
-  // Section collapse — Quote and Primary open by default.
   const [openSection, setOpenSection] = useState({ quote: true, primary: true })
+  const [openingPdf, setOpeningPdf] = useState(false)
   const saveTimer = useRef(null)
 
-  // Re-hydrate when a different lead is opened (ApplicationSheet is mounted
-  // persistently by the parent to keep slide animations smooth).
   useEffect(() => {
     if (open && lead) {
       setState(hydrate(lead.application, lead))
@@ -82,8 +103,6 @@ export default function ApplicationSheet({ lead, open, onClose }) {
     }
   }, [open, lead?.id])
 
-  // Save-as-you-type: debounced write to leads.application so the agent
-  // never loses a field if they close the sheet mid-call.
   const persist = useCallback((next) => {
     if (!lead?.id || typeof updateLead !== 'function') return
     clearTimeout(saveTimer.current)
@@ -95,77 +114,51 @@ export default function ApplicationSheet({ lead, open, onClose }) {
     }, 600)
   }, [lead?.id, updateLead])
 
-  const update = (patch) => {
-    setState(prev => { const next = { ...prev, ...patch }; persist(next); return next })
-  }
-  const updateIn = (section, patch) => {
-    setState(prev => {
-      const next = { ...prev, [section]: { ...prev[section], ...patch } }
-      persist(next); return next
-    })
-  }
-  const setMedical = (i, value) => {
-    setState(prev => {
-      const next = { ...prev, medical: { ...prev.medical, [i]: value } }
-      persist(next); return next
-    })
-  }
-
+  const update = (patch) => setState(prev => { const n = { ...prev, ...patch }; persist(n); return n })
+  const updateIn = (section, patch) => setState(prev => {
+    const n = { ...prev, [section]: { ...prev[section], ...patch } }; persist(n); return n
+  })
+  const setMedical = (i, value) => setState(prev => {
+    const n = { ...prev, medical: { ...prev.medical, [i]: value } }; persist(n); return n
+  })
   const addDep = () => setState(prev => {
     if (prev.dependents.length >= 6) return prev
-    const next = { ...prev, dependents: [...prev.dependents, { name: '', dob: '', gender: '', height: '', weight: '' }] }
-    persist(next); return next
+    const n = { ...prev, dependents: [...prev.dependents, { name: '', dob: '', gender: '', height: '', weight: '' }] }; persist(n); return n
   })
   const setDep = (idx, patch) => setState(prev => {
     const deps = prev.dependents.map((d, i) => i === idx ? { ...d, ...patch } : d)
-    const next = { ...prev, dependents: deps }; persist(next); return next
+    const n = { ...prev, dependents: deps }; persist(n); return n
   })
   const delDep = (idx) => setState(prev => {
-    const next = { ...prev, dependents: prev.dependents.filter((_, i) => i !== idx) }; persist(next); return next
+    const n = { ...prev, dependents: prev.dependents.filter((_, i) => i !== idx) }; persist(n); return n
   })
-
   const addMed = () => setState(prev => {
-    const next = { ...prev, medications: [...prev.medications, { applicant: '', name: '', reason: '', length: '', doctor: '' }] }
-    persist(next); return next
+    const n = { ...prev, medications: [...prev.medications, { applicant: '', name: '', reason: '', length: '', doctor: '' }] }; persist(n); return n
   })
   const setMed = (idx, patch) => setState(prev => {
     const meds = prev.medications.map((m, i) => i === idx ? { ...m, ...patch } : m)
-    const next = { ...prev, medications: meds }; persist(next); return next
+    const n = { ...prev, medications: meds }; persist(n); return n
   })
   const delMed = (idx) => setState(prev => {
-    const next = { ...prev, medications: prev.medications.filter((_, i) => i !== idx) }; persist(next); return next
+    const n = { ...prev, medications: prev.medications.filter((_, i) => i !== idx) }; persist(n); return n
   })
 
   const finalize = async () => {
     if (savingPdf) return
     setSavingPdf(true); setPdfError(null)
     try {
-      // 1. Flush any pending debounce
       clearTimeout(saveTimer.current)
       await updateLead(lead.id, { application: state })
-      // 2. Generate the PDF
       const blob = generateApplicationPdf(state, lead)
       const safeName = `${(lead.first_name || '').trim()}_${(lead.last_name || '').trim()}`
         .replace(/[^a-z0-9_-]/gi, '').toLowerCase() || 'application'
       const file = new File([blob], `${safeName}.pdf`, { type: 'application/pdf' })
-      // Path starts with the AGENT's user_id (first folder segment). The
-      // RLS policies on the `applications` bucket require this: an agent
-      // can only read/write files under their own user_id folder. If the
-      // path shape ever changes, update the three storage policies too.
       const path = `${lead.user_id || 'unknown'}/${lead.id}/${Date.now()}_${file.name}`
-      // 3. Upload to the PRIVATE `applications` bucket. Nothing is readable
-      //    without a signed URL generated by our authenticated client.
       const { error: upErr } = await supabase.storage.from('applications').upload(path, file, {
-        contentType: 'application/pdf',
-        upsert: false,
+        contentType: 'application/pdf', upsert: false,
       })
       if (upErr) throw upErr
-      // 4. Save the PATH (not a URL) on the lead. When someone clicks View
-      //    PDF later, the app calls createSignedUrl on-the-fly with a
-      //    short expiry — so even if a URL gets copied/pasted/forwarded,
-      //    it dies in an hour. Full PHI never sits behind a permanent URL.
       await updateLead(lead.id, { application_pdf_path: path })
-      // 5. Download locally too so the agent has an immediate copy
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a'); a.href = url; a.download = file.name; a.click()
       setTimeout(() => URL.revokeObjectURL(url), 1500)
@@ -173,58 +166,24 @@ export default function ApplicationSheet({ lead, open, onClose }) {
     } catch (e) {
       console.error('[app-sheet] finalize failed', e)
       setPdfError(e.message || String(e))
-    } finally {
-      setSavingPdf(false)
-    }
+    } finally { setSavingPdf(false) }
   }
 
-  // Open the saved PDF with a short-lived signed URL (1 hour). We don't
-  // keep a permanent URL anywhere — every view produces a fresh token so
-  // leaked URLs expire quickly, and only authenticated agents under the
-  // right folder can mint them.
-  const [openingPdf, setOpeningPdf] = useState(false)
   const openSavedPdf = async () => {
     if (!lead.application_pdf_path || openingPdf) return
     setOpeningPdf(true)
     try {
-      const { data, error } = await supabase.storage
-        .from('applications')
-        .createSignedUrl(lead.application_pdf_path, 60 * 60)  // 1 hour
+      const { data, error } = await supabase.storage.from('applications')
+        .createSignedUrl(lead.application_pdf_path, 60 * 60)
       if (error) throw error
       window.open(data.signedUrl, '_blank', 'noopener,noreferrer')
     } catch (e) {
       console.error('[app-sheet] signed url failed', e)
       setPdfError(`Couldn't open PDF: ${e.message || e}`)
-    } finally {
-      setOpeningPdf(false)
-    }
+    } finally { setOpeningPdf(false) }
   }
 
   if (!open || !lead) return null
-
-  const Section = ({ id, title, icon: Icon, children, badge }) => {
-    const isOpen = !!openSection[id]
-    return (
-      <div className="rounded-xl border border-[#1A2130] overflow-hidden" style={{ background: '#0D1117' }}>
-        <button onClick={() => setOpenSection(s => ({ ...s, [id]: !isOpen }))}
-          className="w-full flex items-center gap-2 px-3 py-2.5 hover:bg-[#1A2130] transition-colors">
-          <Icon size={13} className="text-[#00E5C3]" />
-          <span className="text-xs font-mono uppercase tracking-wider text-white flex-1 text-left">{title}</span>
-          {badge && <span className="text-[10px] text-[#8899AA] font-mono">{badge}</span>}
-          <span className="text-[#5A6A7A] text-xs">{isOpen ? '−' : '+'}</span>
-        </button>
-        {isOpen && <div className="p-3 border-t border-[#1A2130] space-y-2">{children}</div>}
-      </div>
-    )
-  }
-
-  const Field = ({ label, children, half }) => (
-    <label className={`block ${half ? 'inline-block w-1/2 pr-1' : ''}`}>
-      <span className="text-[10px] font-mono uppercase tracking-wider text-[#5A6A7A]">{label}</span>
-      <div className="mt-0.5">{children}</div>
-    </label>
-  )
-  const inputCls = 'w-full px-2 py-1.5 rounded-md text-sm text-white bg-[#080B0F] border border-[#1A2130] focus:outline-none focus:border-[#00E5C340]'
 
   return (
     <>
@@ -241,12 +200,13 @@ export default function ApplicationSheet({ lead, open, onClose }) {
           transform: 'translateZ(0)',
         }}>
 
-        {/* Header */}
         <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-[#1A2130] flex-shrink-0">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <FileText size={14} className="text-[#00E5C3]" />
-              <h2 className="text-sm font-bold text-white truncate">Application · {`${lead.first_name || ''} ${lead.last_name || ''}`.trim() || '—'}</h2>
+              <h2 className="text-sm font-bold text-white truncate">
+                Application · {`${lead.first_name || ''} ${lead.last_name || ''}`.trim() || '—'}
+              </h2>
             </div>
             <p className="text-[10px] text-[#5A6A7A] font-mono mt-0.5">
               {savedAt ? `Auto-saved ${savedAt.toLocaleTimeString()}` : 'Edits save automatically'}
@@ -257,10 +217,9 @@ export default function ApplicationSheet({ lead, open, onClose }) {
           </button>
         </div>
 
-        {/* Scroll body */}
         <div className="flex-1 overflow-y-auto overflow-x-hidden p-3 space-y-3">
 
-          <Section id="quote" title="Quote" icon={FileText}>
+          <Section id="quote" title="Quote" icon={FileText} openState={openSection} setOpenState={setOpenSection}>
             <Field label="Monthly Premium ($)">
               <input className={inputCls} value={state.quote.monthlyPremium}
                 onChange={e => updateIn('quote', { monthlyPremium: e.target.value })}
@@ -277,14 +236,14 @@ export default function ApplicationSheet({ lead, open, onClose }) {
             </Field>
           </Section>
 
-          <Section id="primary" title="Primary applicant" icon={User}>
+          <Section id="primary" title="Primary applicant" icon={User} openState={openSection} setOpenState={setOpenSection}>
             <Field label="Full name">
               <input className={inputCls} value={state.primary.fullName}
                 onChange={e => updateIn('primary', { fullName: e.target.value })} />
             </Field>
             <Field label="Email">
-              <input className={inputCls} value={state.primary.email}
-                onChange={e => updateIn('primary', { email: e.target.value })} type="email" />
+              <input className={inputCls} type="email" value={state.primary.email}
+                onChange={e => updateIn('primary', { email: e.target.value })} />
             </Field>
             <div className="flex gap-2">
               <Field label="DOB" half>
@@ -356,7 +315,7 @@ export default function ApplicationSheet({ lead, open, onClose }) {
             </label>
           </Section>
 
-          <Section id="spouse" title="Spouse" icon={Users} badge={state.married ? 'married' : 'single'}>
+          <Section id="spouse" title="Spouse" icon={Users} badge={state.married ? 'married' : 'single'} openState={openSection} setOpenState={setOpenSection}>
             <label className="inline-flex items-center gap-2 text-xs text-[#C0D0E0] mb-2">
               <input type="checkbox" checked={state.married} onChange={e => update({ married: e.target.checked })} />
               Married — include spouse
@@ -412,7 +371,7 @@ export default function ApplicationSheet({ lead, open, onClose }) {
             )}
           </Section>
 
-          <Section id="deps" title="Dependents" icon={Users} badge={state.dependents.length ? `${state.dependents.length}` : null}>
+          <Section id="deps" title="Dependents" icon={Users} badge={state.dependents.length ? `${state.dependents.length}` : null} openState={openSection} setOpenState={setOpenSection}>
             {state.dependents.map((d, idx) => (
               <div key={idx} className="rounded-md border border-[#1A2130] p-2 space-y-1.5" style={{ background: '#080B0F' }}>
                 <div className="flex items-center justify-between">
@@ -446,7 +405,65 @@ export default function ApplicationSheet({ lead, open, onClose }) {
             )}
           </Section>
 
-          <Section id="payment" title="Payment" icon={CreditCard}>
+          <Section id="meds" title="Medications" icon={Pill} badge={state.medications.length ? `${state.medications.length}` : null} openState={openSection} setOpenState={setOpenSection}>
+            {state.medications.map((m, idx) => (
+              <div key={idx} className="rounded-md border border-[#1A2130] p-2 space-y-1.5" style={{ background: '#080B0F' }}>
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-mono text-[#5A6A7A]">Med {idx + 1}</span>
+                  <button onClick={() => delMed(idx)} className="p-0.5 text-[#5A6A7A] hover:text-[#EF4444]">
+                    <Trash2 size={11} />
+                  </button>
+                </div>
+                <input className={inputCls} value={m.applicant} placeholder="Applicant (Primary / Spouse / Dep X)"
+                  onChange={e => setMed(idx, { applicant: e.target.value })} />
+                <input className={inputCls} value={m.name} placeholder="Medication"
+                  onChange={e => setMed(idx, { name: e.target.value })} />
+                <input className={inputCls} value={m.reason} placeholder="Reason"
+                  onChange={e => setMed(idx, { reason: e.target.value })} />
+                <div className="flex gap-2">
+                  <input className={inputCls} value={m.length} placeholder="Length on med"
+                    onChange={e => setMed(idx, { length: e.target.value })} />
+                  <input className={inputCls} value={m.doctor} placeholder="Doctor"
+                    onChange={e => setMed(idx, { doctor: e.target.value })} />
+                </div>
+              </div>
+            ))}
+            <button onClick={addMed} className="w-full py-1.5 rounded-md border border-dashed border-[#2A3547] text-xs text-[#8899AA] hover:text-white hover:border-[#00E5C340]">
+              <Plus size={11} className="inline mr-1" /> Add medication
+            </button>
+          </Section>
+
+          <Section id="medical" title="Medical history (34 questions)" icon={Stethoscope}
+            badge={`${Object.values(state.medical).filter(v => v === true).length} Yes`}
+            openState={openSection} setOpenState={setOpenSection}>
+            <p className="text-[10px] text-[#5A6A7A] mb-2">
+              Read each one to the client. Defaults to No — tap Yes for anything that applies.
+            </p>
+            <div className="space-y-1">
+              {MEDICAL_QUESTIONS.map((q, i) => {
+                const isYes = state.medical[i] === true
+                return (
+                  <div key={i} className="flex items-start gap-2 p-2 rounded-md border"
+                    style={{ background: isYes ? '#EF444408' : '#080B0F', borderColor: isYes ? '#EF444430' : '#1A2130' }}>
+                    <span className="text-[10px] font-mono text-[#5A6A7A] pt-0.5 flex-shrink-0 w-5">{i + 1}.</span>
+                    <p className="text-[11px] text-[#C0D0E0] leading-snug flex-1">{q}</p>
+                    <div className="flex gap-1 flex-shrink-0">
+                      <button onClick={() => setMedical(i, false)}
+                        className={`px-2 py-0.5 rounded text-[10px] font-semibold ${!isYes ? 'bg-[#1A2130] text-white' : 'bg-transparent text-[#5A6A7A]'}`}>
+                        No
+                      </button>
+                      <button onClick={() => setMedical(i, true)}
+                        className={`px-2 py-0.5 rounded text-[10px] font-semibold ${isYes ? 'bg-[#EF4444] text-white' : 'bg-transparent text-[#5A6A7A]'}`}>
+                        Yes
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </Section>
+
+          <Section id="payment" title="Payment" icon={CreditCard} openState={openSection} setOpenState={setOpenSection}>
             <div className="flex gap-2 mb-2">
               {['bank', 'card'].map(m => (
                 <button key={m} onClick={() => updateIn('payment', { method: m })}
@@ -469,7 +486,9 @@ export default function ApplicationSheet({ lead, open, onClose }) {
                   <input className={inputCls} value={state.payment.account}
                     onChange={e => updateIn('payment', { account: e.target.value })} inputMode="numeric" />
                 </Field>
-                <p className="text-[10px] text-[#5A6A7A]">First withdrawal fires on the effective date set in the Quote section above.</p>
+                <p className="text-[10px] text-[#5A6A7A]">
+                  First withdrawal fires on the effective date set in the Quote section above.
+                </p>
               </>
             ) : (
               <>
@@ -500,67 +519,7 @@ export default function ApplicationSheet({ lead, open, onClose }) {
             )}
           </Section>
 
-          <Section id="meds" title="Medications" icon={Pill} badge={state.medications.length ? `${state.medications.length}` : null}>
-            {state.medications.map((m, idx) => (
-              <div key={idx} className="rounded-md border border-[#1A2130] p-2 space-y-1.5" style={{ background: '#080B0F' }}>
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-mono text-[#5A6A7A]">Med {idx + 1}</span>
-                  <button onClick={() => delMed(idx)} className="p-0.5 text-[#5A6A7A] hover:text-[#EF4444]">
-                    <Trash2 size={11} />
-                  </button>
-                </div>
-                <input className={inputCls} value={m.applicant} placeholder="Applicant (Primary / Spouse / Dep X)"
-                  onChange={e => setMed(idx, { applicant: e.target.value })} />
-                <input className={inputCls} value={m.name} placeholder="Medication"
-                  onChange={e => setMed(idx, { name: e.target.value })} />
-                <input className={inputCls} value={m.reason} placeholder="Reason"
-                  onChange={e => setMed(idx, { reason: e.target.value })} />
-                <div className="flex gap-2">
-                  <input className={inputCls} value={m.length} placeholder="Length on med"
-                    onChange={e => setMed(idx, { length: e.target.value })} />
-                  <input className={inputCls} value={m.doctor} placeholder="Doctor"
-                    onChange={e => setMed(idx, { doctor: e.target.value })} />
-                </div>
-              </div>
-            ))}
-            <button onClick={addMed} className="w-full py-1.5 rounded-md border border-dashed border-[#2A3547] text-xs text-[#8899AA] hover:text-white hover:border-[#00E5C340]">
-              <Plus size={11} className="inline mr-1" /> Add medication
-            </button>
-          </Section>
-
-          <Section
-            id="medical"
-            title="Medical history (34 questions)"
-            icon={Stethoscope}
-            badge={`${Object.values(state.medical).filter(v => v === true).length} Yes`}>
-            <p className="text-[10px] text-[#5A6A7A] mb-2">
-              Read each to the client. Defaults to No — tap Yes for anything that applies.
-            </p>
-            <div className="space-y-1">
-              {MEDICAL_QUESTIONS.map((q, i) => {
-                const isYes = state.medical[i] === true
-                return (
-                  <div key={i} className="flex items-start gap-2 p-2 rounded-md border"
-                    style={{ background: isYes ? '#EF444408' : '#080B0F', borderColor: isYes ? '#EF444430' : '#1A2130' }}>
-                    <span className="text-[10px] font-mono text-[#5A6A7A] pt-0.5 flex-shrink-0 w-5">{i + 1}.</span>
-                    <p className="text-[11px] text-[#C0D0E0] leading-snug flex-1">{q}</p>
-                    <div className="flex gap-1 flex-shrink-0">
-                      <button onClick={() => setMedical(i, false)}
-                        className={`px-2 py-0.5 rounded text-[10px] font-semibold ${!isYes ? 'bg-[#1A2130] text-white' : 'bg-transparent text-[#5A6A7A]'}`}>
-                        No
-                      </button>
-                      <button onClick={() => setMedical(i, true)}
-                        className={`px-2 py-0.5 rounded text-[10px] font-semibold ${isYes ? 'bg-[#EF4444] text-white' : 'bg-transparent text-[#5A6A7A]'}`}>
-                        Yes
-                      </button>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          </Section>
-
-          <Section id="verify" title="Verification call preference" icon={FileText}>
+          <Section id="verify" title="Verification call preference" icon={FileText} openState={openSection} setOpenState={setOpenSection}>
             <p className="text-[10px] text-[#5A6A7A] mb-1">
               When should underwriting call? (Calls run 15–25 min.)
             </p>
@@ -585,10 +544,9 @@ export default function ApplicationSheet({ lead, open, onClose }) {
             </button>
           )}
 
-          <div className="h-16" />{/* bottom padding so the sticky footer doesn't cover the last card */}
+          <div className="h-16" />
         </div>
 
-        {/* Sticky footer */}
         <div className="flex-shrink-0 border-t border-[#1A2130] p-3 flex items-center gap-2" style={{ background: '#0E1318' }}>
           <button onClick={onClose}
             className="px-3 py-2 rounded-lg text-xs border border-[#1A2130] text-[#8899AA] hover:text-white">
